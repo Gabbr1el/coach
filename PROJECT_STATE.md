@@ -43,10 +43,14 @@
 - Narrow IPC for create, list, open and archive operations
 - Functional HOME with creation dialog, cards and Workspace opening
 - Workspace archive flow and persisted last access
+- CoachPolicy v1 and canonical AI provider contracts
+- AIProviderManager independent from conversation persistence
+- HOME Planner conversation persisted locally
+- Planner panel clearly identifies local mode without external AI calls
 
 ## Pending
 
-- MVP 1+: AI provider abstraction and BYOK
+- MVP 1.1: secure BYOK credential storage and first provider adapter
 
 ## Database
 
@@ -62,6 +66,8 @@
 - `/home/gabiru/ed-coach` is a disposable proof of concept and remains untouched.
 - C will be the first programming language when the editor arrives.
 - No AI, chat, Observer or code execution is included in MVP 0.
+- The HOME owns the PLANNER conversation; Workspaces will own TUTOR conversations.
+- Planner currently uses transparent local rules until a provider is explicitly connected.
 - Application identity is frozen as `br.coach.study`, product name `Coach`.
 - A single-instance lock prevents concurrent startup migrations.
 - Renderer never receives generic IPC, filesystem, database or process APIs.
@@ -77,4 +83,4 @@
 
 ## Next Step
 
-MVP 1.0: define CoachPolicy, canonical conversation contracts and the AIProvider abstraction without connecting a real provider yet.
+MVP 1.1: add secure operating-system credential storage, provider configuration metadata and the first officially supported provider adapter.

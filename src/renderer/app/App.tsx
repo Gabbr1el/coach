@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowLeft, BookOpen, Brain, CalendarDays, MoreHorizontal, Plus, X } from 'lucide-react'
+import { ArrowLeft, BookOpen, Brain, CalendarDays, MoreHorizontal, Plus, Send, Sparkles, X } from 'lucide-react'
 import type { ApplicationInfo } from '../../shared/contracts/application-contract'
 import type { CreateWorkspaceInput, Workspace, WorkspaceSummary } from '../../shared/contracts/workspace-contract'
+import type { ConversationMessage } from '../../shared/contracts/conversation-contract'
 
 function relativeDate(timestamp: number | null): string {
   if (!timestamp) return 'Ainda não aberto'
@@ -80,6 +81,11 @@ export function App() {
   const [submitting, setSubmitting] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [messages, setMessages] = useState<ConversationMessage[]>([])
+  const [plannerInput, setPlannerInput] = useState('')
+  const [plannerSending, setPlannerSending] = useState(false)
+  const [plannerLoading, setPlannerLoading] = useState(true)
+  const [plannerError, setPlannerError] = useState<string | null>(null)
 
   const loadWorkspaces = useCallback(async () => {
     try {
@@ -95,7 +101,25 @@ export function App() {
   useEffect(() => {
     void window.coach.application.getInfo().then(setApplicationInfo).catch(() => setError('A integração desktop está indisponível.'))
     void loadWorkspaces()
+    void window.coach.conversation.listHomeMessages().then(setMessages).catch(() => setPlannerError('Não foi possível carregar a conversa do Planner.')).finally(() => setPlannerLoading(false))
   }, [loadWorkspaces])
+
+  async function sendPlannerMessage() {
+    const content = plannerInput.trim()
+    if (!content || plannerSending || plannerLoading) return
+    setPlannerSending(true)
+    setPlannerInput('')
+    try {
+      const newMessages = await window.coach.conversation.sendHomeMessage({ content })
+      setMessages((current) => [...current, ...newMessages])
+      setPlannerError(null)
+    } catch {
+      setPlannerInput(content)
+      setPlannerError('Não foi possível enviar sua mensagem ao Planner.')
+    } finally {
+      setPlannerSending(false)
+    }
+  }
 
   async function createWorkspace(input: CreateWorkspaceInput) {
     setSubmitting(true)
@@ -156,14 +180,28 @@ export function App() {
       <section className="mx-auto mt-20 max-w-7xl">
         <div className="max-w-3xl"><p className="mb-3 text-xs font-black uppercase tracking-[0.22em] text-coach-green">Visão acadêmica</p><h1 className="font-display text-5xl font-black leading-[0.95] tracking-tight md:text-7xl">O que merece sua<span className="block text-coach-orange">atenção agora?</span></h1><p className="mt-6 max-w-2xl text-lg leading-8 text-coach-muted">Organize cada matéria em um ambiente próprio. Prioridades inteligentes chegarão quando tivermos dados reais de prazos, domínio e disponibilidade.</p></div>
         {error && <div role="alert" className="mt-7 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>}
-        {loading ? <p className="mt-12 text-coach-muted">Carregando Workspaces…</p> : workspaces.length ? (
-          <div className="mt-12 grid gap-5 md:grid-cols-2 xl:grid-cols-3">{workspaces.map((workspace) => <WorkspaceCard key={workspace.id} workspace={workspace} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} />)}</div>
+        <div className="mt-12 grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_390px]">
+          <div>{loading ? <p className="text-coach-muted">Carregando Workspaces…</p> : workspaces.length ? (
+          <div className="grid gap-5 md:grid-cols-2">{workspaces.map((workspace) => <WorkspaceCard key={workspace.id} workspace={workspace} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} />)}</div>
         ) : (
-          <div className="mt-12 grid gap-5 lg:grid-cols-[1.35fr_0.65fr]">
+          <div className="grid gap-5">
             <section className="relative overflow-hidden rounded-[2rem] border border-coach-line bg-white/70 p-8 shadow-soft backdrop-blur-xl"><div className="absolute -right-16 -top-16 size-52 rounded-full bg-coach-yellow/25 blur-2xl" /><div className="relative"><div className="grid size-12 place-items-center rounded-2xl bg-coach-green/10 text-coach-green"><BookOpen size={23} /></div><h2 className="mt-7 font-display text-3xl font-extrabold">Ainda não há Workspaces</h2><p className="mt-3 max-w-xl leading-7 text-coach-muted">Crie um ambiente para uma matéria, informe seu objetivo e o Coach manterá esse contexto separado dos demais estudos.</p><button onClick={() => setDialogOpen(true)} className="mt-8 inline-flex items-center gap-3 rounded-xl bg-coach-orange px-5 py-3 font-extrabold text-white"><Plus size={18} /> Criar primeiro Workspace</button></div></section>
-            <aside className="rounded-[2rem] bg-coach-ink p-7 text-white shadow-soft"><div className="flex items-center justify-between"><span className="text-xs font-black uppercase tracking-[0.18em] text-coach-yellow">Fundação</span><Brain className="text-coach-yellow" size={23} /></div><p className="mt-8 font-display text-2xl font-extrabold leading-tight">O sistema aprende o processo, não só a resposta.</p><ul className="mt-7 space-y-4 text-sm text-white/65"><li className="flex gap-3"><CalendarDays className="shrink-0 text-coach-mint" size={18} /> Planejamento baseado na vida real</li><li className="flex gap-3"><BookOpen className="shrink-0 text-coach-mint" size={18} /> Memória pertencente ao estudante</li></ul></aside>
           </div>
-        )}
+        )}</div>
+          <aside className="sticky top-6 overflow-hidden rounded-[2rem] bg-coach-ink text-white shadow-soft">
+            <div className="border-b border-white/10 p-6"><div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-coach-yellow text-coach-ink"><Sparkles size={20} /></div><div><p className="font-display font-extrabold">Planner acadêmico</p><p className="text-xs text-white/50">Organiza sua visão geral</p></div></div></div>
+            <div className="max-h-[390px] min-h-64 space-y-4 overflow-y-auto p-5">
+              {plannerError && <div className="rounded-2xl bg-red-400/15 p-4 text-sm text-red-100">{plannerError}</div>}
+              {plannerLoading && <div className="text-sm text-white/45">Carregando conversa…</div>}
+              {!plannerLoading && messages.length === 0 && <div className="rounded-2xl bg-white/7 p-4 text-sm leading-6 text-white/65">Conte sobre provas, horários, trabalhos ou dificuldades. Esta conversa pertence à Home e fica salva localmente.</div>}
+              {messages.map((message) => <div key={message.id} className={`max-w-[90%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'ml-auto bg-coach-green text-white' : 'bg-white/8 text-white/75'}`}>{message.content}</div>)}
+            </div>
+            <form className="border-t border-white/10 p-4" onSubmit={(event) => { event.preventDefault(); void sendPlannerMessage() }}>
+              <div className="flex items-end gap-2 rounded-2xl bg-white/8 p-2"><textarea disabled={plannerLoading} aria-label="Mensagem para o Planner" value={plannerInput} onChange={(event) => setPlannerInput(event.target.value)} maxLength={4000} placeholder="Ex.: Tenho prova de C dia 16…" className="max-h-32 min-h-12 flex-1 resize-none bg-transparent px-2 py-2 text-sm text-white outline-none placeholder:text-white/35 disabled:opacity-40" /><button disabled={!plannerInput.trim() || plannerSending || plannerLoading} aria-label="Enviar" className="grid size-11 shrink-0 place-items-center rounded-xl bg-coach-yellow text-coach-ink disabled:opacity-35"><Send size={18} /></button></div>
+              <p className="mt-2 px-1 text-[11px] text-white/35">Modo local · nenhuma mensagem é enviada para uma IA externa</p>
+            </form>
+          </aside>
+        </div>
       </section>
       <footer className="mx-auto mt-20 flex max-w-7xl justify-between border-t border-coach-line py-5 text-xs text-coach-muted"><span>Dados locais por padrão</span><span>{applicationInfo ? `${applicationInfo.name} ${applicationInfo.version} · API ${applicationInfo.apiVersion}` : 'Conectando…'}</span></footer>
       <CreateWorkspaceDialog open={dialogOpen} submitting={submitting} onClose={() => setDialogOpen(false)} onSubmit={createWorkspace} />

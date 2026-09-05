@@ -4,7 +4,10 @@ import Database from 'better-sqlite3'
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { app } from 'electron'
 import { migrateDatabase } from './migrate'
-import * as schema from './schema/workspaces'
+import * as workspaceSchema from './schema/workspaces'
+import * as conversationSchema from './schema/conversations'
+
+const schema = { ...workspaceSchema, ...conversationSchema }
 
 export interface CoachDatabase {
   readonly sqlite: Database.Database

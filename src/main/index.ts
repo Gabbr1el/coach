@@ -5,6 +5,9 @@ import { openCoachDatabase, type CoachDatabase } from './database/connection'
 import { WorkspaceService } from '../application/workspaces/workspace-service'
 import { DrizzleWorkspaceRepository } from './repositories/drizzle-workspace-repository'
 import { registerWorkspaceHandlers } from './ipc/workspace-handlers'
+import { HomePlannerService } from '../application/conversations/home-planner-service'
+import { DrizzleConversationRepository } from './repositories/drizzle-conversation-repository'
+import { registerConversationHandlers } from './ipc/conversation-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -25,8 +28,12 @@ void app.whenReady().then(() => {
     const workspaceService = new WorkspaceService({
       repository: new DrizzleWorkspaceRepository(database),
     })
+    const homePlannerService = new HomePlannerService({
+      repository: new DrizzleConversationRepository(database),
+    })
     registerApplicationHandlers()
     registerWorkspaceHandlers(workspaceService)
+    registerConversationHandlers(homePlannerService)
     createMainWindow()
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown startup error'

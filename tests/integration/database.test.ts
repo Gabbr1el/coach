@@ -6,6 +6,7 @@ import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openCoachDatabase } from '../../src/main/database/connection'
 import { DrizzleWorkspaceRepository } from '../../src/main/repositories/drizzle-workspace-repository'
+import { DrizzleConversationRepository } from '../../src/main/repositories/drizzle-conversation-repository'
 
 const temporaryDirectories: string[] = []
 const migrationsFolder = resolve('drizzle/migrations')
@@ -23,7 +24,7 @@ function createDatabasePath(): string {
 }
 
 describe('Coach database migrations', () => {
-  it('creates only the MVP 0 workspaces schema', () => {
+  it('creates the current domain schema and migration history', () => {
     const databasePath = createDatabasePath()
     const database = openCoachDatabase({ databasePath, migrationsFolder })
     const sqlite = database.sqlite
@@ -32,8 +33,13 @@ describe('Coach database migrations', () => {
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
       .all() as Array<{ name: string }>
 
-    expect(tables).toEqual([{ name: '__drizzle_migrations' }, { name: 'workspaces' }])
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 1 })
+    expect(tables).toEqual([
+      { name: '__drizzle_migrations' },
+      { name: 'conversation_messages' },
+      { name: 'conversation_threads' },
+      { name: 'workspaces' },
+    ])
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 2 })
     database.close()
   })
 
@@ -94,6 +100,23 @@ describe('Coach database migrations', () => {
     expect((await repository.markOpened(created.id, 20))?.lastOpenedAt).toBe(20)
     expect(await repository.archive(created.id, 30)).toBe(true)
     expect(await repository.listActive()).toEqual([])
+    database.close()
+  })
+
+  it('persists a planner turn atomically with stable sequence ordering', async () => {
+    const databasePath = createDatabasePath()
+    const database = openCoachDatabase({ databasePath, migrationsFolder })
+    const repository = new DrizzleConversationRepository(database)
+    const threadId = '00000000-0000-4000-8000-000000000000'
+    await repository.ensureHomeThread(threadId, 10)
+
+    await repository.addTurn({
+      threadId,
+      user: { id: 'message-user', threadId, role: 'user', content: 'Prova dia 16', createdAt: 11, providerId: null, modelId: null },
+      assistant: { id: 'message-assistant', threadId, role: 'assistant', content: 'Qual matéria?', createdAt: 12, providerId: 'coach-local', modelId: 'planner-rules-v1' },
+    })
+
+    expect((await repository.listMessages(threadId, 100)).map((message) => [message.sequence, message.role])).toEqual([[1, 'user'], [2, 'assistant']])
     database.close()
   })
 })

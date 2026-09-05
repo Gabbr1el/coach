@@ -14,4 +14,5 @@ export interface CoachDesktopApi {
   application: {
     getInfo(): Promise<ApplicationInfo>
   }
+  workspace: import('./workspace-contract').WorkspaceApi
 }

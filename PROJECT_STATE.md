@@ -38,12 +38,14 @@
 - `workspaces` is the only MVP 0 domain table
 - WAL, foreign keys, busy timeout and deterministic close lifecycle
 - Linux unpacked package validated with rebuilt native SQLite addon
+- Typed Workspace contracts validated at runtime with Zod
+- Workspace application service and Drizzle repository
+- Narrow IPC for create, list, open and archive operations
+- Functional HOME with creation dialog, cards and Workspace opening
+- Workspace archive flow and persisted last access
 
 ## Pending
 
-- MVP 0.3: Workspace use cases, repository and IPC
-- MVP 0.4: create/list/archive Workspace UI
-- MVP 0.5: open Workspace and persist last access
 - MVP 1+: AI provider abstraction and BYOK
 
 ## Database
@@ -67,12 +69,12 @@
 
 ## Known Issues
 
-- There is no installer or platform packaging configuration yet.
-- The HOME action is intentionally disabled until Workspace persistence exists.
+- Workspace IPC and preload behavior have packaged smoke coverage but not direct automated contract tests yet.
+- Linux unpacked packaging is configured; signed installers and Windows/macOS targets remain pending.
 - Developer tools remain available in development.
 - The earlier GPU/zygote cascade was produced when the smoke-test timeout terminated Electron, not by a startup failure. A direct packaged-bundle smoke test reached the renderer and completed the typed IPC call successfully.
 - Hardware acceleration fallback remains available through `COACH_DISABLE_HARDWARE_ACCELERATION=1` for Linux graphics compatibility.
 
 ## Next Step
 
-MVP 0.3: add typed Workspace use cases, a repository implementation and narrow validated IPC for creating, listing and opening Workspaces.
+MVP 1.0: define CoachPolicy, canonical conversation contracts and the AIProvider abstraction without connecting a real provider yet.

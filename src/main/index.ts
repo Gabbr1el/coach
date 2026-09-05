@@ -2,6 +2,9 @@ import { app, BrowserWindow } from 'electron'
 import { registerApplicationHandlers } from './ipc/application-handlers'
 import { createMainWindow } from './windows/create-main-window'
 import { openCoachDatabase, type CoachDatabase } from './database/connection'
+import { WorkspaceService } from '../application/workspaces/workspace-service'
+import { DrizzleWorkspaceRepository } from './repositories/drizzle-workspace-repository'
+import { registerWorkspaceHandlers } from './ipc/workspace-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -19,7 +22,11 @@ if (process.env['COACH_DISABLE_HARDWARE_ACCELERATION']) {
 void app.whenReady().then(() => {
   try {
     database = openCoachDatabase()
+    const workspaceService = new WorkspaceService({
+      repository: new DrizzleWorkspaceRepository(database),
+    })
     registerApplicationHandlers()
+    registerWorkspaceHandlers(workspaceService)
     createMainWindow()
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown startup error'

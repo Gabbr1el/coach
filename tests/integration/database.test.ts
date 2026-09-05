@@ -5,6 +5,7 @@ import { resolve } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openCoachDatabase } from '../../src/main/database/connection'
+import { DrizzleWorkspaceRepository } from '../../src/main/repositories/drizzle-workspace-repository'
 
 const temporaryDirectories: string[] = []
 const migrationsFolder = resolve('drizzle/migrations')
@@ -74,6 +75,25 @@ describe('Coach database migrations', () => {
 
     expect(() => insert.run('empty', '   ', '', 'active', 1, 1, null)).toThrow()
     expect(() => insert.run('invalid-archive', 'C', '', 'archived', 1, 1, null)).toThrow()
+    database.close()
+  })
+
+  it('persists workspace repository operations and excludes archived records', async () => {
+    const databasePath = createDatabasePath()
+    const database = openCoachDatabase({ databasePath, migrationsFolder })
+    const repository = new DrizzleWorkspaceRepository(database)
+
+    const created = await repository.create({
+      id: '00000000-0000-4000-8000-000000000004',
+      name: 'Estrutura de Dados',
+      objective: 'Próxima prova',
+      createdAt: 10,
+      updatedAt: 10,
+    })
+    expect((await repository.listActive()).map((item) => item.id)).toEqual([created.id])
+    expect((await repository.markOpened(created.id, 20))?.lastOpenedAt).toBe(20)
+    expect(await repository.archive(created.id, 30)).toBe(true)
+    expect(await repository.listActive()).toEqual([])
     database.close()
   })
 })

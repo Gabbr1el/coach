@@ -26,6 +26,7 @@ COACH_DISABLE_HARDWARE_ACCELERATION=1 pnpm dev
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm package:dir
 ```
 
-This is the secure bootstrap for MVP 0. Workspace persistence is intentionally deferred to the next incremental step.
+The local SQLite database is created as `coach.sqlite` under Electron `userData`. Drizzle migrations run automatically during startup. The current schema contains only the MVP 0 `workspaces` table.

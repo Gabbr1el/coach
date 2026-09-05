@@ -9,7 +9,9 @@
 - Tailwind CSS 4
 - Zustand 5, installed for later UI state
 - pnpm
-- SQLite and Drizzle: planned for MVP 0.2, not installed yet
+- SQLite through better-sqlite3 13
+- Drizzle ORM 0.45 and Drizzle Kit migrations
+- electron-builder 26 for packaged runtime validation
 
 ## Architecture
 
@@ -31,10 +33,14 @@
 - Local-only assets and styling
 - Typecheck, unit test and production build scripts
 - Packaged-bundle smoke test verified with sandboxed preload and typed IPC
+- SQLite database created under Electron `userData`
+- Drizzle migration history is the single executable migration source
+- `workspaces` is the only MVP 0 domain table
+- WAL, foreign keys, busy timeout and deterministic close lifecycle
+- Linux unpacked package validated with rebuilt native SQLite addon
 
 ## Pending
 
-- MVP 0.2: SQLite, Drizzle and first migration
 - MVP 0.3: Workspace use cases, repository and IPC
 - MVP 0.4: create/list/archive Workspace UI
 - MVP 0.5: open Workspace and persist last access
@@ -42,8 +48,11 @@
 
 ## Database
 
-- No database exists yet by design.
-- MVP 0.2 will introduce only the `workspaces` table.
+- Database file: `coach.sqlite` under Electron `userData`.
+- Current migration: `0000_watery_penance.sql`.
+- Domain tables: `workspaces` only.
+- Infrastructure table: `__drizzle_migrations`.
+- Migrations are forward-only and executed transactionally by Drizzle.
 
 ## Decisions
 
@@ -51,12 +60,13 @@
 - `/home/gabiru/ed-coach` is a disposable proof of concept and remains untouched.
 - C will be the first programming language when the editor arrives.
 - No AI, chat, Observer or code execution is included in MVP 0.
+- Application identity is frozen as `br.coach.study`, product name `Coach`.
+- A single-instance lock prevents concurrent startup migrations.
 - Renderer never receives generic IPC, filesystem, database or process APIs.
 - CSP uses a development-only localhost/WebSocket allowance that must be tightened for packaged builds.
 
 ## Known Issues
 
-- The SQLite native driver must be validated against packaged Electron before product features expand.
 - There is no installer or platform packaging configuration yet.
 - The HOME action is intentionally disabled until Workspace persistence exists.
 - Developer tools remain available in development.
@@ -65,4 +75,4 @@
 
 ## Next Step
 
-MVP 0.2: add SQLite and Drizzle, create the first migration, store the database under Electron `userData`, and prove persistence across application restarts.
+MVP 0.3: add typed Workspace use cases, a repository implementation and narrow validated IPC for creating, listing and opening Workspaces.

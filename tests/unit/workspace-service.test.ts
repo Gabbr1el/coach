@@ -37,6 +37,15 @@ class MemoryWorkspaceRepository implements WorkspaceRepository {
 }
 
 describe('WorkspaceService', () => {
+  it('uses the default UUID generator without losing its Crypto receiver', async () => {
+    const repository = new MemoryWorkspaceRepository()
+    const service = new WorkspaceService({ repository, now: () => 42 })
+
+    const workspace = await service.create({ name: 'C', objective: '' })
+
+    expect(workspace.id).toMatch(/^[0-9a-f-]{36}$/)
+  })
+
   it('creates a trimmed workspace with application-owned identity and timestamps', async () => {
     const repository = new MemoryWorkspaceRepository()
     const service = new WorkspaceService({ repository, now: () => 42, createId: () => '00000000-0000-4000-8000-000000000001' })

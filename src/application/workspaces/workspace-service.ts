@@ -12,7 +12,7 @@ export class WorkspaceService {
   private readonly now: () => number
   private readonly createId: () => string
 
-  constructor({ repository, now = Date.now, createId = crypto.randomUUID }: WorkspaceServiceDependencies) {
+  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID() }: WorkspaceServiceDependencies) {
     this.repository = repository
     this.now = now
     this.createId = createId

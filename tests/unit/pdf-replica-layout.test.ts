@@ -20,7 +20,7 @@ describe('PDF replica layout invariants', () => {
 
   it('exposes every referenced workspace page with a persistent coach', () => {
     const shell = readFileSync('src/renderer/app/WorkspaceShell.tsx', 'utf8')
-    for (const label of ['Visão geral', 'Plano', 'Materiais', 'Prática', 'Relatórios']) expect(shell).toContain(label)
+    for (const label of ['Visão geral', 'Plano', 'Materiais', 'Prática', 'Vídeos', 'Relatórios']) expect(shell).toContain(label)
     expect(shell).toContain('Coach deste Workspace')
   })
 })

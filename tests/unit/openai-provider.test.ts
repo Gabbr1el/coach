@@ -32,6 +32,11 @@ describe('OpenAIProvider', () => {
     [404, { error: { code: 'model_not_found', param: 'model' } }, 'MODEL_UNAVAILABLE'],
     [429, { error: { code: 'insufficient_quota' } }, 'INSUFFICIENT_QUOTA'],
     [429, { error: { code: 'rate_limit_exceeded' } }, 'RATE_LIMITED'],
+    [429, { error: { type: 'insufficient_quota', code: null } }, 'INSUFFICIENT_QUOTA'],
+    [429, { error: { message: 'You exceeded your current quota, please check your plan and billing details.', code: null } }, 'INSUFFICIENT_QUOTA'],
+    [429, { error: { code: 'credit_balance_exhausted' } }, 'INSUFFICIENT_QUOTA'],
+    [429, { error: { code: 'project_spend_limit_exceeded' } }, 'INSUFFICIENT_QUOTA'],
+    [429, { error: { message: 'Rate limit reached. Review billing settings if higher limits are needed.', code: null } }, 'RATE_LIMITED'],
   ] as const)('maps OpenAI status %s to %s', async (status, body, code) => {
     let requestBody = ''
     const fetcher: typeof fetch = async (_input, init) => {

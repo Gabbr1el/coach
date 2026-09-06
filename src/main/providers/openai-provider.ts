@@ -14,7 +14,7 @@ interface OpenAIResponseBody {
   readonly output_text?: string
   readonly output?: Array<{ content?: Array<{ type?: string; text?: string }> }>
   readonly usage?: { input_tokens?: number; output_tokens?: number }
-  readonly error?: { message?: string }
+  readonly error?: { message?: string; type?: string; code?: string | null; param?: string | null }
 }
 
 function extractText(body: OpenAIResponseBody): string {
@@ -40,7 +40,7 @@ export class OpenAIProvider implements AIProvider {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 20_000)
     let response: Response
-    let body: { error?: { code?: string; param?: string } } | null = null
+    let body: OpenAIResponseBody | null = null
     try {
       response = await this.fetcher('https://api.openai.com/v1/responses', {
         method: 'POST',
@@ -48,7 +48,7 @@ export class OpenAIProvider implements AIProvider {
         body: JSON.stringify({ model: this.defaultModel, input: 'Reply only with OK.', max_output_tokens: 16, store: false }),
         signal: controller.signal,
       })
-      if (!response.ok) body = await response.json().catch(() => null) as { error?: { code?: string; param?: string } } | null
+      if (!response.ok) body = await response.json().catch(() => null) as OpenAIResponseBody | null
     } catch {
       throw new OpenAIProviderError('NETWORK_UNAVAILABLE')
     } finally {
@@ -59,7 +59,22 @@ export class OpenAIProvider implements AIProvider {
     if (response.status === 403) throw new OpenAIProviderError('ACCESS_RESTRICTED')
     if (response.status === 404 && (body?.error?.param === 'model' || body?.error?.code === 'model_not_found')) throw new OpenAIProviderError('MODEL_UNAVAILABLE')
     if (response.status === 429) {
-      throw new OpenAIProviderError(body?.error?.code === 'insufficient_quota' ? 'INSUFFICIENT_QUOTA' : 'RATE_LIMITED')
+      const quotaCodes = new Set([
+        'insufficient_quota',
+        'credit_balance_exhausted',
+        'organization_spend_limit_exceeded',
+        'project_spend_limit_exceeded',
+        'organization_usage_limit_exceeded',
+      ])
+      const code = body?.error?.code?.toLocaleLowerCase('en-US') ?? ''
+      const type = body?.error?.type?.toLocaleLowerCase('en-US') ?? ''
+      const message = body?.error?.message?.toLocaleLowerCase('en-US') ?? ''
+      const insufficientQuota = quotaCodes.has(code)
+        || quotaCodes.has(type)
+        || message.includes('exceeded your current quota')
+        || message.includes('credit balance is too low')
+        || message.includes('usage limit has been reached')
+      throw new OpenAIProviderError(insufficientQuota ? 'INSUFFICIENT_QUOTA' : 'RATE_LIMITED')
     }
     if (response.status === 400 && (body?.error?.param === 'model' || body?.error?.code === 'model_not_found')) throw new OpenAIProviderError('MODEL_UNAVAILABLE')
     throw new OpenAIProviderError('UNKNOWN')

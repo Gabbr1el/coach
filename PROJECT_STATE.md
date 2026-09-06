@@ -60,6 +60,7 @@
 - OpenAI Responses API SSE normalized into provider-independent stream events
 - Session-only BYOK fallback when the operating-system vault is unavailable
 - OpenAI connection diagnostics distinguish credentials, quota, model access and network failures
+- OpenAI 429 diagnostics inspect code, type and safe message signals to distinguish billing quota from temporary rate limits
 
 ## Pending
 

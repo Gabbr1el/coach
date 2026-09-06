@@ -34,6 +34,9 @@ import { registerBackupHandlers } from './ipc/backup-handlers'
 import { finishPendingRestore, recoverPendingRestore, rollbackPendingRestore, validateCoachDatabaseSchema } from './database/restore-recovery'
 import { CurrentWorkspaceContextService } from '../application/workspaces/current-workspace-context'
 import { WorkspaceEventBus } from '../application/events/workspace-event-bus'
+import { ProjectService } from '../application/projects/project-service'
+import { DrizzleProjectRepository } from './repositories/drizzle-project-repository'
+import { registerProjectHandlers } from './ipc/project-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -93,6 +96,7 @@ void app.whenReady().then(async () => {
     registerMaterialHandlers(new PdfMaterialService(database), async (id) => Boolean(await workspaceRepository.findById(id)))
     registerSessionNavigationHandlers(database)
     registerBackupHandlers(database)
+    registerProjectHandlers(new ProjectService(new DrizzleProjectRepository(database), async (id) => Boolean(await workspaceRepository.findById(id))))
     registerProviderHandlers(providerConfigurationService)
     finishPendingRestore(databasePath)
     createMainWindow()

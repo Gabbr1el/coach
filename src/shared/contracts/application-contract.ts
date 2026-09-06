@@ -24,4 +24,5 @@ export interface CoachDesktopApi {
   material: import('./material-contract').MaterialApi
   sessionNavigation: import('./session-navigation-contract').SessionNavigationApi
   backup: import('./backup-contract').BackupApi
+  project: import('./project-contract').ProjectApi
 }

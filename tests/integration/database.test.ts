@@ -41,6 +41,9 @@ describe('Coach database migrations', () => {
       { name: 'learning_events' },
       { name: 'material_chunks' },
       { name: 'materials' },
+      { name: 'project_builds' },
+      { name: 'project_files' },
+      { name: 'project_ui_states' },
       { name: 'provider_configurations' },
       { name: 'routine_notes' },
       { name: 'saved_for_later' },
@@ -51,10 +54,11 @@ describe('Coach database migrations', () => {
       { name: 'study_plan_items' },
       { name: 'study_sessions' },
       { name: 'workspace_memories' },
+      { name: 'workspace_projects' },
       { name: 'workspace_study_states' },
       { name: 'workspaces' },
     ])
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 14 })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 15 })
     database.close()
   })
 

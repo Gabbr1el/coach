@@ -13,6 +13,7 @@ import { PLANNING_CHANNELS } from '../shared/contracts/planning-channels'
 import { MATERIAL_CHANNELS } from '../shared/contracts/material-channels'
 import { SESSION_NAVIGATION_CHANNELS } from '../shared/contracts/session-navigation-channels'
 import { BACKUP_CHANNELS } from '../shared/contracts/backup-channels'
+import { PROJECT_CHANNELS } from '../shared/contracts/project-channels'
 
 const api: CoachDesktopApi = {
   application: {
@@ -125,6 +126,15 @@ const api: CoachDesktopApi = {
   backup: {
     exportBackup: () => ipcRenderer.invoke(BACKUP_CHANNELS.exportBackup),
     restoreBackup: () => ipcRenderer.invoke(BACKUP_CHANNELS.restoreBackup),
+  },
+  project: {
+    get: (workspaceId) => ipcRenderer.invoke(PROJECT_CHANNELS.get, { workspaceId }),
+    create: (input) => ipcRenderer.invoke(PROJECT_CHANNELS.create, input),
+    createFile: (input) => ipcRenderer.invoke(PROJECT_CHANNELS.createFile, input),
+    saveFile: (input) => ipcRenderer.invoke(PROJECT_CHANNELS.saveFile, input),
+    renameFile: (input) => ipcRenderer.invoke(PROJECT_CHANNELS.renameFile, input),
+    deleteFile: (input) => ipcRenderer.invoke(PROJECT_CHANNELS.deleteFile, input),
+    openFile: (input) => ipcRenderer.invoke(PROJECT_CHANNELS.openFile, input),
   },
 }
 

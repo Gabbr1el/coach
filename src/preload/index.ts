@@ -12,6 +12,7 @@ import { OBSERVER_CHANNELS } from '../shared/contracts/observer-channels'
 import { PLANNING_CHANNELS } from '../shared/contracts/planning-channels'
 import { MATERIAL_CHANNELS } from '../shared/contracts/material-channels'
 import { SESSION_NAVIGATION_CHANNELS } from '../shared/contracts/session-navigation-channels'
+import { BACKUP_CHANNELS } from '../shared/contracts/backup-channels'
 
 const api: CoachDesktopApi = {
   application: {
@@ -119,6 +120,7 @@ const api: CoachDesktopApi = {
     listSavedForLater: (workspaceId) => ipcRenderer.invoke(SESSION_NAVIGATION_CHANNELS.listSavedForLater, { workspaceId }),
     listOutline: (workspaceId) => ipcRenderer.invoke(SESSION_NAVIGATION_CHANNELS.listOutline, { workspaceId }),
   },
+  backup: { exportBackup: () => ipcRenderer.invoke(BACKUP_CHANNELS.exportBackup) },
 }
 
 contextBridge.exposeInMainWorld('coach', Object.freeze(api))

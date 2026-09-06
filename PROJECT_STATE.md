@@ -75,6 +75,7 @@ Execution roadmap: `ROADMAP.md`. The next vertical slice is durable project file
 - Local PDF import, page extraction, chunk persistence and scoped material search
 - Durable SessionMemory and compact rolling WorkspaceMemory derived from local events
 - Collapsible current-session outline and persistent distraction parking list
+- Atomic local SQLite backup export after WAL checkpoint
 
 ## Pending
 

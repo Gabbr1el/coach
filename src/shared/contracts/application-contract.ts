@@ -25,4 +25,5 @@ export interface CoachDesktopApi {
   sessionNavigation: import('./session-navigation-contract').SessionNavigationApi
   backup: import('./backup-contract').BackupApi
   project: import('./project-contract').ProjectApi
+  roadmap: import('./roadmap-contract').RoadmapApi
 }

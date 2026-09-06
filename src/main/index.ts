@@ -37,6 +37,9 @@ import { WorkspaceEventBus } from '../application/events/workspace-event-bus'
 import { ProjectService } from '../application/projects/project-service'
 import { DrizzleProjectRepository } from './repositories/drizzle-project-repository'
 import { registerProjectHandlers } from './ipc/project-handlers'
+import { RoadmapService } from '../application/roadmaps/roadmap-service'
+import { DrizzleRoadmapRepository } from './repositories/drizzle-roadmap-repository'
+import { registerRoadmapHandlers } from './ipc/roadmap-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -98,6 +101,7 @@ void app.whenReady().then(async () => {
     registerSessionNavigationHandlers(database)
     registerBackupHandlers(database)
     registerProjectHandlers(new ProjectService(projectRepository, async (id) => Boolean(await workspaceRepository.findById(id))))
+    registerRoadmapHandlers(new RoadmapService(new DrizzleRoadmapRepository(database), providerManager, (id) => workspaceRepository.findById(id)))
     registerProviderHandlers(providerConfigurationService)
     finishPendingRestore(databasePath)
     createMainWindow()

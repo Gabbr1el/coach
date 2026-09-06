@@ -14,6 +14,7 @@ import { MATERIAL_CHANNELS } from '../shared/contracts/material-channels'
 import { SESSION_NAVIGATION_CHANNELS } from '../shared/contracts/session-navigation-channels'
 import { BACKUP_CHANNELS } from '../shared/contracts/backup-channels'
 import { PROJECT_CHANNELS } from '../shared/contracts/project-channels'
+import { ROADMAP_CHANNELS } from '../shared/contracts/roadmap-channels'
 
 const api: CoachDesktopApi = {
   application: {
@@ -137,6 +138,11 @@ const api: CoachDesktopApi = {
     renameFile: (input) => ipcRenderer.invoke(PROJECT_CHANNELS.renameFile, input),
     deleteFile: (input) => ipcRenderer.invoke(PROJECT_CHANNELS.deleteFile, input),
     openFile: (input) => ipcRenderer.invoke(PROJECT_CHANNELS.openFile, input),
+  },
+  roadmap: {
+    get: (workspaceId) => ipcRenderer.invoke(ROADMAP_CHANNELS.get, { workspaceId }),
+    generate: (workspaceId) => ipcRenderer.invoke(ROADMAP_CHANNELS.generate, { workspaceId }),
+    accept: (input) => ipcRenderer.invoke(ROADMAP_CHANNELS.accept, input),
   },
 }
 

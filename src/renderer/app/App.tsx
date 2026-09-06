@@ -74,20 +74,23 @@ function CreateWorkspaceDialog({ open, submitting, onClose, onSubmit }: {
   )
 }
 
-function ProviderSettingsDialog({ status, accounts, onClose, onConfigured, onSelect, onRemove }: {
+function ProviderSettingsDialog({ status, accounts, onClose, onConfigured, onConfiguredCompatible, onSelect, onRemove }: {
   status: ProviderStatus | null
   accounts: ProviderAccountSummary[]
   onClose: () => void
   onConfigured: (label: string, apiKey: string, model: string, persistence: 'secure-vault' | 'session') => Promise<ConfigureProviderResult>
+  onConfiguredCompatible: (label: string, baseUrl: string, apiKey: string, model: string, persistence: 'secure-vault' | 'session') => Promise<ConfigureProviderResult>
   onSelect: (accountId: string) => Promise<void>
   onRemove: (accountId: string) => Promise<void>
 }) {
-  const [label, setLabel] = useState('Minha OpenAI')
-  const [apiKey, setApiKey] = useState('')
-  const [model, setModel] = useState('gpt-5-mini')
+  const [label, setLabel] = useState('OmniRoute local')
+  const [apiKey, setApiKey] = useState('omniroute')
+  const [model, setModel] = useState('codex/gpt-5.6-sol')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [persistence, setPersistence] = useState<'secure-vault' | 'session'>('secure-vault')
+  const [persistence, setPersistence] = useState<'secure-vault' | 'session'>('session')
+  const [providerType, setProviderType] = useState<'openai' | 'omniroute'>('omniroute')
+  const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:20128/v1')
 
   const secureStorageUnavailable = status?.secureStorageAvailable === false
   const effectivePersistence = secureStorageUnavailable ? 'session' : persistence
@@ -96,15 +99,18 @@ function ProviderSettingsDialog({ status, accounts, onClose, onConfigured, onSel
     setSaving(true)
     setError(null)
     try {
-      const result = await onConfigured(label, apiKey, model, effectivePersistence)
+      const result = providerType === 'openai'
+        ? await onConfigured(label, apiKey, model, effectivePersistence)
+        : await onConfiguredCompatible(label, baseUrl, apiKey, model, effectivePersistence)
       if (!result.ok) {
+        const providerLabel = providerType === 'openai' ? 'A OpenAI' : 'O provedor compatível'
         const messages = {
-          INVALID_CREDENTIAL: 'A OpenAI recusou a chave. Confirme se ela foi criada na plataforma de API, não no ChatGPT.',
+          INVALID_CREDENTIAL: `${providerLabel} recusou a credencial. Verifique a chave ou token configurado.`,
           INSUFFICIENT_QUOTA: 'A conta de API está sem créditos ou faturamento ativo. ChatGPT Plus não inclui créditos da API.',
           MODEL_UNAVAILABLE: `A chave é válida, mas não possui acesso ao modelo “${model}”. Tente gpt-4.1-mini ou outro modelo disponível na conta.`,
-          ACCESS_RESTRICTED: 'A OpenAI bloqueou o acesso por permissão, política ou região. Verifique o projeto da chave e as restrições da conta.',
-          RATE_LIMITED: 'A OpenAI está limitando temporariamente as requisições. Aguarde um pouco e tente novamente.',
-          NETWORK_UNAVAILABLE: 'Não foi possível alcançar a OpenAI. Verifique internet, proxy, VPN ou firewall.',
+          ACCESS_RESTRICTED: `${providerLabel} bloqueou o acesso por permissão, política ou região.`,
+          RATE_LIMITED: `${providerLabel} está limitando temporariamente as requisições. Aguarde um pouco e tente novamente.`,
+          NETWORK_UNAVAILABLE: `Não foi possível alcançar ${providerType === 'openai' ? 'a OpenAI' : 'o provedor configurado'}. Verifique o serviço, rede ou firewall.`,
           SECURE_STORAGE_UNAVAILABLE: 'O cofre seguro não está disponível. Escolha “Somente nesta sessão”.',
           INVALID_CONFIGURATION: 'A configuração enviada é inválida. Revise nome, chave, modelo e armazenamento.',
           UNKNOWN: 'A OpenAI retornou uma resposta inesperada. Confira a conta e tente novamente.',
@@ -124,13 +130,15 @@ function ProviderSettingsDialog({ status, accounts, onClose, onConfigured, onSel
     <div className="fixed inset-0 z-30 grid place-items-center bg-coach-ink/55 p-5 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="provider-settings-title">
       <section className="w-full max-w-lg rounded-[2rem] bg-coach-paper p-7 shadow-2xl">
         <div className="flex items-start justify-between"><div><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">BYOK · sua chave</p><h2 id="provider-settings-title" className="mt-2 font-display text-3xl font-black">Provedor de IA</h2></div><button aria-label="Fechar" disabled={saving} onClick={() => { setApiKey(''); onClose() }} className="rounded-full p-2 hover:bg-black/5"><X /></button></div>
-        <p className="mt-4 text-sm leading-6 text-coach-muted">A assinatura do ChatGPT não é uma chave de API. Use apenas uma chave criada oficialmente na plataforma da OpenAI. Ela não será salva no SQLite. Quando conectada, as mensagens recentes necessárias serão enviadas à API para gerar respostas, com armazenamento remoto desativado na requisição.</p>
+        <p className="mt-4 text-sm leading-6 text-coach-muted">As mensagens recentes necessárias serão enviadas ao provedor escolhido. Na OpenAI direta, o Coach desativa o armazenamento remoto na requisição; em endpoints compatíveis, retenção e privacidade dependem do serviço conectado.</p>
         {accounts.length > 0 && <div className="mt-6 space-y-2">{accounts.map((account) => <div key={account.id} className={`flex items-center justify-between rounded-xl border p-3 ${account.isActive ? 'border-emerald-300 bg-emerald-50' : 'border-coach-line bg-white'}`}><div><p className="font-bold">{account.label}</p><p className="text-xs text-coach-muted">{account.providerName} · {account.model}</p></div><div className="flex gap-2">{!account.isActive && <button type="button" disabled={saving} onClick={() => { setSaving(true); setError(null); void onSelect(account.id).catch(() => setError('Não foi possível ativar esta conta. Verifique a credencial e a conexão.')).finally(() => setSaving(false)) }} className="rounded-lg border border-coach-line px-3 py-2 text-xs font-bold">Usar</button>}<button type="button" disabled={saving} onClick={() => { setSaving(true); setError(null); void onRemove(account.id).catch(() => setError('Não foi possível remover a conta com segurança.')).finally(() => setSaving(false)) }} className="rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-700">Remover</button></div></div>)}</div>}
           <form className="mt-6" onSubmit={(event) => { event.preventDefault(); void configure() }}>
             {secureStorageUnavailable && <div className="mb-5 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">O cofre seguro persistente não está disponível neste Linux. Você ainda pode usar a chave somente nesta sessão; ela será esquecida ao fechar o Coach.</div>}
             {error && <div className="mb-5 rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">{error}</div>}
-            <label className="block text-sm font-bold">Nome desta conta<input required maxLength={60} value={label} onChange={(event) => setLabel(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 outline-none focus:border-coach-green" /></label>
-            <label className="mt-5 block text-sm font-bold">Chave de API OpenAI<input type="password" autoComplete="off" required minLength={20} maxLength={512} value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="sk-…" className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 font-mono outline-none focus:border-coach-green" /></label>
+            <label className="block text-sm font-bold">Tipo de conexão<select value={providerType} onChange={(event) => { const type = event.target.value as 'openai' | 'omniroute'; setProviderType(type); if (type === 'omniroute') { setLabel('OmniRoute local'); setBaseUrl('http://127.0.0.1:20128/v1'); setApiKey('omniroute'); setModel('codex/gpt-5.6-sol'); setPersistence('session') } }} className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3"><option value="omniroute">OmniRoute / OpenAI-compatible</option><option value="openai">OpenAI direta</option></select></label>
+            <label className="mt-5 block text-sm font-bold">Nome desta conta<input required maxLength={60} value={label} onChange={(event) => setLabel(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 outline-none focus:border-coach-green" /></label>
+            {providerType === 'omniroute' && <label className="mt-5 block text-sm font-bold">Endpoint<input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 font-mono text-sm outline-none focus:border-coach-green" /></label>}
+            <label className="mt-5 block text-sm font-bold">{providerType === 'openai' ? 'Chave de API OpenAI' : 'Token do serviço'}<input type="password" autoComplete="off" required minLength={providerType === 'openai' ? 20 : 1} maxLength={512} value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={providerType === 'openai' ? 'sk-…' : 'Token local'} className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 font-mono outline-none focus:border-coach-green" /></label>
             <label className="mt-5 block text-sm font-bold">Modelo<input required maxLength={100} value={model} onChange={(event) => setModel(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 outline-none focus:border-coach-green" /></label>
             <label className="mt-5 block text-sm font-bold">Armazenamento<select value={effectivePersistence} onChange={(event) => setPersistence(event.target.value as 'secure-vault' | 'session')} className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 outline-none"><option value="session">Somente nesta sessão</option>{!secureStorageUnavailable && <option value="secure-vault">Cofre seguro do sistema</option>}</select></label>
             <button disabled={saving || !apiKey.trim()} className="mt-6 w-full rounded-xl bg-coach-orange px-5 py-3 font-extrabold text-white disabled:opacity-45">{saving ? 'Testando conexão…' : accounts.length ? 'Adicionar e usar conta' : 'Testar e conectar'}</button>
@@ -307,7 +315,7 @@ export function App() {
       </section>
       <footer className="mx-auto mt-20 flex max-w-7xl justify-between border-t border-coach-line py-5 text-xs text-coach-muted"><span>Dados locais por padrão</span><span>{applicationInfo ? `${applicationInfo.name} ${applicationInfo.version} · API ${applicationInfo.apiVersion}` : 'Conectando…'}</span></footer>
       <CreateWorkspaceDialog open={dialogOpen} submitting={submitting} onClose={() => setDialogOpen(false)} onSubmit={createWorkspace} />
-      {providerDialogOpen && <ProviderSettingsDialog status={providerStatus} accounts={providerAccounts} onClose={() => setProviderDialogOpen(false)} onConfigured={async (label, apiKey, model, persistence) => { const result = await window.coach.provider.configureOpenAI({ label, apiKey, model, persistence }); if (result.ok) { setProviderStatus(result.status); setProviderAccounts(await window.coach.provider.listAccounts()) } return result }} onSelect={async (accountId) => { setProviderStatus(await window.coach.provider.selectAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} onRemove={async (accountId) => { setProviderStatus(await window.coach.provider.removeAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} />}
+      {providerDialogOpen && <ProviderSettingsDialog status={providerStatus} accounts={providerAccounts} onClose={() => setProviderDialogOpen(false)} onConfigured={async (label, apiKey, model, persistence) => { const result = await window.coach.provider.configureOpenAI({ label, apiKey, model, persistence }); if (result.ok) { setProviderStatus(result.status); setProviderAccounts(await window.coach.provider.listAccounts()) } return result }} onConfiguredCompatible={async (label, baseUrl, apiKey, model, persistence) => { const result = await window.coach.provider.configureCompatible({ label, baseUrl, apiKey, model, persistence }); if (result.ok) { setProviderStatus(result.status); setProviderAccounts(await window.coach.provider.listAccounts()) } return result }} onSelect={async (accountId) => { setProviderStatus(await window.coach.provider.selectAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} onRemove={async (accountId) => { setProviderStatus(await window.coach.provider.removeAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} />}
     </main>
   )
 }

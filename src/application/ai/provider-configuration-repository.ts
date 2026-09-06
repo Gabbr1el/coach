@@ -1,8 +1,9 @@
 export interface ProviderConfiguration {
   readonly id: string
-  readonly providerId: 'openai'
+  readonly providerId: 'openai' | 'openai-compatible'
   readonly displayName: string
   readonly label: string
+  readonly baseUrl: string | null
   readonly model: string
   readonly secretReference: string
   readonly isActive: boolean

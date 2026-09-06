@@ -40,7 +40,7 @@ describe('Coach database migrations', () => {
       { name: 'provider_configurations' },
       { name: 'workspaces' },
     ])
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 5 })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 7 })
     database.close()
   })
 

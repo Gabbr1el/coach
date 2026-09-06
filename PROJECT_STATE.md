@@ -61,6 +61,8 @@
 - Session-only BYOK fallback when the operating-system vault is unavailable
 - OpenAI connection diagnostics distinguish credentials, quota, model access and network failures
 - OpenAI 429 diagnostics inspect code, type and safe message signals to distinguish billing quota from temporary rate limits
+- OpenAI-compatible provider with secure URL validation and Chat Completions streaming
+- One-click defaults for a local OmniRoute endpoint
 
 ## Pending
 
@@ -87,6 +89,7 @@
 - Session-only keys are kept in Main process memory, never persisted, and forgotten when Coach closes.
 - Provider setup validates API credential and Responses API model compatibility with a minimal generated response; provider usage charges may apply.
 - OpenAI is the first provider; no SDK is exposed to renderer or application contracts.
+- Compatible endpoints may use plain HTTP only on loopback; remote providers require HTTPS.
 - Inactive provider keys remain only in the encrypted vault; adapters retain only the currently active key in memory.
 - Application identity is frozen as `br.coach.study`, product name `Coach`.
 - A single-instance lock prevents concurrent startup migrations.

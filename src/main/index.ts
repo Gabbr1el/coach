@@ -13,6 +13,7 @@ import { ProviderConfigurationService } from '../application/ai/provider-configu
 import { DrizzleProviderConfigurationRepository } from './repositories/drizzle-provider-configuration-repository'
 import { ElectronCredentialVault } from './security/electron-credential-vault'
 import { OpenAIProvider } from './providers/openai-provider'
+import { OpenAICompatibleProvider } from './providers/openai-compatible-provider'
 import { registerProviderHandlers } from './ipc/provider-handlers'
 
 let database: CoachDatabase | null = null
@@ -40,6 +41,7 @@ void app.whenReady().then(async () => {
       new ElectronCredentialVault(),
       providerManager,
       (apiKey, model) => new OpenAIProvider(apiKey, model),
+      (label, baseUrl, apiKey, model) => new OpenAICompatibleProvider(label, baseUrl, apiKey, model),
     )
     await providerConfigurationService.initialize()
     const homePlannerService = new HomePlannerService({

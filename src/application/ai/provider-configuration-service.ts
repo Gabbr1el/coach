@@ -15,6 +15,7 @@ export class ProviderConfigurationService {
     private readonly vault: CredentialVault,
     private readonly manager: AIProviderManager,
     private readonly createOpenAIProvider: (apiKey: string, model: string) => AIProvider,
+    private readonly createCompatibleProvider: (label: string, baseUrl: string, apiKey: string, model: string) => AIProvider,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -52,6 +53,7 @@ export class ProviderConfigurationService {
       model: configuration.model,
       isActive: configuration.isActive && configuration.id === operationalAccountId,
       sessionOnly: false,
+      baseUrl: configuration.baseUrl,
     }))
     return this.sessionAccount ? [this.sessionAccount, ...persisted] : persisted
   }
@@ -69,7 +71,7 @@ export class ProviderConfigurationService {
     await provider.testConnection()
     if (persistence === 'session') {
       const accountId = crypto.randomUUID()
-      this.sessionAccount = { id: accountId, providerId: 'openai', providerName: 'OpenAI', label, model, isActive: true, sessionOnly: true }
+      this.sessionAccount = { id: accountId, providerId: 'openai', providerName: 'OpenAI', label, model, isActive: true, sessionOnly: true, baseUrl: null }
       this.registerAndSelect(accountId, provider)
       return this.getStatus()
     }
@@ -83,6 +85,7 @@ export class ProviderConfigurationService {
         providerId: 'openai',
         displayName: 'OpenAI',
         label,
+        baseUrl: null,
         model,
         secretReference,
         isActive: true,
@@ -102,6 +105,32 @@ export class ProviderConfigurationService {
     return this.getStatus()
   }
 
+  async configureCompatible(label: string, baseUrl: string, apiKey: string, model: string, persistence: 'secure-vault' | 'session'): Promise<ProviderStatus> {
+    return this.exclusive(async () => {
+      if (persistence === 'secure-vault' && !this.vault.isAvailable()) throw new Error('Secure operating-system credential storage is unavailable')
+      const provider = this.createCompatibleProvider(label, baseUrl, apiKey, model)
+      await provider.testConnection()
+      const accountId = crypto.randomUUID()
+      if (persistence === 'session') {
+        this.sessionAccount = { id: accountId, providerId: 'openai-compatible', providerName: label, label, model, isActive: true, sessionOnly: true, baseUrl }
+        this.registerAndSelect(accountId, provider)
+        return this.getStatus()
+      }
+      const secretReference = `provider-compatible-api-key-${accountId}`
+      await this.vault.set(secretReference, apiKey)
+      try {
+        const now = this.now()
+        await this.repository.createAndActivate({ id: accountId, providerId: 'openai-compatible', displayName: label, label, baseUrl, model, secretReference, isActive: true, createdAt: now, updatedAt: now })
+      } catch (error) {
+        await this.vault.delete(secretReference).catch(() => {})
+        throw error
+      }
+      this.sessionAccount = null
+      this.registerAndSelect(accountId, provider)
+      return this.getStatus()
+    })
+  }
+
   async selectAccount(accountId: string): Promise<ProviderStatus> {
     return this.exclusive(() => this.selectAccountExclusive(accountId, true))
   }
@@ -112,7 +141,9 @@ export class ProviderConfigurationService {
     if (!configuration) throw new Error('Provider account not found')
     const apiKey = await this.vault.get(configuration.secretReference)
     if (!apiKey) throw new Error('Provider credential not found')
-    const provider = this.createOpenAIProvider(apiKey, configuration.model)
+    const provider = configuration.providerId === 'openai'
+      ? this.createOpenAIProvider(apiKey, configuration.model)
+      : this.createCompatibleProvider(configuration.label, configuration.baseUrl ?? '', apiKey, configuration.model)
     if (testConnection) await provider.testConnection()
     await this.repository.activate(accountId, this.now())
     this.sessionAccount = null
@@ -149,7 +180,9 @@ export class ProviderConfigurationService {
       try {
         const apiKey = await this.vault.get(configuration.secretReference)
         if (!apiKey) continue
-        const provider = this.createOpenAIProvider(apiKey, configuration.model)
+        const provider = configuration.providerId === 'openai'
+          ? this.createOpenAIProvider(apiKey, configuration.model)
+          : this.createCompatibleProvider(configuration.label, configuration.baseUrl ?? '', apiKey, configuration.model)
         if (testConnection) await provider.testConnection()
         await this.repository.activate(configuration.id, this.now())
         this.registerAndSelect(configuration.id, provider)

@@ -31,12 +31,14 @@ function provider(): AIProvider {
   return { id: 'openai', name: 'OpenAI', testConnection: async () => {}, sendMessage: async () => ({ content: 'ok', providerId: 'openai', modelId: 'test' }), getCapabilities: () => ({ streaming: false, usageInformation: true, supportedInput: ['text'] }) }
 }
 
+const compatibleProvider = () => provider()
+
 describe('ProviderConfigurationService', () => {
   it('tests, stores and selects a provider without putting the key in metadata', async () => {
     const repository = new MemoryConfigurationRepository()
     const vault = new MemoryVault()
     const manager = new AIProviderManager()
-    const service = new ProviderConfigurationService(repository, vault, manager, provider, () => 50)
+    const service = new ProviderConfigurationService(repository, vault, manager, provider, compatibleProvider, () => 50)
 
     const status = await service.configureOpenAI('Principal', 'secret-key-value-that-is-long-enough', 'gpt-test', 'secure-vault')
 
@@ -47,7 +49,7 @@ describe('ProviderConfigurationService', () => {
   })
 
   it('fails closed when secure storage is unavailable', async () => {
-    const service = new ProviderConfigurationService(new MemoryConfigurationRepository(), new MemoryVault(false), new AIProviderManager(), provider)
+    const service = new ProviderConfigurationService(new MemoryConfigurationRepository(), new MemoryVault(false), new AIProviderManager(), provider, compatibleProvider)
     await expect(service.configureOpenAI('Principal', 'secret-key-value-that-is-long-enough', 'gpt-test', 'secure-vault')).rejects.toThrow(/unavailable/)
   })
 
@@ -55,7 +57,7 @@ describe('ProviderConfigurationService', () => {
     const repository = new MemoryConfigurationRepository()
     const manager = new AIProviderManager()
     const vault = new MemoryVault(false)
-    const service = new ProviderConfigurationService(repository, vault, manager, provider)
+    const service = new ProviderConfigurationService(repository, vault, manager, provider, compatibleProvider)
 
     const status = await service.configureOpenAI('Sessão', 'secret-key-value-that-is-long-enough', 'gpt-test', 'session')
 
@@ -64,15 +66,26 @@ describe('ProviderConfigurationService', () => {
     expect(vault.value).toBeNull()
   })
 
+  it('connects an OpenAI-compatible provider only for the current session', async () => {
+    const repository = new MemoryConfigurationRepository()
+    const manager = new AIProviderManager()
+    const service = new ProviderConfigurationService(repository, new MemoryVault(false), manager, provider, compatibleProvider)
+
+    const status = await service.configureCompatible('OmniRoute', 'http://localhost:20128/v1', 'omniroute', 'codex/gpt-5.6-sol', 'session')
+
+    expect(status).toMatchObject({ configured: true, providerId: 'openai-compatible', providerName: 'OmniRoute', sessionOnly: true })
+    expect(repository.configurations).toEqual([])
+  })
+
   it('removes the active provider before a credential deletion failure', async () => {
     class FailingDeleteVault extends MemoryVault { override async delete() { throw new Error('vault failure') } }
     const repository = new MemoryConfigurationRepository()
     const accountId = '00000000-0000-4000-8000-000000000010'
-    repository.configuration = { id: accountId, providerId: 'openai', displayName: 'OpenAI', label: 'Principal', model: 'gpt-test', secretReference: 'old-secret', isActive: true, createdAt: 1, updatedAt: 1 }
+    repository.configuration = { id: accountId, providerId: 'openai', displayName: 'OpenAI', label: 'Principal', baseUrl: null, model: 'gpt-test', secretReference: 'old-secret', isActive: true, createdAt: 1, updatedAt: 1 }
     const manager = new AIProviderManager()
     manager.replace(provider(), accountId)
     manager.select(accountId)
-    const service = new ProviderConfigurationService(repository, new FailingDeleteVault(), manager, provider)
+    const service = new ProviderConfigurationService(repository, new FailingDeleteVault(), manager, provider, compatibleProvider)
 
     await expect(service.removeAccount(accountId)).rejects.toThrow('vault failure')
     expect(manager.getActive()).toBeNull()

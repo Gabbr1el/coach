@@ -7,8 +7,9 @@ import { migrateDatabase } from './migrate'
 import * as workspaceSchema from './schema/workspaces'
 import * as conversationSchema from './schema/conversations'
 import * as providerSchema from './schema/provider-configurations'
+import * as studyWorkspaceSchema from './schema/study-workspaces'
 
-const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema }
+const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema, ...studyWorkspaceSchema }
 
 export interface CoachDatabase {
   readonly sqlite: Database.Database

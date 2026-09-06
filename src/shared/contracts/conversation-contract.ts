@@ -16,6 +16,12 @@ export const workspaceConversationInputSchema = z.object({ workspaceId: workspac
 export const streamWorkspaceMessageInputSchema = sendHomeMessageInputSchema.extend({
   requestId: z.uuid(),
   workspaceId: workspaceIdSchema,
+  studyContext: z.object({
+    fileName: z.string().trim().min(1).max(120),
+    editorContent: z.string().max(50_000),
+    notes: z.string().max(20_000),
+    activePlanItem: z.string().max(160).nullable(),
+  }).strict().optional(),
 }).strict()
 
 export const cancelWorkspaceStreamInputSchema = z.object({ requestId: z.uuid() }).strict()

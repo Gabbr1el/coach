@@ -4,6 +4,7 @@ import type { ApplicationInfo } from '../../shared/contracts/application-contrac
 import type { CreateWorkspaceInput, Workspace, WorkspaceSummary } from '../../shared/contracts/workspace-contract'
 import type { ConversationMessage } from '../../shared/contracts/conversation-contract'
 import type { ConfigureProviderResult, ProviderAccountSummary, ProviderStatus } from '../../shared/contracts/provider-contract'
+import type { StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
 
 function relativeDate(timestamp: number | null): string {
   if (!timestamp) return 'Ainda não aberto'
@@ -178,6 +179,18 @@ export function App() {
   const workspaceLoadEpoch = useRef(0)
   const workspaceDrafts = useRef(new Map<string, string>())
   const workspaceMessageEnd = useRef<HTMLDivElement | null>(null)
+  const [studyState, setStudyState] = useState<StudyWorkspaceState | null>(null)
+  const [editorContent, setEditorContent] = useState('')
+  const [studyNotes, setStudyNotes] = useState('')
+  const [documentSavedAt, setDocumentSavedAt] = useState<number | null>(null)
+  const [notesOpen, setNotesOpen] = useState(false)
+  const [timerNow, setTimerNow] = useState(Date.now())
+  const [planUpdating, setPlanUpdating] = useState(false)
+  const studyStateRef = useRef<StudyWorkspaceState | null>(null)
+  const editorContentRef = useRef('')
+  const studyNotesRef = useRef('')
+  const documentRevision = useRef(0)
+  const notesRevision = useRef(0)
 
   const loadWorkspaces = useCallback(async () => {
     try {
@@ -211,18 +224,79 @@ export function App() {
     workspaceStreamHandle.current?.dispose()
     workspaceStreamHandle.current = null
     setWorkspaceSending(false)
+    setPlanUpdating(false)
     setWorkspaceInput(selected ? workspaceDrafts.current.get(selected.id) ?? '' : '')
     setWorkspaceMessages([])
     setWorkspaceStreamedContent('')
     setWorkspaceError(null)
+    setStudyState(null)
     if (!selected) return
     setWorkspaceLoading(true)
-    void window.coach.conversation.listWorkspaceMessages(selected.id)
-      .then((loaded) => { if (workspaceLoadEpoch.current === epoch) setWorkspaceMessages(loaded) })
+    void Promise.all([window.coach.conversation.listWorkspaceMessages(selected.id), window.coach.studyWorkspace.getState(selected.id)])
+      .then(([loaded, state]) => { if (workspaceLoadEpoch.current === epoch) { setWorkspaceMessages(loaded); setStudyState(state); setEditorContent(state.editorContent); setStudyNotes(state.notes); documentRevision.current = state.documentRevision; notesRevision.current = state.notesRevision } })
       .catch(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceError('Não foi possível carregar a conversa deste Workspace.') })
       .finally(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceLoading(false) })
     return () => { workspaceLoadEpoch.current += 1 }
   }, [selected?.id])
+
+  useEffect(() => { studyStateRef.current = studyState }, [studyState])
+  useEffect(() => { editorContentRef.current = editorContent }, [editorContent])
+  useEffect(() => { studyNotesRef.current = studyNotes }, [studyNotes])
+
+  const flushStudyDrafts = useCallback((workspaceId: string) => {
+    const state = studyStateRef.current
+    if (!state || state.workspaceId !== workspaceId) return
+    const documentChanged = editorContentRef.current !== state.editorContent
+    const notesChanged = studyNotesRef.current !== state.notes
+    if (!documentChanged && !notesChanged) return
+    const saved = window.coach.studyWorkspace.flushDrafts({ workspaceId, fileName: state.fileName, language: state.language, content: editorContentRef.current, notes: studyNotesRef.current, documentRevision: documentChanged ? ++documentRevision.current : documentRevision.current, notesRevision: notesChanged ? ++notesRevision.current : notesRevision.current })
+    if (!saved) setWorkspaceError('Não foi possível salvar as últimas alterações localmente.')
+  }, [])
+
+  useEffect(() => {
+    if (!selected) return
+    const workspaceId = selected.id
+    const flush = () => flushStudyDrafts(workspaceId)
+    window.addEventListener('beforeunload', flush)
+    return () => { window.removeEventListener('beforeunload', flush); flush() }
+  }, [selected?.id, flushStudyDrafts])
+
+  useEffect(() => {
+    if (!selected || !studyState || editorContent === studyState.editorContent) return
+    const timeout = window.setTimeout(() => {
+      const epoch = workspaceLoadEpoch.current
+      const content = editorContent
+      void window.coach.studyWorkspace.saveDocument({ workspaceId: selected.id, fileName: studyState.fileName, language: studyState.language, content, revision: ++documentRevision.current }).then((state) => { if (workspaceLoadEpoch.current === epoch) { setStudyState(state); setDocumentSavedAt(Date.now()) } }).catch(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceError('Não foi possível salvar o código localmente.') })
+    }, 700)
+    return () => window.clearTimeout(timeout)
+  }, [editorContent, selected?.id, studyState?.editorContent, studyState?.fileName, studyState?.language])
+
+  useEffect(() => {
+    if (!selected || !studyState || studyNotes === studyState.notes) return
+    const timeout = window.setTimeout(() => {
+      const epoch = workspaceLoadEpoch.current
+      const notes = studyNotes
+      void window.coach.studyWorkspace.saveNotes({ workspaceId: selected.id, notes, revision: ++notesRevision.current }).then((state) => { if (workspaceLoadEpoch.current === epoch) setStudyState(state) }).catch(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceError('Não foi possível salvar as anotações.') })
+    }, 700)
+    return () => window.clearTimeout(timeout)
+  }, [studyNotes, selected?.id, studyState?.notes])
+
+  useEffect(() => {
+    if (studyState?.timerStatus !== 'running') return
+    const interval = window.setInterval(() => setTimerNow(Date.now()), 1000)
+    return () => window.clearInterval(interval)
+  }, [studyState?.timerStatus])
+
+  useEffect(() => {
+    if (!selected || !studyState || studyState.timerStatus !== 'running') return
+    const remaining = Math.max(0, studyState.timerRemainingSeconds - (studyState.timerStartedAt ? Math.floor((timerNow - studyState.timerStartedAt) / 1000) : 0))
+    if (remaining !== 0) return
+    const workspaceId = selected.id
+    const epoch = workspaceLoadEpoch.current
+    void window.coach.studyWorkspace.updateTimer({ workspaceId, action: 'pause' }).then((state) => {
+      if (workspaceLoadEpoch.current === epoch && state.workspaceId === workspaceId) setStudyState(state)
+    })
+  }, [timerNow, selected?.id, studyState?.timerRemainingSeconds, studyState?.timerStartedAt, studyState?.timerStatus])
 
   useEffect(() => {
     workspaceMessageEnd.current?.scrollIntoView({ block: 'end' })
@@ -317,7 +391,7 @@ export function App() {
     const workspaceId = selected.id
     const epoch = workspaceLoadEpoch.current
     const isCurrentRequest = () => workspaceLoadEpoch.current === epoch
-    workspaceStreamHandle.current = window.coach.conversation.streamWorkspaceMessage({ requestId, workspaceId, content }, (event) => {
+    workspaceStreamHandle.current = window.coach.conversation.streamWorkspaceMessage({ requestId, workspaceId, content, studyContext: studyState?.workspaceId === workspaceId && studyState.shareContextWithAi ? { fileName: studyState.fileName, editorContent: editorContent.slice(0, 50_000), notes: studyNotes.slice(0, 20_000), activePlanItem: studyState.plan.find((item) => item.status === 'active')?.title ?? null } : undefined }, (event) => {
       if (!isCurrentRequest()) return
       if (event.type === 'text-delta') setWorkspaceStreamedContent((current) => current + event.content)
       if (event.type === 'completed') {
@@ -347,13 +421,22 @@ export function App() {
   }
 
   if (selected) {
+    const completedItems = studyState?.plan.filter((item) => item.status === 'completed').length ?? 0
+    const timerRemaining = studyState ? Math.max(0, studyState.timerRemainingSeconds - (studyState.timerStatus === 'running' && studyState.timerStartedAt ? Math.floor((timerNow - studyState.timerStartedAt) / 1000) : 0)) : 0
+    const timerLabel = `${String(Math.floor(timerRemaining / 60)).padStart(2, '0')}:${String(timerRemaining % 60).padStart(2, '0')}`
+    const applyStudyState = (workspaceId: string, epoch: number) => (state: StudyWorkspaceState) => {
+      if (workspaceLoadEpoch.current === epoch && state.workspaceId === workspaceId) setStudyState(state)
+    }
     return (
-      <main className="min-h-screen p-4 text-coach-ink sm:p-6 md:p-10">
-        <header className="mx-auto flex max-w-7xl items-center justify-between gap-4"><button onClick={() => setSelected(null)} className="flex items-center gap-2 rounded-xl border border-coach-line bg-white/70 px-4 py-2 text-sm font-bold"><ArrowLeft size={17} /> Voltar à Home</button><span className="rounded-full bg-coach-green/10 px-3 py-1.5 text-xs font-black text-coach-green">{providerStatus?.configured ? `${providerStatus.providerName} · ${providerStatus.model}` : 'IA desconectada'}</span></header>
-        <section className="mx-auto mt-8 grid max-w-7xl gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-          <aside className="rounded-[2rem] border border-coach-line bg-white/70 p-6 shadow-soft lg:sticky lg:top-6 lg:self-start"><div className="grid size-12 place-items-center rounded-2xl bg-coach-orange/10 text-coach-orange"><Brain size={24} /></div><p className="mt-7 text-xs font-black uppercase tracking-[0.2em] text-coach-green">Workspace</p><h1 className="mt-2 font-display text-4xl font-black tracking-tight">{selected.name}</h1><p className="mt-4 leading-7 text-coach-muted">{selected.objective || 'Sem objetivo definido.'}</p><div className="mt-8 rounded-2xl bg-coach-yellow/20 p-4 text-sm leading-6 text-coach-ink/75">A conversa e o contexto ficam isolados neste Workspace e persistidos localmente.</div></aside>
-          <section className="flex h-[calc(100dvh-8rem)] min-h-[30rem] flex-col overflow-hidden rounded-[2rem] bg-coach-ink text-white shadow-soft lg:h-[calc(100dvh-9rem)]"><div className="border-b border-white/10 p-6"><div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-coach-yellow text-coach-ink"><Sparkles size={20} /></div><div><h2 className="font-display text-xl font-extrabold">Coach da matéria</h2><p className="text-xs text-white/50">Tire dúvidas, revise conceitos e planeje próximos passos</p></div></div></div><div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5 sm:p-7">{workspaceError && <div className="rounded-2xl bg-red-400/15 p-4 text-sm text-red-100">{workspaceError}</div>}{workspaceLoading && <p className="text-sm text-white/45">Carregando conversa…</p>}{!workspaceLoading && workspaceMessages.length === 0 && <div className="max-w-xl rounded-2xl bg-white/7 p-5 text-sm leading-7 text-white/65">Comece contando o que está estudando ou onde encontrou dificuldade. O Coach usará o nome e o objetivo deste Workspace como contexto.</div>}{workspaceMessages.map((message) => <div key={message.id} className={`max-w-[86%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'ml-auto bg-coach-green text-white' : 'bg-white/8 text-white/80'}`}>{message.content}</div>)}{workspaceSending && workspaceStreamedContent && <div className="max-w-[86%] whitespace-pre-wrap rounded-2xl bg-white/8 px-4 py-3 text-sm leading-6 text-white/80">{workspaceStreamedContent}<span className="ml-1 inline-block h-4 w-1 animate-pulse bg-coach-yellow" /></div>}<div ref={workspaceMessageEnd} /></div><form className="border-t border-white/10 p-4 sm:p-5" onSubmit={(event) => { event.preventDefault(); sendWorkspaceMessage() }}><div className="flex items-end gap-2 rounded-2xl bg-white/8 p-2"><textarea disabled={workspaceLoading || !providerStatus?.configured} aria-label="Mensagem para o Coach do Workspace" value={workspaceInput} onChange={(event) => { const value = event.target.value; setWorkspaceInput(value); if (value) workspaceDrafts.current.set(selected.id, value); else workspaceDrafts.current.delete(selected.id) }} maxLength={4000} placeholder={providerStatus?.configured ? 'Pergunte sobre esta matéria…' : 'Conecte uma IA na Home para começar'} className="max-h-40 min-h-14 flex-1 resize-none bg-transparent px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 disabled:opacity-45" /><button disabled={!workspaceInput.trim() || workspaceSending || workspaceLoading || !providerStatus?.configured} aria-label="Enviar" className="grid size-12 shrink-0 place-items-center rounded-xl bg-coach-yellow text-coach-ink disabled:opacity-35"><Send size={19} /></button></div>{workspaceSending && <button type="button" onClick={() => workspaceStreamHandle.current?.cancel()} className="mt-2 px-1 text-xs font-bold text-coach-yellow">Cancelar resposta</button>}</form></section>
+      <main className="min-h-screen bg-[#f5f3ec] text-coach-ink">
+        <header className="flex min-h-16 flex-wrap items-center justify-between gap-4 border-b border-coach-line bg-white/85 px-5 py-3"><div className="flex items-center gap-4"><button onClick={() => setSelected(null)} className="grid size-10 place-items-center rounded-xl bg-coach-ink text-white" aria-label="Voltar à Home"><ArrowLeft size={18} /></button><div><h1 className="font-display text-lg font-black">{selected.name}</h1><p className="text-xs text-coach-muted">{selected.objective || 'Workspace de estudos'}</p></div></div><div className="flex items-center gap-3"><span className="hidden text-xs font-bold text-coach-muted sm:block">Sessão ativa · {studyState ? new Date(studyState.sessionStartedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '...'}</span><button onClick={() => setNotesOpen((open) => !open)} className="rounded-xl border border-coach-line px-4 py-2 text-sm font-bold">Anotações</button></div></header>
+        {workspaceError && <div className="border-b border-red-200 bg-red-50 px-5 py-3 text-sm text-red-800">{workspaceError}</div>}
+        <section className="grid min-h-[calc(100dvh-4rem)] xl:grid-cols-[285px_minmax(480px,1fr)_350px]">
+          <aside className="border-r border-coach-line bg-[#faf9f4] p-6"><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Seu roteiro</p><div className="mt-5 flex items-center justify-between"><h2 className="font-display text-xl font-black">Plano de hoje</h2><span className="text-xs font-bold text-coach-muted">{completedItems} de {studyState?.plan.length ?? 0}</span></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-coach-line"><div className="h-full bg-coach-green transition-all" style={{ width: `${studyState?.plan.length ? completedItems / studyState.plan.length * 100 : 0}%` }} /></div><div className="mt-7 space-y-2">{studyState?.plan.map((item) => <button disabled={planUpdating} key={item.id} onClick={() => { const workspaceId = selected.id; const epoch = workspaceLoadEpoch.current; setPlanUpdating(true); void window.coach.studyWorkspace.togglePlanItem({ workspaceId, itemId: item.id }).then(applyStudyState(workspaceId, epoch)).finally(() => { if (workspaceLoadEpoch.current === epoch) setPlanUpdating(false) }) }} className={`flex w-full gap-3 rounded-2xl p-3 text-left ${item.status === 'active' ? 'bg-coach-yellow/25' : 'hover:bg-black/4'}`}><span className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border ${item.status === 'completed' ? 'border-coach-green bg-coach-green text-white' : 'border-coach-line'}`}>{item.status === 'completed' ? '✓' : ''}</span><span><strong className={`block text-sm ${item.status === 'completed' ? 'line-through opacity-50' : ''}`}>{item.title}</strong><small className="text-coach-muted">{item.durationMinutes} min</small></span></button>)}</div><div className="mt-8 rounded-2xl border border-coach-yellow/50 bg-coach-yellow/15 p-4"><p className="text-sm font-black">Dica do Coach</p><p className="mt-2 text-xs leading-5 text-coach-muted">Tente explicar sua estratégia antes de pedir a solução. O Coach intervém quando detectar um desvio ou erro provável.</p></div></aside>
+          <section className="flex min-h-[560px] flex-col bg-[#102724] text-white"><div className="flex items-center justify-between border-b border-white/10 px-5 py-3"><div><p className="font-mono text-sm font-bold">{studyState?.fileName ?? 'main.py'}</p><p className="text-[10px] uppercase tracking-wider text-white/35">Editor local persistente</p></div><button type="button" onClick={() => setWorkspaceInput('Analise meu código atual. Identifique primeiro o possível erro ou desvio e me dê apenas uma dica progressiva.')} className="rounded-lg bg-coach-green px-4 py-2 text-xs font-black">Preparar revisão</button></div><div className="relative min-h-0 flex-1"><div aria-hidden className="pointer-events-none absolute inset-y-0 left-0 w-12 border-r border-white/8 bg-black/10 py-5 text-right font-mono text-xs leading-6 text-white/25">{editorContent.split('\n').map((_, index) => <div key={index} className="pr-3">{index + 1}</div>)}</div><textarea aria-label="Editor do Workspace" spellCheck={false} maxLength={200000} value={editorContent} onChange={(event) => { editorContentRef.current = event.target.value; setEditorContent(event.target.value) }} className="h-full min-h-[500px] w-full resize-none bg-transparent py-5 pl-16 pr-5 font-mono text-sm leading-6 text-[#dce9df] outline-none" /></div><div className="flex items-center justify-between border-t border-white/10 px-5 py-2 text-[11px] text-white/40"><span>{studyState?.language ?? 'python'} · UTF-8</span><span>{documentSavedAt ? 'Salvo agora' : 'Salvamento automático'}</span></div></section>
+          <aside className="flex min-h-[620px] flex-col border-l border-coach-line bg-white"><div className="border-b border-coach-line p-5"><div className="flex items-center justify-between"><p className="text-xs font-black uppercase tracking-[0.16em] text-coach-green">Sprint de foco</p><span className="text-xs font-bold text-coach-muted">{completedItems}/{studyState?.plan.length ?? 0}</span></div><div className="mt-4 flex items-end justify-between"><strong className="font-display text-4xl">{timerLabel}</strong><button onClick={() => { if (!studyState) return; const workspaceId = selected.id; const epoch = workspaceLoadEpoch.current; void window.coach.studyWorkspace.updateTimer({ workspaceId, action: studyState.timerStatus === 'running' ? 'pause' : timerRemaining === 0 ? 'reset' : 'start' }).then((state) => { applyStudyState(workspaceId, epoch)(state); if (workspaceLoadEpoch.current === epoch) setTimerNow(Date.now()) }) }} className="rounded-xl border border-coach-line px-4 py-2 text-xs font-black">{studyState?.timerStatus === 'running' ? 'Pausar' : timerRemaining === 0 ? 'Reiniciar' : 'Iniciar'}</button></div></div><div className="flex min-h-0 flex-1 flex-col bg-coach-ink text-white"><div className="border-b border-white/10 p-5"><div className="flex items-center gap-3"><div className="grid size-9 place-items-center rounded-xl bg-coach-yellow text-coach-ink"><Sparkles size={17} /></div><div className="min-w-0 flex-1"><p className="font-display font-black">Coach IA</p><p className="text-[11px] text-white/45">{providerStatus?.configured ? `Online · contexto ${studyState?.shareContextWithAi ? 'compartilhado' : 'privado'}` : 'Desconectado'}</p></div><label className="flex cursor-pointer items-center gap-2 text-[10px] text-white/55"><input type="checkbox" checked={studyState?.shareContextWithAi ?? false} onChange={(event) => studyState && void window.coach.studyWorkspace.updateContextSharing({ workspaceId: selected.id, enabled: event.target.checked }).then(applyStudyState(selected.id, workspaceLoadEpoch.current))} /> Enviar código/notas</label></div></div><div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">{workspaceLoading && <p className="text-sm text-white/45">Carregando contexto…</p>}{!workspaceLoading && workspaceMessages.length === 0 && <div className="rounded-2xl bg-white/7 p-4 text-sm leading-6 text-white/65">Posso acompanhar seu roteiro. Ative “Enviar código/notas” para permitir análise do editor e das anotações pelo provedor externo.</div>}{workspaceMessages.map((message) => <div key={message.id} className={`max-w-[92%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'ml-auto bg-coach-green' : 'bg-white/8 text-white/80'}`}>{message.content}</div>)}{workspaceSending && workspaceStreamedContent && <div className="rounded-2xl bg-white/8 px-4 py-3 text-sm leading-6 text-white/80">{workspaceStreamedContent}</div>}<div ref={workspaceMessageEnd} /></div><form className="border-t border-white/10 p-3" onSubmit={(event) => { event.preventDefault(); sendWorkspaceMessage() }}><textarea disabled={!providerStatus?.configured} value={workspaceInput} onChange={(event) => setWorkspaceInput(event.target.value)} placeholder="Pergunte sobre seu estudo..." className="min-h-20 w-full resize-none rounded-xl bg-white/8 p-3 text-sm outline-none placeholder:text-white/30" /><div className="mt-2 flex justify-between">{workspaceSending ? <button type="button" onClick={() => workspaceStreamHandle.current?.cancel()} className="text-xs font-bold text-coach-yellow">Cancelar</button> : <span />}<button disabled={!workspaceInput.trim() || workspaceSending || !providerStatus?.configured} className="grid size-10 place-items-center rounded-xl bg-coach-yellow text-coach-ink disabled:opacity-30"><Send size={17} /></button></div></form></div></aside>
         </section>
+        {notesOpen && <div className="fixed inset-0 z-20 flex justify-end bg-black/30" onMouseDown={() => setNotesOpen(false)}><section className="h-full w-full max-w-md bg-coach-paper p-6 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}><div className="flex items-center justify-between"><div><p className="text-xs font-black uppercase tracking-wider text-coach-green">Caderno local</p><h2 className="mt-1 font-display text-2xl font-black">Anotações</h2></div><button onClick={() => setNotesOpen(false)} aria-label="Fechar anotações"><X /></button></div><textarea autoFocus maxLength={100000} value={studyNotes} onChange={(event) => { studyNotesRef.current = event.target.value; setStudyNotes(event.target.value) }} placeholder="Registre conceitos, dúvidas e aprendizados..." className="mt-6 h-[calc(100dvh-9rem)] w-full resize-none rounded-2xl border border-coach-line bg-white/70 p-4 leading-7 outline-none focus:border-coach-green" /></section></div>}
       </main>
     )
   }

@@ -16,6 +16,9 @@ import { OpenAIProvider } from './providers/openai-provider'
 import { OpenAICompatibleProvider } from './providers/openai-compatible-provider'
 import { registerProviderHandlers } from './ipc/provider-handlers'
 import { WorkspaceCoachService } from '../application/conversations/workspace-coach-service'
+import { StudyWorkspaceService } from '../application/study-workspaces/study-workspace-service'
+import { DrizzleStudyWorkspaceRepository } from './repositories/drizzle-study-workspace-repository'
+import { registerStudyWorkspaceHandlers } from './ipc/study-workspace-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -53,9 +56,11 @@ void app.whenReady().then(async () => {
       providerManager,
       getWorkspace: (id) => workspaceRepository.findById(id),
     })
+    const studyWorkspaceService = new StudyWorkspaceService({ repository: new DrizzleStudyWorkspaceRepository(database), getWorkspace: (id) => workspaceRepository.findById(id) })
     registerApplicationHandlers()
     registerWorkspaceHandlers(workspaceService)
     registerConversationHandlers(homePlannerService, workspaceCoachService)
+    registerStudyWorkspaceHandlers(studyWorkspaceService)
     registerProviderHandlers(providerConfigurationService)
     createMainWindow()
   } catch (error) {
@@ -76,7 +81,7 @@ void app.whenReady().then(async () => {
   app.exit(1)
 })
 
-app.on('before-quit', () => {
+app.on('will-quit', () => {
   database?.close()
   database = null
 })

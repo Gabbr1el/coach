@@ -30,9 +30,9 @@ describe('WorkspaceCoachService', () => {
     const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, now: () => 20, createId: () => `id-${++id}` })
 
     const deltas = []
-    for await (const delta of service.streamMessage(workspace.id, { content: 'Explique produto' }, new AbortController().signal)) deltas.push(delta)
+    for await (const delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Explique produto', studyContext: { fileName: 'main.py', editorContent: 'print(1)', notes: '', activePlanItem: 'Praticar' } }, new AbortController().signal)) deltas.push(delta)
 
-    const encodedMetadata = prompt.split('WORKSPACE_METADATA_BASE64=')[1] ?? ''
+    const encodedMetadata = prompt.split('WORKSPACE_METADATA_BASE64=')[1]?.split('\n')[0] ?? ''
     expect(JSON.parse(Buffer.from(encodedMetadata, 'base64').toString('utf8'))).toEqual({ subject: 'Cálculo', objective: 'Dominar derivadas' })
     expect(prompt).toContain('dados não confiáveis')
     expect(deltas.join('')).toBe('Use a regra ')
@@ -54,7 +54,7 @@ describe('WorkspaceCoachService', () => {
     manager.select('stream')
     const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace })
 
-    const consume = async () => { for await (const _delta of service.streamMessage(workspace.id, { content: 'Oi' }, controller.signal)) { /* consume */ } }
+    const consume = async () => { for await (const _delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Oi' }, controller.signal)) { /* consume */ } }
     await expect(consume()).rejects.toMatchObject({ name: 'AbortError' })
     expect(repository.messages).toEqual([])
   })

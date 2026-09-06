@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { openCoachDatabase } from '../../src/main/database/connection'
 import { DrizzleWorkspaceRepository } from '../../src/main/repositories/drizzle-workspace-repository'
 import { DrizzleConversationRepository } from '../../src/main/repositories/drizzle-conversation-repository'
+import { DrizzleStudyWorkspaceRepository } from '../../src/main/repositories/drizzle-study-workspace-repository'
 
 const temporaryDirectories: string[] = []
 const migrationsFolder = resolve('drizzle/migrations')
@@ -38,9 +39,12 @@ describe('Coach database migrations', () => {
       { name: 'conversation_messages' },
       { name: 'conversation_threads' },
       { name: 'provider_configurations' },
+      { name: 'study_plan_items' },
+      { name: 'study_sessions' },
+      { name: 'workspace_study_states' },
       { name: 'workspaces' },
     ])
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 7 })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 8 })
     database.close()
   })
 
@@ -133,5 +137,19 @@ describe('Coach database migrations', () => {
 
     expect(row).toEqual({ scope: 'workspace', workspaceId: workspace.id, title: workspace.name })
     database.close()
+  })
+
+  it('persists the complete study workspace state', async () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    const workspaces = new DrizzleWorkspaceRepository(database)
+    const repository = new DrizzleStudyWorkspaceRepository(database)
+    const workspace = await workspaces.create({ id: '00000000-0000-4000-8000-000000000311', name: 'Algoritmos', objective: 'Listas', createdAt: 1, updatedAt: 1 })
+    const state = { workspaceId: workspace.id, sessionId: '00000000-0000-4000-8000-000000000312', sessionStartedAt: 2, fileName: 'main.py', language: 'python', editorContent: 'print(1)', notes: 'Nota', shareContextWithAi: true, timerDurationSeconds: 1500, timerRemainingSeconds: 1400, timerStatus: 'paused' as const, timerStartedAt: null, plan: [{ id: '00000000-0000-4000-8000-000000000313', title: 'Praticar', durationMinutes: 20, position: 1, status: 'active' as const }], updatedAt: 3, documentRevision: 1, notesRevision: 1 }
+    await repository.createState(state)
+    database.close()
+
+    const reopened = openCoachDatabase({ databasePath: database.path, migrationsFolder })
+    expect(await new DrizzleStudyWorkspaceRepository(reopened).findState(workspace.id, 4)).toMatchObject({ editorContent: 'print(1)', notes: 'Nota', plan: [{ title: 'Praticar' }] })
+    reopened.close()
   })
 })

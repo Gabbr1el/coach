@@ -6,6 +6,7 @@ import {
 import { WORKSPACE_CHANNELS } from '../shared/contracts/workspace-channels'
 import { CONVERSATION_CHANNELS } from '../shared/contracts/conversation-channels'
 import { PROVIDER_CHANNELS } from '../shared/contracts/provider-channels'
+import { STUDY_WORKSPACE_CHANNELS } from '../shared/contracts/study-workspace-channels'
 
 const api: CoachDesktopApi = {
   application: {
@@ -79,6 +80,15 @@ const api: CoachDesktopApi = {
     configureCompatible: (input) => ipcRenderer.invoke(PROVIDER_CHANNELS.configureCompatible, input),
     selectAccount: (accountId) => ipcRenderer.invoke(PROVIDER_CHANNELS.selectAccount, accountId),
     removeAccount: (accountId) => ipcRenderer.invoke(PROVIDER_CHANNELS.removeAccount, accountId),
+  },
+  studyWorkspace: {
+    getState: (workspaceId) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.getState, { workspaceId }),
+    saveDocument: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.saveDocument, input),
+    saveNotes: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.saveNotes, input),
+    updateContextSharing: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.updateContextSharing, input),
+    togglePlanItem: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.togglePlanItem, input),
+    updateTimer: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.updateTimer, input),
+    flushDrafts: (input) => ipcRenderer.sendSync(STUDY_WORKSPACE_CHANNELS.flushDrafts, input) === true,
   },
 }
 

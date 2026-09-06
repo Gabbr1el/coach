@@ -1,5 +1,7 @@
 # PROJECT STATE
 
+Execution roadmap: `ROADMAP.md`. The next vertical slice is durable project files and controlled C execution.
+
 ## Stack
 
 - Electron 38

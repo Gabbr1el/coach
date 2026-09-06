@@ -8,13 +8,13 @@ Coach is the study system and owns every durable record. AI providers are replac
 
 - MVP 0: complete (desktop shell, Home, local SQLite, Workspaces).
 - MVP 1: complete (provider abstraction, BYOK accounts, durable conversations).
-- MVP 2: partial (persistent learning editor exists; project files, Monaco, execution and terminal remain).
-- MVP 3: partial (persistent study state and focus timer exist; lifecycle and focus events remain).
-- MVP 4: not started (structured events, Observer and loop detection).
-- MVP 5: not started (PDF import, extraction, chunks and retrieval).
-- MVP 6: partial (Home Planner chat exists; structured routine/deadlines/priorities remain).
-- MVP 7: not started (session outline and historical navigation).
-- MVP 8: not started (pedagogical reports and memory consolidation).
+- MVP 2: complete (durable multi-file Python/C/Java projects, Monaco navigation and sandboxed builds).
+- MVP 3: complete (persistent study state, adaptive timer, lifecycle and focus events).
+- MVP 4: complete (typed event bus, durable events, Observer and repeated-error detection).
+- MVP 5: complete (PDF import, extraction, chunks, ranking and automatic retrieval).
+- MVP 6: complete (Home Planner, confirmed structured actions, routine, deadlines and priorities).
+- MVP 7: complete (session outline, historical navigation and distraction parking).
+- MVP 8: complete for the local MVP (pedagogical session insights and layered memory consolidation).
 
 ## Delivery sequence
 

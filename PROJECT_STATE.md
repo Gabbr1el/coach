@@ -74,6 +74,7 @@ Execution roadmap: `ROADMAP.md`. The next vertical slice is durable project file
 - Structured study deadlines, routine notes and explainable multi-factor Workspace priorities
 - Local PDF import, page extraction, chunk persistence and scoped material search
 - Durable SessionMemory and compact rolling WorkspaceMemory derived from local events
+- Collapsible current-session outline and persistent distraction parking list
 
 ## Pending
 

@@ -11,6 +11,7 @@ import { CODE_EXECUTION_CHANNELS } from '../shared/contracts/code-execution-chan
 import { OBSERVER_CHANNELS } from '../shared/contracts/observer-channels'
 import { PLANNING_CHANNELS } from '../shared/contracts/planning-channels'
 import { MATERIAL_CHANNELS } from '../shared/contracts/material-channels'
+import { SESSION_NAVIGATION_CHANNELS } from '../shared/contracts/session-navigation-channels'
 
 const api: CoachDesktopApi = {
   application: {
@@ -112,6 +113,11 @@ const api: CoachDesktopApi = {
     importPdf: (workspaceId) => ipcRenderer.invoke(MATERIAL_CHANNELS.importPdf, { workspaceId }),
     list: (workspaceId) => ipcRenderer.invoke(MATERIAL_CHANNELS.list, { workspaceId }),
     search: (input) => ipcRenderer.invoke(MATERIAL_CHANNELS.search, input),
+  },
+  sessionNavigation: {
+    addSavedForLater: (input) => ipcRenderer.invoke(SESSION_NAVIGATION_CHANNELS.addSavedForLater, input),
+    listSavedForLater: (workspaceId) => ipcRenderer.invoke(SESSION_NAVIGATION_CHANNELS.listSavedForLater, { workspaceId }),
+    listOutline: (workspaceId) => ipcRenderer.invoke(SESSION_NAVIGATION_CHANNELS.listOutline, { workspaceId }),
   },
 }
 

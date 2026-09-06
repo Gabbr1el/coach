@@ -22,4 +22,5 @@ export interface CoachDesktopApi {
   observer: import('./observer-contract').ObserverApi
   planning: import('./planning-contract').PlanningApi
   material: import('./material-contract').MaterialApi
+  sessionNavigation: import('./session-navigation-contract').SessionNavigationApi
 }

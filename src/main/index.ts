@@ -28,6 +28,7 @@ import { DrizzlePlanningRepository } from './repositories/drizzle-planning-repos
 import { registerPlanningHandlers } from './ipc/planning-handlers'
 import { PdfMaterialService } from './materials/pdf-material-service'
 import { registerMaterialHandlers } from './ipc/material-handlers'
+import { registerSessionNavigationHandlers } from './ipc/session-navigation-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -71,6 +72,7 @@ void app.whenReady().then(async () => {
     registerObserverHandlers(observerService)
     registerPlanningHandlers(new PlanningService(new DrizzlePlanningRepository(database)))
     registerMaterialHandlers(new PdfMaterialService(database), async (id) => Boolean(await workspaceRepository.findById(id)))
+    registerSessionNavigationHandlers(database)
     registerProviderHandlers(providerConfigurationService)
     createMainWindow()
   } catch (error) {

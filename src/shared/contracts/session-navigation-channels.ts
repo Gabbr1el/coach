@@ -1,0 +1,1 @@
+export const SESSION_NAVIGATION_CHANNELS = { addSavedForLater: 'session-navigation:add-saved', listSavedForLater: 'session-navigation:list-saved', listOutline: 'session-navigation:list-outline' } as const

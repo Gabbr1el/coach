@@ -24,7 +24,24 @@ describe('OpenAIProvider', () => {
     const fetcher: typeof fetch = async () => new Response(JSON.stringify({ error: { message: 'Invalid API key' } }), { status: 401, headers: { 'Content-Type': 'application/json' } })
     const provider = new OpenAIProvider('secret-key-value-that-is-long-enough', 'gpt-test', fetcher)
 
-    await expect(provider.testConnection()).rejects.toThrow('OpenAI rejected the API credential')
+    await expect(provider.testConnection()).rejects.toMatchObject({ code: 'INVALID_CREDENTIAL' })
+  })
+
+  it.each([
+    [403, { error: { code: 'policy_restricted' } }, 'ACCESS_RESTRICTED'],
+    [404, { error: { code: 'model_not_found', param: 'model' } }, 'MODEL_UNAVAILABLE'],
+    [429, { error: { code: 'insufficient_quota' } }, 'INSUFFICIENT_QUOTA'],
+    [429, { error: { code: 'rate_limit_exceeded' } }, 'RATE_LIMITED'],
+  ] as const)('maps OpenAI status %s to %s', async (status, body, code) => {
+    let requestBody = ''
+    const fetcher: typeof fetch = async (_input, init) => {
+      requestBody = String(init?.body)
+      return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+    }
+    const provider = new OpenAIProvider('secret-key-value-that-is-long-enough', 'gpt-test', fetcher)
+
+    await expect(provider.testConnection()).rejects.toMatchObject({ code })
+    expect(JSON.parse(requestBody)).toMatchObject({ model: 'gpt-test', store: false })
   })
 
   it('parses Responses API server-sent text deltas', async () => {

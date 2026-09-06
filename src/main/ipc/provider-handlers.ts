@@ -3,6 +3,7 @@ import type { ProviderConfigurationService } from '../../application/ai/provider
 import { PROVIDER_CHANNELS } from '../../shared/contracts/provider-channels'
 import { configureOpenAIInputSchema, providerAccountIdSchema } from '../../shared/contracts/provider-contract'
 import { assertTrustedSender } from './trusted-sender'
+import { OpenAIProviderError } from '../providers/openai-provider'
 
 export function registerProviderHandlers(service: ProviderConfigurationService): void {
   ipcMain.handle(PROVIDER_CHANNELS.getStatus, (event) => {
@@ -16,9 +17,17 @@ export function registerProviderHandlers(service: ProviderConfigurationService):
   })
 
   ipcMain.handle(PROVIDER_CHANNELS.configureOpenAI, async (event, payload: unknown) => {
-    assertTrustedSender(event)
-    const input = configureOpenAIInputSchema.parse(payload)
-    return service.configureOpenAI(input.label, input.apiKey, input.model, input.persistence)
+    try {
+      assertTrustedSender(event)
+      const input = configureOpenAIInputSchema.parse(payload)
+      const status = await service.configureOpenAI(input.label, input.apiKey, input.model, input.persistence)
+      return { ok: true, status } as const
+    } catch (error) {
+      if (error instanceof OpenAIProviderError) return { ok: false, code: error.code } as const
+      if (error instanceof Error && error.message.includes('Secure operating-system')) return { ok: false, code: 'SECURE_STORAGE_UNAVAILABLE' } as const
+      if (error instanceof Error && error.name === 'ZodError') return { ok: false, code: 'INVALID_CONFIGURATION' } as const
+      return { ok: false, code: 'UNKNOWN' } as const
+    }
   })
 
   ipcMain.handle(PROVIDER_CHANNELS.selectAccount, (event, payload: unknown) => {

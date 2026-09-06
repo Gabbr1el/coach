@@ -3,7 +3,7 @@ import { ArrowLeft, BookOpen, Brain, CalendarDays, MoreHorizontal, Plus, Send, S
 import type { ApplicationInfo } from '../../shared/contracts/application-contract'
 import type { CreateWorkspaceInput, Workspace, WorkspaceSummary } from '../../shared/contracts/workspace-contract'
 import type { ConversationMessage } from '../../shared/contracts/conversation-contract'
-import type { ProviderAccountSummary, ProviderStatus } from '../../shared/contracts/provider-contract'
+import type { ConfigureProviderResult, ProviderAccountSummary, ProviderStatus } from '../../shared/contracts/provider-contract'
 
 function relativeDate(timestamp: number | null): string {
   if (!timestamp) return 'Ainda não aberto'
@@ -78,7 +78,7 @@ function ProviderSettingsDialog({ status, accounts, onClose, onConfigured, onSel
   status: ProviderStatus | null
   accounts: ProviderAccountSummary[]
   onClose: () => void
-  onConfigured: (label: string, apiKey: string, model: string, persistence: 'secure-vault' | 'session') => Promise<void>
+  onConfigured: (label: string, apiKey: string, model: string, persistence: 'secure-vault' | 'session') => Promise<ConfigureProviderResult>
   onSelect: (accountId: string) => Promise<void>
   onRemove: (accountId: string) => Promise<void>
 }) {
@@ -96,7 +96,22 @@ function ProviderSettingsDialog({ status, accounts, onClose, onConfigured, onSel
     setSaving(true)
     setError(null)
     try {
-      await onConfigured(label, apiKey, model, effectivePersistence)
+      const result = await onConfigured(label, apiKey, model, effectivePersistence)
+      if (!result.ok) {
+        const messages = {
+          INVALID_CREDENTIAL: 'A OpenAI recusou a chave. Confirme se ela foi criada na plataforma de API, não no ChatGPT.',
+          INSUFFICIENT_QUOTA: 'A conta de API está sem créditos ou faturamento ativo. ChatGPT Plus não inclui créditos da API.',
+          MODEL_UNAVAILABLE: `A chave é válida, mas não possui acesso ao modelo “${model}”. Tente gpt-4.1-mini ou outro modelo disponível na conta.`,
+          ACCESS_RESTRICTED: 'A OpenAI bloqueou o acesso por permissão, política ou região. Verifique o projeto da chave e as restrições da conta.',
+          RATE_LIMITED: 'A OpenAI está limitando temporariamente as requisições. Aguarde um pouco e tente novamente.',
+          NETWORK_UNAVAILABLE: 'Não foi possível alcançar a OpenAI. Verifique internet, proxy, VPN ou firewall.',
+          SECURE_STORAGE_UNAVAILABLE: 'O cofre seguro não está disponível. Escolha “Somente nesta sessão”.',
+          INVALID_CONFIGURATION: 'A configuração enviada é inválida. Revise nome, chave, modelo e armazenamento.',
+          UNKNOWN: 'A OpenAI retornou uma resposta inesperada. Confira a conta e tente novamente.',
+        } as const
+        setError(messages[result.code])
+        return
+      }
       setApiKey('')
     } catch {
       setError('A conexão falhou. Verifique a chave, o modelo e o acesso de API da conta.')
@@ -292,7 +307,7 @@ export function App() {
       </section>
       <footer className="mx-auto mt-20 flex max-w-7xl justify-between border-t border-coach-line py-5 text-xs text-coach-muted"><span>Dados locais por padrão</span><span>{applicationInfo ? `${applicationInfo.name} ${applicationInfo.version} · API ${applicationInfo.apiVersion}` : 'Conectando…'}</span></footer>
       <CreateWorkspaceDialog open={dialogOpen} submitting={submitting} onClose={() => setDialogOpen(false)} onSubmit={createWorkspace} />
-      {providerDialogOpen && <ProviderSettingsDialog status={providerStatus} accounts={providerAccounts} onClose={() => setProviderDialogOpen(false)} onConfigured={async (label, apiKey, model, persistence) => { const status = await window.coach.provider.configureOpenAI({ label, apiKey, model, persistence }); setProviderStatus(status); setProviderAccounts(await window.coach.provider.listAccounts()) }} onSelect={async (accountId) => { setProviderStatus(await window.coach.provider.selectAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} onRemove={async (accountId) => { setProviderStatus(await window.coach.provider.removeAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} />}
+      {providerDialogOpen && <ProviderSettingsDialog status={providerStatus} accounts={providerAccounts} onClose={() => setProviderDialogOpen(false)} onConfigured={async (label, apiKey, model, persistence) => { const result = await window.coach.provider.configureOpenAI({ label, apiKey, model, persistence }); if (result.ok) { setProviderStatus(result.status); setProviderAccounts(await window.coach.provider.listAccounts()) } return result }} onSelect={async (accountId) => { setProviderStatus(await window.coach.provider.selectAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} onRemove={async (accountId) => { setProviderStatus(await window.coach.provider.removeAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} />}
     </main>
   )
 }

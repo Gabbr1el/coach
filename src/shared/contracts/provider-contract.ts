@@ -34,7 +34,13 @@ export interface ProviderAccountSummary {
 export interface ProviderApi {
   getStatus(): Promise<ProviderStatus>
   listAccounts(): Promise<ProviderAccountSummary[]>
-  configureOpenAI(input: ConfigureOpenAIInput): Promise<ProviderStatus>
+  configureOpenAI(input: ConfigureOpenAIInput): Promise<ConfigureProviderResult>
   selectAccount(accountId: string): Promise<ProviderStatus>
   removeAccount(accountId: string): Promise<ProviderStatus>
 }
+
+export type ProviderConnectionErrorCode = 'INVALID_CREDENTIAL' | 'INSUFFICIENT_QUOTA' | 'MODEL_UNAVAILABLE' | 'ACCESS_RESTRICTED' | 'RATE_LIMITED' | 'NETWORK_UNAVAILABLE' | 'SECURE_STORAGE_UNAVAILABLE' | 'INVALID_CONFIGURATION' | 'UNKNOWN'
+
+export type ConfigureProviderResult =
+  | { readonly ok: true; readonly status: ProviderStatus }
+  | { readonly ok: false; readonly code: ProviderConnectionErrorCode }

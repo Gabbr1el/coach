@@ -2,6 +2,13 @@ import type { AIProvider, AIProviderCapabilities, AIRequest, AIResponse } from '
 
 type Fetcher = typeof fetch
 
+export class OpenAIProviderError extends Error {
+  constructor(readonly code: 'INVALID_CREDENTIAL' | 'INSUFFICIENT_QUOTA' | 'MODEL_UNAVAILABLE' | 'ACCESS_RESTRICTED' | 'RATE_LIMITED' | 'NETWORK_UNAVAILABLE' | 'UNKNOWN') {
+    super(code)
+    this.name = 'OpenAIProviderError'
+  }
+}
+
 interface OpenAIResponseBody {
   readonly model?: string
   readonly output_text?: string
@@ -30,7 +37,32 @@ export class OpenAIProvider implements AIProvider {
   }
 
   async testConnection(): Promise<void> {
-    await this.request({ messages: [{ role: 'user', content: 'Reply only with OK.' }], maxOutputTokens: 8 })
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 20_000)
+    let response: Response
+    let body: { error?: { code?: string; param?: string } } | null = null
+    try {
+      response = await this.fetcher('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: this.defaultModel, input: 'Reply only with OK.', max_output_tokens: 16, store: false }),
+        signal: controller.signal,
+      })
+      if (!response.ok) body = await response.json().catch(() => null) as { error?: { code?: string; param?: string } } | null
+    } catch {
+      throw new OpenAIProviderError('NETWORK_UNAVAILABLE')
+    } finally {
+      clearTimeout(timeout)
+    }
+    if (response.ok) return
+    if (response.status === 401) throw new OpenAIProviderError('INVALID_CREDENTIAL')
+    if (response.status === 403) throw new OpenAIProviderError('ACCESS_RESTRICTED')
+    if (response.status === 404 && (body?.error?.param === 'model' || body?.error?.code === 'model_not_found')) throw new OpenAIProviderError('MODEL_UNAVAILABLE')
+    if (response.status === 429) {
+      throw new OpenAIProviderError(body?.error?.code === 'insufficient_quota' ? 'INSUFFICIENT_QUOTA' : 'RATE_LIMITED')
+    }
+    if (response.status === 400 && (body?.error?.param === 'model' || body?.error?.code === 'model_not_found')) throw new OpenAIProviderError('MODEL_UNAVAILABLE')
+    throw new OpenAIProviderError('UNKNOWN')
   }
 
   sendMessage(request: AIRequest): Promise<AIResponse> {

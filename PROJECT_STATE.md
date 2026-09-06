@@ -59,6 +59,7 @@
 - Cancellation aborts the provider request and discards incomplete turns
 - OpenAI Responses API SSE normalized into provider-independent stream events
 - Session-only BYOK fallback when the operating-system vault is unavailable
+- OpenAI connection diagnostics distinguish credentials, quota, model access and network failures
 
 ## Pending
 
@@ -83,6 +84,7 @@
 - API keys are encrypted through Electron safeStorage in restricted local files; SQLite stores only a secret reference.
 - Linux `basic_text` safeStorage is rejected instead of silently storing weakly protected credentials.
 - Session-only keys are kept in Main process memory, never persisted, and forgotten when Coach closes.
+- Provider setup validates API credential and Responses API model compatibility with a minimal generated response; provider usage charges may apply.
 - OpenAI is the first provider; no SDK is exposed to renderer or application contracts.
 - Inactive provider keys remain only in the encrypted vault; adapters retain only the currently active key in memory.
 - Application identity is frozen as `br.coach.study`, product name `Coach`.

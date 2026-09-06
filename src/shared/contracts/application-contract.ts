@@ -18,4 +18,5 @@ export interface CoachDesktopApi {
   conversation: import('./conversation-contract').ConversationApi
   provider: import('./provider-contract').ProviderApi
   studyWorkspace: import('./study-workspace-contract').StudyWorkspaceApi
+  codeExecution: import('./code-execution-contract').CodeExecutionApi
 }

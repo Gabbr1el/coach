@@ -67,6 +67,7 @@ Execution roadmap: `ROADMAP.md`. The next vertical slice is durable project file
 - One-click defaults for a local OmniRoute endpoint
 - Workspace chat with isolated local history, workspace-specific context and streamed provider responses
 - Persistent study Workspace with guided plan, editor draft, notes, focus timer and AI context
+- Monaco learning editor and controlled Python execution with timeout, output limits and error signatures
 
 ## Pending
 

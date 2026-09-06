@@ -19,6 +19,7 @@ import { WorkspaceCoachService } from '../application/conversations/workspace-co
 import { StudyWorkspaceService } from '../application/study-workspaces/study-workspace-service'
 import { DrizzleStudyWorkspaceRepository } from './repositories/drizzle-study-workspace-repository'
 import { registerStudyWorkspaceHandlers } from './ipc/study-workspace-handlers'
+import { registerCodeExecutionHandlers } from './ipc/code-execution-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -61,6 +62,7 @@ void app.whenReady().then(async () => {
     registerWorkspaceHandlers(workspaceService)
     registerConversationHandlers(homePlannerService, workspaceCoachService)
     registerStudyWorkspaceHandlers(studyWorkspaceService)
+    registerCodeExecutionHandlers(async (id) => Boolean(await workspaceRepository.findById(id)))
     registerProviderHandlers(providerConfigurationService)
     createMainWindow()
   } catch (error) {

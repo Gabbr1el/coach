@@ -7,6 +7,7 @@ import { WORKSPACE_CHANNELS } from '../shared/contracts/workspace-channels'
 import { CONVERSATION_CHANNELS } from '../shared/contracts/conversation-channels'
 import { PROVIDER_CHANNELS } from '../shared/contracts/provider-channels'
 import { STUDY_WORKSPACE_CHANNELS } from '../shared/contracts/study-workspace-channels'
+import { CODE_EXECUTION_CHANNELS } from '../shared/contracts/code-execution-channels'
 
 const api: CoachDesktopApi = {
   application: {
@@ -89,6 +90,9 @@ const api: CoachDesktopApi = {
     togglePlanItem: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.togglePlanItem, input),
     updateTimer: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.updateTimer, input),
     flushDrafts: (input) => ipcRenderer.sendSync(STUDY_WORKSPACE_CHANNELS.flushDrafts, input) === true,
+  },
+  codeExecution: {
+    execute: (input) => ipcRenderer.invoke(CODE_EXECUTION_CHANNELS.execute, input),
   },
 }
 

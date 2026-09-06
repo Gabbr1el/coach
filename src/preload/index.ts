@@ -109,6 +109,8 @@ const api: CoachDesktopApi = {
     listPriorities: () => ipcRenderer.invoke(PLANNING_CHANNELS.listPriorities),
     createDeadline: (input) => ipcRenderer.invoke(PLANNING_CHANNELS.createDeadline, input),
     addRoutineNote: (content) => ipcRenderer.invoke(PLANNING_CHANNELS.addRoutineNote, { content }),
+    listRoutineNotes: () => ipcRenderer.invoke(PLANNING_CHANNELS.listRoutineNotes),
+    getSchedule: () => ipcRenderer.invoke(PLANNING_CHANNELS.getSchedule),
   },
   material: {
     importPdf: (workspaceId) => ipcRenderer.invoke(MATERIAL_CHANNELS.importPdf, { workspaceId }),

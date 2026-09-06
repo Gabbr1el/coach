@@ -1,1 +1,1 @@
-export const PLANNING_CHANNELS = { listPriorities: 'planning:list-priorities', createDeadline: 'planning:create-deadline', addRoutineNote: 'planning:add-routine-note' } as const
+export const PLANNING_CHANNELS = { listPriorities: 'planning:list-priorities', createDeadline: 'planning:create-deadline', addRoutineNote: 'planning:add-routine-note', listRoutineNotes: 'planning:list-routine-notes', getSchedule: 'planning:get-schedule' } as const

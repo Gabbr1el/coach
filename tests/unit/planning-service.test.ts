@@ -5,6 +5,8 @@ class Repository implements PlanningRepository {
   inputs: ReturnType<PlanningRepository['listPriorityInputs']> = []
   createDeadline() {}
   addRoutineNote() {}
+  listRoutineNotes() { return [] }
+  getWorkspaceName(workspaceId: string) { return workspaceId }
   listPriorityInputs() { return this.inputs }
 }
 

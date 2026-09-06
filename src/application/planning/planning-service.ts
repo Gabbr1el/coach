@@ -1,15 +1,19 @@
-import type { WorkspacePriority } from '../../shared/contracts/planning-contract'
+import type { StudyScheduleItem, WorkspacePriority } from '../../shared/contracts/planning-contract'
 
 export interface PlanningRepository {
   createDeadline(input: { id: string; workspaceId: string; title: string; dueAt: number; estimatedMinutes: number; masteryPercent: number; createdAt: number }): void
   addRoutineNote(input: { id: string; content: string; createdAt: number }): void
   listPriorityInputs(): Array<{ workspaceId: string; title: string; dueAt: number; estimatedMinutes: number; masteryPercent: number; recentFocusSeconds: number }>
+  listRoutineNotes(): string[]
+  getWorkspaceName(workspaceId: string): string
 }
 
 export class PlanningService {
   constructor(private readonly repository: PlanningRepository, private readonly now = Date.now) {}
   createDeadline(input: { workspaceId: string; title: string; dueAt: number; estimatedMinutes: number; masteryPercent: number }): void { this.repository.createDeadline({ ...input, id: crypto.randomUUID(), createdAt: this.now() }) }
   addRoutineNote(content: string): void { this.repository.addRoutineNote({ id: crypto.randomUUID(), content, createdAt: this.now() }) }
+  listRoutineNotes(): string[] { return this.repository.listRoutineNotes() }
+  getSchedule(): StudyScheduleItem[] { return this.listPriorities().slice(0, 3).map((priority) => ({ workspaceId: priority.workspaceId, workspaceName: this.repository.getWorkspaceName(priority.workspaceId), title: priority.nextDeadline ?? 'Revisão', suggestedMinutes: priority.level === 'urgent' ? 50 : priority.level === 'attention' ? 35 : 25, reason: priority.reason })) }
   listPriorities(): WorkspacePriority[] {
     const now = this.now()
     const priorities = new Map<string, WorkspacePriority>()

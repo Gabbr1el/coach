@@ -120,7 +120,10 @@ const api: CoachDesktopApi = {
     listSavedForLater: (workspaceId) => ipcRenderer.invoke(SESSION_NAVIGATION_CHANNELS.listSavedForLater, { workspaceId }),
     listOutline: (workspaceId) => ipcRenderer.invoke(SESSION_NAVIGATION_CHANNELS.listOutline, { workspaceId }),
   },
-  backup: { exportBackup: () => ipcRenderer.invoke(BACKUP_CHANNELS.exportBackup) },
+  backup: {
+    exportBackup: () => ipcRenderer.invoke(BACKUP_CHANNELS.exportBackup),
+    restoreBackup: () => ipcRenderer.invoke(BACKUP_CHANNELS.restoreBackup),
+  },
 }
 
 contextBridge.exposeInMainWorld('coach', Object.freeze(api))

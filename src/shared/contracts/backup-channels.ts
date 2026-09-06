@@ -1,1 +1,1 @@
-export const BACKUP_CHANNELS = { exportBackup: 'backup:export' } as const
+export const BACKUP_CHANNELS = { exportBackup: 'backup:export', restoreBackup: 'backup:restore' } as const

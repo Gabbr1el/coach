@@ -1,4 +1,5 @@
 import { app, BrowserWindow } from 'electron'
+import { join } from 'node:path'
 import { registerApplicationHandlers } from './ipc/application-handlers'
 import { createMainWindow } from './windows/create-main-window'
 import { openCoachDatabase, type CoachDatabase } from './database/connection'
@@ -30,6 +31,7 @@ import { PdfMaterialService } from './materials/pdf-material-service'
 import { registerMaterialHandlers } from './ipc/material-handlers'
 import { registerSessionNavigationHandlers } from './ipc/session-navigation-handlers'
 import { registerBackupHandlers } from './ipc/backup-handlers'
+import { finishPendingRestore, recoverPendingRestore, rollbackPendingRestore, validateCoachDatabaseSchema } from './database/restore-recovery'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -46,7 +48,19 @@ if (process.env['COACH_DISABLE_HARDWARE_ACCELERATION']) {
 
 void app.whenReady().then(async () => {
   try {
-    database = openCoachDatabase()
+    const databasePath = join(app.getPath('userData'), 'coach.sqlite')
+    recoverPendingRestore(databasePath)
+    try {
+      database = openCoachDatabase()
+      validateCoachDatabaseSchema(database.sqlite)
+    } catch (error) {
+      database?.close()
+      database = null
+      rollbackPendingRestore(databasePath)
+      database = openCoachDatabase()
+      validateCoachDatabaseSchema(database.sqlite)
+    }
+    finishPendingRestore(databasePath)
     const workspaceRepository = new DrizzleWorkspaceRepository(database)
     const workspaceService = new WorkspaceService({ repository: workspaceRepository })
     const providerManager = new AIProviderManager()

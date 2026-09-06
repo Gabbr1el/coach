@@ -8,6 +8,7 @@ import type { StudySessionSummary, StudyWorkspaceState } from '../../shared/cont
 import type { CodeExecutionResult } from '../../shared/contracts/code-execution-contract'
 import { ProjectWorkspace } from './ProjectWorkspace'
 import { RoadmapPanel } from './RoadmapPanel'
+import type { PlannerAction } from '../../shared/contracts/planner-action-contract'
 import type { ObserverState } from '../../shared/contracts/observer-contract'
 import type { StudyScheduleItem, WorkspacePriority } from '../../shared/contracts/planning-contract'
 import type { MaterialSearchResult, MaterialSummary } from '../../shared/contracts/material-contract'
@@ -229,6 +230,7 @@ export function App() {
   const [outline, setOutline] = useState<SessionOutlineItem[]>([])
   const [savedForLater, setSavedForLater] = useState<SavedForLaterItem[]>([])
   const [laterInput, setLaterInput] = useState('')
+  const [plannerActions, setPlannerActions] = useState<PlannerAction[]>([])
   const studyStateRef = useRef<StudyWorkspaceState | null>(null)
   const editorContentRef = useRef('')
   const studyNotesRef = useRef('')
@@ -253,6 +255,7 @@ export function App() {
     void window.coach.planning.listPriorities().then(setPriorities)
     void window.coach.provider.getStatus().then(setProviderStatus).catch(() => setError('Não foi possível consultar a configuração de IA.'))
     void window.coach.provider.listAccounts().then(setProviderAccounts).catch(() => setError('Não foi possível listar as contas de IA.'))
+    void window.coach.plannerAction.listPending().then(setPlannerActions)
   }, [loadWorkspaces])
 
   useEffect(() => () => {
@@ -368,6 +371,7 @@ export function App() {
     if (!content || plannerSending || plannerLoading) return
     setPlannerSending(true)
     setPlannerInput('')
+    void window.coach.plannerAction.proposeFromText(content).then((actions) => setPlannerActions((current) => [...actions, ...current.filter((item) => !actions.some((action) => action.id === item.id))]))
     setStreamedContent('')
     try {
       const requestId = crypto.randomUUID()
@@ -532,6 +536,7 @@ export function App() {
               {plannerLoading && <div className="text-sm text-white/45">Carregando conversa…</div>}
               {!plannerLoading && messages.length === 0 && <div className="rounded-2xl bg-white/7 p-4 text-sm leading-6 text-white/65">Conte sobre provas, horários, trabalhos ou dificuldades. Esta conversa pertence à Home e fica salva localmente.</div>}
               {messages.map((message) => <div key={message.id} className={`max-w-[90%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'ml-auto bg-coach-green text-white' : 'bg-white/8 text-white/75'}`}>{message.content}</div>)}
+              {plannerActions.map((action) => <div key={action.id} className="rounded-2xl border border-coach-yellow/40 bg-coach-yellow/10 p-4 text-sm"><strong className="block text-coach-yellow">Ação sugerida</strong><p className="mt-1 text-white/70">{action.type === 'workspace.create' ? `Criar Workspace “${String((action.payload as { name: string }).name)}”` : action.type === 'routine.add' ? 'Registrar esta rotina' : 'Adicionar prazo ao planejamento'}</p><div className="mt-3 flex gap-2"><button onClick={() => { void window.coach.plannerAction.resolve({ actionId: action.id, decision: 'apply' }).then(async () => { setPlannerActions((current) => current.filter((item) => item.id !== action.id)); await loadWorkspaces() }) }} className="rounded-lg bg-coach-yellow px-3 py-2 text-xs font-black text-coach-ink">Aplicar</button><button onClick={() => { void window.coach.plannerAction.resolve({ actionId: action.id, decision: 'reject' }).then(() => setPlannerActions((current) => current.filter((item) => item.id !== action.id))) }} className="rounded-lg border border-white/15 px-3 py-2 text-xs font-black">Descartar</button></div></div>)}
               {plannerSending && streamedContent && <div className="max-w-[90%] rounded-2xl bg-white/8 px-4 py-3 text-sm leading-6 text-white/75">{streamedContent}<span className="ml-1 inline-block h-4 w-1 animate-pulse bg-coach-yellow" /></div>}
             </div>
             <form className="border-t border-white/10 p-4" onSubmit={(event) => { event.preventDefault(); void sendPlannerMessage() }}>

@@ -40,6 +40,9 @@ import { registerProjectHandlers } from './ipc/project-handlers'
 import { RoadmapService } from '../application/roadmaps/roadmap-service'
 import { DrizzleRoadmapRepository } from './repositories/drizzle-roadmap-repository'
 import { registerRoadmapHandlers } from './ipc/roadmap-handlers'
+import { PlannerActionService } from '../application/planning/planner-action-service'
+import { DrizzlePlannerActionRepository } from './repositories/drizzle-planner-action-repository'
+import { registerPlannerActionHandlers } from './ipc/planner-action-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -96,12 +99,14 @@ void app.whenReady().then(async () => {
     const projectRepository = new DrizzleProjectRepository(database)
     registerCodeExecutionHandlers(async (id) => Boolean(await workspaceRepository.findById(id)), observerService, projectRepository, database)
     registerObserverHandlers(observerService)
-    registerPlanningHandlers(new PlanningService(new DrizzlePlanningRepository(database)))
+    const planningService = new PlanningService(new DrizzlePlanningRepository(database))
+    registerPlanningHandlers(planningService)
     registerMaterialHandlers(new PdfMaterialService(database), async (id) => Boolean(await workspaceRepository.findById(id)))
     registerSessionNavigationHandlers(database)
     registerBackupHandlers(database)
     registerProjectHandlers(new ProjectService(projectRepository, async (id) => Boolean(await workspaceRepository.findById(id))))
     registerRoadmapHandlers(new RoadmapService(new DrizzleRoadmapRepository(database), providerManager, (id) => workspaceRepository.findById(id)))
+    registerPlannerActionHandlers(new PlannerActionService({ repository: new DrizzlePlannerActionRepository(database), createWorkspace: (input) => workspaceService.create(input), createProject: (workspaceId, name, language) => new ProjectService(projectRepository, async (id) => Boolean(await workspaceRepository.findById(id))).create(workspaceId, name, language), createDeadline: (input) => planningService.createDeadline(input), addRoutine: (content) => planningService.addRoutineNote(content) }))
     registerProviderHandlers(providerConfigurationService)
     finishPendingRestore(databasePath)
     createMainWindow()

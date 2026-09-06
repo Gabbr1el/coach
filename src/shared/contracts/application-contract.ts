@@ -26,4 +26,5 @@ export interface CoachDesktopApi {
   backup: import('./backup-contract').BackupApi
   project: import('./project-contract').ProjectApi
   roadmap: import('./roadmap-contract').RoadmapApi
+  plannerAction: import('./planner-action-contract').PlannerActionApi
 }

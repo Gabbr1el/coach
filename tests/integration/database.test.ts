@@ -45,7 +45,7 @@ describe('Coach database migrations', () => {
       { name: 'workspace_study_states' },
       { name: 'workspaces' },
     ])
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 9 })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 10 })
     database.close()
   })
 
@@ -145,7 +145,7 @@ describe('Coach database migrations', () => {
     const workspaces = new DrizzleWorkspaceRepository(database)
     const repository = new DrizzleStudyWorkspaceRepository(database)
     const workspace = await workspaces.create({ id: '00000000-0000-4000-8000-000000000311', name: 'Algoritmos', objective: 'Listas', createdAt: 1, updatedAt: 1 })
-    const state = { workspaceId: workspace.id, sessionId: '00000000-0000-4000-8000-000000000312', sessionStartedAt: 2, fileName: 'main.py', language: 'python', editorContent: 'print(1)', notes: 'Nota', shareContextWithAi: true, timerDurationSeconds: 1500, timerRemainingSeconds: 1400, timerStatus: 'paused' as const, timerStartedAt: null, plan: [{ id: '00000000-0000-4000-8000-000000000313', title: 'Praticar', durationMinutes: 20, position: 1, status: 'active' as const }], updatedAt: 3, documentRevision: 1, notesRevision: 1 }
+    const state = { workspaceId: workspace.id, sessionId: '00000000-0000-4000-8000-000000000312', sessionStartedAt: 2, fileName: 'main.py', language: 'python', editorContent: 'print(1)', notes: 'Nota', shareContextWithAi: true, timerDurationSeconds: 1500, timerRemainingSeconds: 1400, timerStatus: 'paused' as const, timerStartedAt: null, plan: [{ id: '00000000-0000-4000-8000-000000000313', title: 'Praticar', durationMinutes: 20, position: 1, status: 'active' as const }], updatedAt: 3, documentRevision: 1, notesRevision: 1, accumulatedFocusSeconds: 0 }
     await repository.createState(state)
     database.close()
 

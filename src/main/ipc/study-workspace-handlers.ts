@@ -43,4 +43,6 @@ export function registerStudyWorkspaceHandlers(service: StudyWorkspaceService): 
       event.returnValue = false
     }
   })
+  ipcMain.handle(STUDY_WORKSPACE_CHANNELS.completeSession, (event, payload: unknown) => { assertTrustedSender(event); return service.completeSession(studyWorkspaceIdInputSchema.parse(payload).workspaceId) })
+  ipcMain.handle(STUDY_WORKSPACE_CHANNELS.listSessionHistory, (event, payload: unknown) => { assertTrustedSender(event); return service.listSessionHistory(studyWorkspaceIdInputSchema.parse(payload).workspaceId) })
 }

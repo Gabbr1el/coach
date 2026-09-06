@@ -1,4 +1,4 @@
-import type { StudyPlanItem, StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
+import type { StudyPlanItem, StudySessionSummary, StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
 
 export interface StudyWorkspaceRepository {
   findState(workspaceId: string, now: number): Promise<StudyWorkspaceState | null>
@@ -7,6 +7,8 @@ export interface StudyWorkspaceRepository {
   saveNotes(workspaceId: string, notes: string, revision: number, now: number): Promise<void>
   updateContextSharing(workspaceId: string, enabled: boolean, now: number): Promise<void>
   replacePlanStatuses(workspaceId: string, sessionId: string, statuses: ReadonlyArray<{ id: string; status: StudyPlanItem['status'] }>, now: number): Promise<void>
-  updateTimer(workspaceId: string, timer: Pick<StudyWorkspaceState, 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt'>, now: number): Promise<void>
+  updateTimer(workspaceId: string, sessionId: string, timer: Pick<StudyWorkspaceState, 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'accumulatedFocusSeconds'>, now: number): Promise<void>
   flushDrafts(input: { workspaceId: string; fileName: string; language: string; content: string; notes: string; documentRevision: number; notesRevision: number; now: number }): void
+  completeAndCreateSession(workspaceId: string, currentSessionId: string, nextSessionId: string, plan: StudyPlanItem[], focusSeconds: number, timerDurationSeconds: number, now: number): void
+  listSessionHistory(workspaceId: string, limit: number): StudySessionSummary[]
 }

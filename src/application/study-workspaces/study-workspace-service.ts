@@ -1,5 +1,6 @@
 import type { Workspace } from '../../shared/contracts/workspace-contract'
 import type { StudyPlanItem, StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
+import type { StudySessionSummary } from '../../shared/contracts/study-workspace-contract'
 import type { StudyWorkspaceRepository } from './study-workspace-repository'
 
 export interface StudyWorkspaceServiceDependencies {
@@ -72,6 +73,7 @@ export class StudyWorkspaceService {
       updatedAt: now,
       documentRevision: 0,
       notesRevision: 0,
+      accumulatedFocusSeconds: 0,
     }
     try {
       return await this.dependencies.repository.createState(initialState)
@@ -127,14 +129,28 @@ export class StudyWorkspaceService {
     const now = this.now()
     const remaining = this.effectiveRemaining(state, now)
     const timer = action === 'reset'
-      ? { timerStatus: 'idle' as const, timerRemainingSeconds: state.timerDurationSeconds, timerStartedAt: null }
+      ? { timerStatus: 'idle' as const, timerRemainingSeconds: state.timerDurationSeconds, timerStartedAt: null, accumulatedFocusSeconds: state.accumulatedFocusSeconds + (state.timerDurationSeconds - remaining) }
       : action === 'pause'
-        ? { timerStatus: 'paused' as const, timerRemainingSeconds: remaining, timerStartedAt: null }
+        ? { timerStatus: 'paused' as const, timerRemainingSeconds: remaining, timerStartedAt: null, accumulatedFocusSeconds: state.accumulatedFocusSeconds }
         : remaining === 0
-          ? { timerStatus: 'idle' as const, timerRemainingSeconds: 0, timerStartedAt: null }
-          : { timerStatus: 'running' as const, timerRemainingSeconds: remaining, timerStartedAt: now }
-    await this.dependencies.repository.updateTimer(workspaceId, timer, now)
+          ? { timerStatus: 'idle' as const, timerRemainingSeconds: 0, timerStartedAt: null, accumulatedFocusSeconds: state.accumulatedFocusSeconds }
+          : { timerStatus: 'running' as const, timerRemainingSeconds: remaining, timerStartedAt: now, accumulatedFocusSeconds: state.accumulatedFocusSeconds }
+    await this.dependencies.repository.updateTimer(workspaceId, state.sessionId, timer, now)
     return this.getState(workspaceId)
+  }
+
+  async completeSession(workspaceId: string): Promise<StudyWorkspaceState> {
+    const state = await this.getState(workspaceId)
+    const workspace = await this.requireWorkspace(workspaceId)
+    const now = this.now()
+    const focusSeconds = state.accumulatedFocusSeconds + state.timerDurationSeconds - this.effectiveRemaining(state, now)
+    this.dependencies.repository.completeAndCreateSession(workspaceId, state.sessionId, this.createId(), createDefaultPlan(workspace, this.createId), focusSeconds, state.timerDurationSeconds, now)
+    return this.getState(workspaceId)
+  }
+
+  async listSessionHistory(workspaceId: string): Promise<StudySessionSummary[]> {
+    await this.requireWorkspace(workspaceId)
+    return this.dependencies.repository.listSessionHistory(workspaceId, 100)
   }
 
   flushDrafts(input: { workspaceId: string; fileName: string; language: string; content: string; notes: string; documentRevision: number; notesRevision: number }): void {

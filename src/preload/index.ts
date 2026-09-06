@@ -91,6 +91,8 @@ const api: CoachDesktopApi = {
     togglePlanItem: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.togglePlanItem, input),
     updateTimer: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.updateTimer, input),
     flushDrafts: (input) => ipcRenderer.sendSync(STUDY_WORKSPACE_CHANNELS.flushDrafts, input) === true,
+    completeSession: (workspaceId) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.completeSession, { workspaceId }),
+    listSessionHistory: (workspaceId) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.listSessionHistory, { workspaceId }),
   },
   codeExecution: {
     execute: (input) => ipcRenderer.invoke(CODE_EXECUTION_CHANNELS.execute, input),

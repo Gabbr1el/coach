@@ -11,8 +11,10 @@ class MemoryStudyWorkspaceRepository implements StudyWorkspaceRepository {
   async saveNotes(_workspaceId: string, notes: string, revision: number, now: number): Promise<void> { this.state = { ...this.state!, notes, notesRevision: revision, updatedAt: now } }
   async updateContextSharing(_workspaceId: string, enabled: boolean, now: number): Promise<void> { this.state = { ...this.state!, shareContextWithAi: enabled, updatedAt: now } }
   async replacePlanStatuses(_workspaceId: string, _sessionId: string, statuses: ReadonlyArray<{ id: string; status: StudyPlanItem['status'] }>, now: number): Promise<void> { this.state = { ...this.state!, plan: this.state!.plan.map((item) => ({ ...item, status: statuses.find((status) => status.id === item.id)?.status ?? item.status })), updatedAt: now } }
-  async updateTimer(_workspaceId: string, timer: Pick<StudyWorkspaceState, 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt'>, now: number): Promise<void> { this.state = { ...this.state!, ...timer, updatedAt: now } }
+  async updateTimer(_workspaceId: string, _sessionId: string, timer: Pick<StudyWorkspaceState, 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'accumulatedFocusSeconds'>, now: number): Promise<void> { this.state = { ...this.state!, ...timer, updatedAt: now } }
   flushDrafts(): void {}
+  completeAndCreateSession(_workspaceId: string, _currentSessionId: string, nextSessionId: string, plan: StudyPlanItem[], _focusSeconds: number, timerDurationSeconds: number, now: number): void { this.state = { ...this.state!, sessionId: nextSessionId, sessionStartedAt: now, plan, timerStatus: 'idle', timerStartedAt: null, timerRemainingSeconds: timerDurationSeconds, accumulatedFocusSeconds: 0 } }
+  listSessionHistory(_workspaceId: string, _limit: number) { return [] }
 }
 
 const workspace = { id: '00000000-0000-4000-8000-000000000321', name: 'Algoritmos', objective: 'Aprender listas', status: 'active' as const, createdAt: 1, updatedAt: 1, lastOpenedAt: null, archivedAt: null }

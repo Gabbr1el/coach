@@ -6,4 +6,6 @@ export const STUDY_WORKSPACE_CHANNELS = {
   togglePlanItem: 'study-workspace:toggle-plan-item',
   updateTimer: 'study-workspace:update-timer',
   flushDrafts: 'study-workspace:flush-drafts',
+  completeSession: 'study-workspace:complete-session',
+  listSessionHistory: 'study-workspace:list-session-history',
 } as const

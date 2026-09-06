@@ -32,6 +32,7 @@ export const workspaceStudyStates = sqliteTable('workspace_study_states', {
   updatedAt: integer('updated_at').notNull(),
   documentRevision: integer('document_revision').notNull().default(0),
   notesRevision: integer('notes_revision').notNull().default(0),
+  accumulatedFocusSeconds: integer('accumulated_focus_seconds').notNull().default(0),
 }, (table) => [
   check('workspace_study_states_filename_check', sql`length(trim(${table.fileName})) between 1 and 120`),
   check('workspace_study_states_timer_check', sql`${table.timerDurationSeconds} between 60 and 10800 and ${table.timerRemainingSeconds} between 0 and ${table.timerDurationSeconds}`),
@@ -39,6 +40,7 @@ export const workspaceStudyStates = sqliteTable('workspace_study_states', {
   check('workspace_study_states_timer_started_check', sql`(${table.timerStatus} = 'running' and ${table.timerStartedAt} is not null) or (${table.timerStatus} != 'running' and ${table.timerStartedAt} is null)`),
   check('workspace_study_states_context_check', sql`${table.shareContextWithAi} in (0, 1)`),
   check('workspace_study_states_revision_check', sql`${table.documentRevision} >= 0 and ${table.notesRevision} >= 0`),
+  check('workspace_study_states_focus_check', sql`${table.accumulatedFocusSeconds} >= 0`),
 ])
 
 export const studyPlanItems = sqliteTable('study_plan_items', {

@@ -18,6 +18,17 @@ export class DrizzleConversationRepository implements ConversationRepository {
     }).onConflictDoNothing().run()
   }
 
+  async ensureWorkspaceThread(threadId: string, workspaceId: string, title: string, now: number): Promise<void> {
+    this.database.orm.insert(conversationThreads).values({
+      id: threadId,
+      scope: 'workspace',
+      workspaceId,
+      title,
+      createdAt: now,
+      updatedAt: now,
+    }).onConflictDoNothing().run()
+  }
+
   async listMessages(threadId: string, limit: number): Promise<ConversationMessage[]> {
     const rows = this.database.orm
       .select({

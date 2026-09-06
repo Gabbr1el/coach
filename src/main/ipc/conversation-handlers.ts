@@ -1,11 +1,12 @@
 import { ipcMain } from 'electron'
 import type { HomePlannerService } from '../../application/conversations/home-planner-service'
-import { cancelHomeStreamInputSchema, sendHomeMessageInputSchema, streamHomeMessageInputSchema, type HomeStreamEvent } from '../../shared/contracts/conversation-contract'
+import type { WorkspaceCoachService } from '../../application/conversations/workspace-coach-service'
+import { cancelHomeStreamInputSchema, cancelWorkspaceStreamInputSchema, sendHomeMessageInputSchema, streamHomeMessageInputSchema, streamWorkspaceMessageInputSchema, workspaceConversationInputSchema, type HomeStreamEvent } from '../../shared/contracts/conversation-contract'
 import { CONVERSATION_CHANNELS } from '../../shared/contracts/conversation-channels'
 import { assertTrustedSender } from './trusted-sender'
 
-export function registerConversationHandlers(service: HomePlannerService): void {
-  const activeStreams = new Map<string, { controller: AbortController; senderId: number }>()
+export function registerConversationHandlers(service: HomePlannerService, workspaceService: WorkspaceCoachService): void {
+  const activeStreams = new Map<string, { controller: AbortController; senderId: number; threadKey: string }>()
   let homeStreamActive = false
   ipcMain.handle(CONVERSATION_CHANNELS.listHomeMessages, (event) => {
     assertTrustedSender(event)
@@ -21,12 +22,12 @@ export function registerConversationHandlers(service: HomePlannerService): void 
     assertTrustedSender(event)
     const input = streamHomeMessageInputSchema.parse(payload)
     if (activeStreams.has(input.requestId)) throw new Error('Duplicate stream request')
-    if (homeStreamActive) {
+    if (homeStreamActive || [...activeStreams.values()].some((stream) => stream.senderId === event.sender.id)) {
       event.sender.send(CONVERSATION_CHANNELS.homeStreamEvent, { requestId: input.requestId, type: 'error', code: 'THREAD_BUSY' } satisfies HomeStreamEvent)
       return
     }
     const controller = new AbortController()
-    activeStreams.set(input.requestId, { controller, senderId: event.sender.id })
+    activeStreams.set(input.requestId, { controller, senderId: event.sender.id, threadKey: 'home' })
     homeStreamActive = true
     const destroyed = () => controller.abort()
     event.sender.once('destroyed', destroyed)
@@ -53,6 +54,50 @@ export function registerConversationHandlers(service: HomePlannerService): void 
   ipcMain.handle(CONVERSATION_CHANNELS.cancelHomeStream, (event, payload: unknown) => {
     assertTrustedSender(event)
     const input = cancelHomeStreamInputSchema.parse(payload)
+    const stream = activeStreams.get(input.requestId)
+    if (stream?.senderId === event.sender.id) stream.controller.abort()
+  })
+
+  ipcMain.handle(CONVERSATION_CHANNELS.listWorkspaceMessages, (event, payload: unknown) => {
+    assertTrustedSender(event)
+    return workspaceService.listMessages(workspaceConversationInputSchema.parse(payload).workspaceId)
+  })
+
+  ipcMain.handle(CONVERSATION_CHANNELS.streamWorkspaceMessage, async (event, payload: unknown) => {
+    assertTrustedSender(event)
+    const input = streamWorkspaceMessageInputSchema.parse(payload)
+    if (activeStreams.has(input.requestId)) throw new Error('Duplicate stream request')
+    if ([...activeStreams.values()].some((stream) => stream.senderId === event.sender.id)) {
+      event.sender.send(CONVERSATION_CHANNELS.workspaceStreamEvent, { requestId: input.requestId, type: 'error', code: 'THREAD_BUSY' } satisfies HomeStreamEvent)
+      return
+    }
+    const streamKey = `workspace:${input.workspaceId}`
+    if ([...activeStreams.values()].some((stream) => stream.threadKey === streamKey)) {
+      event.sender.send(CONVERSATION_CHANNELS.workspaceStreamEvent, { requestId: input.requestId, type: 'error', code: 'THREAD_BUSY' } satisfies HomeStreamEvent)
+      return
+    }
+    const controller = new AbortController()
+    activeStreams.set(input.requestId, { controller, senderId: event.sender.id, threadKey: streamKey })
+    const destroyed = () => controller.abort()
+    event.sender.once('destroyed', destroyed)
+    const send = (streamEvent: HomeStreamEvent) => {
+      if (!event.sender.isDestroyed()) event.sender.send(CONVERSATION_CHANNELS.workspaceStreamEvent, streamEvent)
+    }
+    send({ requestId: input.requestId, type: 'started' })
+    try {
+      for await (const content of workspaceService.streamMessage(input.workspaceId, input, controller.signal)) send({ requestId: input.requestId, type: 'text-delta', content })
+      send({ requestId: input.requestId, type: 'completed', messages: await workspaceService.listMessages(input.workspaceId) })
+    } catch {
+      send(controller.signal.aborted ? { requestId: input.requestId, type: 'cancelled' } : { requestId: input.requestId, type: 'error', code: 'PROVIDER_UNAVAILABLE' })
+    } finally {
+      activeStreams.delete(input.requestId)
+      event.sender.removeListener('destroyed', destroyed)
+    }
+  })
+
+  ipcMain.handle(CONVERSATION_CHANNELS.cancelWorkspaceStream, (event, payload: unknown) => {
+    assertTrustedSender(event)
+    const input = cancelWorkspaceStreamInputSchema.parse(payload)
     const stream = activeStreams.get(input.requestId)
     if (stream?.senderId === event.sender.id) stream.controller.abort()
   })

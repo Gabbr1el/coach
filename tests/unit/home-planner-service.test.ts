@@ -8,6 +8,7 @@ class MemoryConversationRepository implements ConversationRepository {
   readonly messages: ConversationMessage[] = []
 
   async ensureHomeThread(): Promise<void> {}
+  async ensureWorkspaceThread(): Promise<void> {}
   async listMessages(): Promise<ConversationMessage[]> { return this.messages }
   async addTurn({ user, assistant }: { threadId: string; user: Omit<CreateConversationMessageRecord, 'sequence'>; assistant: Omit<CreateConversationMessageRecord, 'sequence'> }): Promise<ConversationMessage[]> {
     const sequence = this.messages.length + 1

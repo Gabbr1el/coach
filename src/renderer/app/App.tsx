@@ -168,6 +168,16 @@ export function App() {
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null)
   const [providerDialogOpen, setProviderDialogOpen] = useState(false)
   const [providerAccounts, setProviderAccounts] = useState<ProviderAccountSummary[]>([])
+  const [workspaceMessages, setWorkspaceMessages] = useState<ConversationMessage[]>([])
+  const [workspaceInput, setWorkspaceInput] = useState('')
+  const [workspaceLoading, setWorkspaceLoading] = useState(false)
+  const [workspaceSending, setWorkspaceSending] = useState(false)
+  const [workspaceStreamedContent, setWorkspaceStreamedContent] = useState('')
+  const [workspaceError, setWorkspaceError] = useState<string | null>(null)
+  const workspaceStreamHandle = useRef<{ cancel(): void; dispose(): void } | null>(null)
+  const workspaceLoadEpoch = useRef(0)
+  const workspaceDrafts = useRef(new Map<string, string>())
+  const workspaceMessageEnd = useRef<HTMLDivElement | null>(null)
 
   const loadWorkspaces = useCallback(async () => {
     try {
@@ -191,7 +201,32 @@ export function App() {
   useEffect(() => () => {
     streamHandle.current?.cancel()
     streamHandle.current?.dispose()
+    workspaceStreamHandle.current?.cancel()
+    workspaceStreamHandle.current?.dispose()
   }, [])
+
+  useEffect(() => {
+    const epoch = ++workspaceLoadEpoch.current
+    workspaceStreamHandle.current?.cancel()
+    workspaceStreamHandle.current?.dispose()
+    workspaceStreamHandle.current = null
+    setWorkspaceSending(false)
+    setWorkspaceInput(selected ? workspaceDrafts.current.get(selected.id) ?? '' : '')
+    setWorkspaceMessages([])
+    setWorkspaceStreamedContent('')
+    setWorkspaceError(null)
+    if (!selected) return
+    setWorkspaceLoading(true)
+    void window.coach.conversation.listWorkspaceMessages(selected.id)
+      .then((loaded) => { if (workspaceLoadEpoch.current === epoch) setWorkspaceMessages(loaded) })
+      .catch(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceError('Não foi possível carregar a conversa deste Workspace.') })
+      .finally(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceLoading(false) })
+    return () => { workspaceLoadEpoch.current += 1 }
+  }, [selected?.id])
+
+  useEffect(() => {
+    workspaceMessageEnd.current?.scrollIntoView({ block: 'end' })
+  }, [workspaceMessages, workspaceStreamedContent])
 
   async function sendPlannerMessage() {
     const content = plannerInput.trim()
@@ -266,15 +301,58 @@ export function App() {
     }
   }
 
+  function sendWorkspaceMessage() {
+    const content = workspaceInput.trim()
+    if (!selected || !content || workspaceSending || workspaceLoading) return
+    if (!providerStatus?.configured) {
+      setWorkspaceError('Conecte um provedor de IA na Home antes de conversar neste Workspace.')
+      return
+    }
+    setWorkspaceSending(true)
+    workspaceDrafts.current.set(selected.id, content)
+    setWorkspaceInput('')
+    setWorkspaceStreamedContent('')
+    setWorkspaceError(null)
+    const requestId = crypto.randomUUID()
+    const workspaceId = selected.id
+    const epoch = workspaceLoadEpoch.current
+    const isCurrentRequest = () => workspaceLoadEpoch.current === epoch
+    workspaceStreamHandle.current = window.coach.conversation.streamWorkspaceMessage({ requestId, workspaceId, content }, (event) => {
+      if (!isCurrentRequest()) return
+      if (event.type === 'text-delta') setWorkspaceStreamedContent((current) => current + event.content)
+      if (event.type === 'completed') {
+        setWorkspaceMessages(event.messages)
+        setWorkspaceStreamedContent('')
+        setWorkspaceSending(false)
+        workspaceDrafts.current.delete(workspaceId)
+        workspaceStreamHandle.current = null
+      }
+      if (event.type === 'cancelled') {
+        setWorkspaceStreamedContent('')
+        setWorkspaceSending(false)
+        workspaceDrafts.current.set(workspaceId, content)
+        setWorkspaceInput(content)
+        workspaceStreamHandle.current = null
+      }
+      if (event.type === 'error') {
+        setWorkspaceStreamedContent('')
+        setWorkspaceSending(false)
+        workspaceDrafts.current.set(workspaceId, content)
+        setWorkspaceInput(content)
+        setWorkspaceError('A IA não conseguiu responder. Sua pergunta foi preservada localmente quando possível.')
+        workspaceStreamHandle.current = null
+        void window.coach.conversation.listWorkspaceMessages(workspaceId).then((loaded) => { if (isCurrentRequest()) setWorkspaceMessages(loaded) })
+      }
+    })
+  }
+
   if (selected) {
     return (
-      <main className="min-h-screen p-6 text-coach-ink md:p-10">
-        <button onClick={() => setSelected(null)} className="flex items-center gap-2 rounded-xl border border-coach-line bg-white/70 px-4 py-2 text-sm font-bold"><ArrowLeft size={17} /> Voltar à Home</button>
-        <section className="mx-auto mt-24 max-w-4xl text-center">
-          <p className="text-xs font-black uppercase tracking-[0.22em] text-coach-green">Workspace aberto</p>
-          <h1 className="mt-4 font-display text-6xl font-black tracking-tight">{selected.name}</h1>
-          <p className="mx-auto mt-5 max-w-2xl text-lg leading-8 text-coach-muted">{selected.objective || 'Defina um objetivo para orientar suas próximas sessões.'}</p>
-          <div className="mx-auto mt-12 max-w-xl rounded-[2rem] border border-coach-line bg-white/70 p-8 shadow-soft"><Brain className="mx-auto text-coach-orange" size={36} /><h2 className="mt-5 font-display text-2xl font-extrabold">Seu ambiente está pronto</h2><p className="mt-3 text-coach-muted">Chat, editor, sessões e materiais serão adicionados incrementalmente. Neste momento, já comprovamos criação, persistência e isolamento do Workspace.</p></div>
+      <main className="min-h-screen p-4 text-coach-ink sm:p-6 md:p-10">
+        <header className="mx-auto flex max-w-7xl items-center justify-between gap-4"><button onClick={() => setSelected(null)} className="flex items-center gap-2 rounded-xl border border-coach-line bg-white/70 px-4 py-2 text-sm font-bold"><ArrowLeft size={17} /> Voltar à Home</button><span className="rounded-full bg-coach-green/10 px-3 py-1.5 text-xs font-black text-coach-green">{providerStatus?.configured ? `${providerStatus.providerName} · ${providerStatus.model}` : 'IA desconectada'}</span></header>
+        <section className="mx-auto mt-8 grid max-w-7xl gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <aside className="rounded-[2rem] border border-coach-line bg-white/70 p-6 shadow-soft lg:sticky lg:top-6 lg:self-start"><div className="grid size-12 place-items-center rounded-2xl bg-coach-orange/10 text-coach-orange"><Brain size={24} /></div><p className="mt-7 text-xs font-black uppercase tracking-[0.2em] text-coach-green">Workspace</p><h1 className="mt-2 font-display text-4xl font-black tracking-tight">{selected.name}</h1><p className="mt-4 leading-7 text-coach-muted">{selected.objective || 'Sem objetivo definido.'}</p><div className="mt-8 rounded-2xl bg-coach-yellow/20 p-4 text-sm leading-6 text-coach-ink/75">A conversa e o contexto ficam isolados neste Workspace e persistidos localmente.</div></aside>
+          <section className="flex h-[calc(100dvh-8rem)] min-h-[30rem] flex-col overflow-hidden rounded-[2rem] bg-coach-ink text-white shadow-soft lg:h-[calc(100dvh-9rem)]"><div className="border-b border-white/10 p-6"><div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-coach-yellow text-coach-ink"><Sparkles size={20} /></div><div><h2 className="font-display text-xl font-extrabold">Coach da matéria</h2><p className="text-xs text-white/50">Tire dúvidas, revise conceitos e planeje próximos passos</p></div></div></div><div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5 sm:p-7">{workspaceError && <div className="rounded-2xl bg-red-400/15 p-4 text-sm text-red-100">{workspaceError}</div>}{workspaceLoading && <p className="text-sm text-white/45">Carregando conversa…</p>}{!workspaceLoading && workspaceMessages.length === 0 && <div className="max-w-xl rounded-2xl bg-white/7 p-5 text-sm leading-7 text-white/65">Comece contando o que está estudando ou onde encontrou dificuldade. O Coach usará o nome e o objetivo deste Workspace como contexto.</div>}{workspaceMessages.map((message) => <div key={message.id} className={`max-w-[86%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'ml-auto bg-coach-green text-white' : 'bg-white/8 text-white/80'}`}>{message.content}</div>)}{workspaceSending && workspaceStreamedContent && <div className="max-w-[86%] whitespace-pre-wrap rounded-2xl bg-white/8 px-4 py-3 text-sm leading-6 text-white/80">{workspaceStreamedContent}<span className="ml-1 inline-block h-4 w-1 animate-pulse bg-coach-yellow" /></div>}<div ref={workspaceMessageEnd} /></div><form className="border-t border-white/10 p-4 sm:p-5" onSubmit={(event) => { event.preventDefault(); sendWorkspaceMessage() }}><div className="flex items-end gap-2 rounded-2xl bg-white/8 p-2"><textarea disabled={workspaceLoading || !providerStatus?.configured} aria-label="Mensagem para o Coach do Workspace" value={workspaceInput} onChange={(event) => { const value = event.target.value; setWorkspaceInput(value); if (value) workspaceDrafts.current.set(selected.id, value); else workspaceDrafts.current.delete(selected.id) }} maxLength={4000} placeholder={providerStatus?.configured ? 'Pergunte sobre esta matéria…' : 'Conecte uma IA na Home para começar'} className="max-h-40 min-h-14 flex-1 resize-none bg-transparent px-3 py-2 text-sm text-white outline-none placeholder:text-white/35 disabled:opacity-45" /><button disabled={!workspaceInput.trim() || workspaceSending || workspaceLoading || !providerStatus?.configured} aria-label="Enviar" className="grid size-12 shrink-0 place-items-center rounded-xl bg-coach-yellow text-coach-ink disabled:opacity-35"><Send size={19} /></button></div>{workspaceSending && <button type="button" onClick={() => workspaceStreamHandle.current?.cancel()} className="mt-2 px-1 text-xs font-bold text-coach-yellow">Cancelar resposta</button>}</form></section>
         </section>
       </main>
     )

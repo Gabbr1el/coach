@@ -28,19 +28,46 @@ const api: CoachDesktopApi = {
         ipcRenderer.removeListener(CONVERSATION_CHANNELS.homeStreamEvent, listener)
       }
       const listener = (_event: Electron.IpcRendererEvent, streamEvent: Parameters<typeof onEvent>[0]) => {
-        if (streamEvent.requestId !== input.requestId) return
+        if (disposed || streamEvent.requestId !== input.requestId) return
+        const terminal = streamEvent.type === 'completed' || streamEvent.type === 'cancelled' || streamEvent.type === 'error'
+        if (terminal) dispose()
         onEvent(streamEvent)
-        if (streamEvent.type === 'completed' || streamEvent.type === 'cancelled' || streamEvent.type === 'error') dispose()
       }
       ipcRenderer.on(CONVERSATION_CHANNELS.homeStreamEvent, listener)
       void ipcRenderer.invoke(CONVERSATION_CHANNELS.streamHomeMessage, input).catch(() => {
-        onEvent({ requestId: input.requestId, type: 'error', code: 'REQUEST_FAILED' })
+        if (disposed) return
         dispose()
+        onEvent({ requestId: input.requestId, type: 'error', code: 'REQUEST_FAILED' })
       })
       return {
         cancel: () => {
           if (!disposed) void ipcRenderer.invoke(CONVERSATION_CHANNELS.cancelHomeStream, { requestId: input.requestId })
         },
+        dispose,
+      }
+    },
+    listWorkspaceMessages: (workspaceId) => ipcRenderer.invoke(CONVERSATION_CHANNELS.listWorkspaceMessages, { workspaceId }),
+    streamWorkspaceMessage: (input, onEvent) => {
+      let disposed = false
+      const dispose = () => {
+        if (disposed) return
+        disposed = true
+        ipcRenderer.removeListener(CONVERSATION_CHANNELS.workspaceStreamEvent, listener)
+      }
+      const listener = (_event: Electron.IpcRendererEvent, streamEvent: Parameters<typeof onEvent>[0]) => {
+        if (disposed || streamEvent.requestId !== input.requestId) return
+        const terminal = streamEvent.type === 'completed' || streamEvent.type === 'cancelled' || streamEvent.type === 'error'
+        if (terminal) dispose()
+        onEvent(streamEvent)
+      }
+      ipcRenderer.on(CONVERSATION_CHANNELS.workspaceStreamEvent, listener)
+      void ipcRenderer.invoke(CONVERSATION_CHANNELS.streamWorkspaceMessage, input).catch(() => {
+        if (disposed) return
+        dispose()
+        onEvent({ requestId: input.requestId, type: 'error', code: 'REQUEST_FAILED' })
+      })
+      return {
+        cancel: () => { if (!disposed) void ipcRenderer.invoke(CONVERSATION_CHANNELS.cancelWorkspaceStream, { requestId: input.requestId }) },
         dispose,
       }
     },

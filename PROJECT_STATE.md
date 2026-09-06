@@ -63,6 +63,7 @@
 - OpenAI 429 diagnostics inspect code, type and safe message signals to distinguish billing quota from temporary rate limits
 - OpenAI-compatible provider with secure URL validation and Chat Completions streaming
 - One-click defaults for a local OmniRoute endpoint
+- Workspace chat with isolated local history, workspace-specific context and streamed provider responses
 
 ## Pending
 

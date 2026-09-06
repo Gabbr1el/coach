@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { workspaceIdSchema } from './workspace-contract'
 
 export const sendHomeMessageInputSchema = z.object({
   content: z.string().trim().min(1).max(4_000),
@@ -10,8 +11,18 @@ export const streamHomeMessageInputSchema = sendHomeMessageInputSchema.extend({
 
 export const cancelHomeStreamInputSchema = z.object({ requestId: z.uuid() }).strict()
 
+export const workspaceConversationInputSchema = z.object({ workspaceId: workspaceIdSchema }).strict()
+
+export const streamWorkspaceMessageInputSchema = sendHomeMessageInputSchema.extend({
+  requestId: z.uuid(),
+  workspaceId: workspaceIdSchema,
+}).strict()
+
+export const cancelWorkspaceStreamInputSchema = z.object({ requestId: z.uuid() }).strict()
+
 export type SendHomeMessageInput = z.infer<typeof sendHomeMessageInputSchema>
 export type StreamHomeMessageInput = z.infer<typeof streamHomeMessageInputSchema>
+export type StreamWorkspaceMessageInput = z.infer<typeof streamWorkspaceMessageInputSchema>
 
 export type ConversationRole = 'user' | 'assistant' | 'system'
 
@@ -29,6 +40,11 @@ export interface ConversationApi {
   listHomeMessages(): Promise<ConversationMessage[]>
   sendHomeMessage(input: SendHomeMessageInput): Promise<ConversationMessage[]>
   streamHomeMessage(input: StreamHomeMessageInput, onEvent: (event: HomeStreamEvent) => void): {
+    cancel(): void
+    dispose(): void
+  }
+  listWorkspaceMessages(workspaceId: string): Promise<ConversationMessage[]>
+  streamWorkspaceMessage(input: StreamWorkspaceMessageInput, onEvent: (event: HomeStreamEvent) => void): {
     cancel(): void
     dispose(): void
   }

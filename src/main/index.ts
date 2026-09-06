@@ -15,6 +15,7 @@ import { ElectronCredentialVault } from './security/electron-credential-vault'
 import { OpenAIProvider } from './providers/openai-provider'
 import { OpenAICompatibleProvider } from './providers/openai-compatible-provider'
 import { registerProviderHandlers } from './ipc/provider-handlers'
+import { WorkspaceCoachService } from '../application/conversations/workspace-coach-service'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -32,9 +33,8 @@ if (process.env['COACH_DISABLE_HARDWARE_ACCELERATION']) {
 void app.whenReady().then(async () => {
   try {
     database = openCoachDatabase()
-    const workspaceService = new WorkspaceService({
-      repository: new DrizzleWorkspaceRepository(database),
-    })
+    const workspaceRepository = new DrizzleWorkspaceRepository(database)
+    const workspaceService = new WorkspaceService({ repository: workspaceRepository })
     const providerManager = new AIProviderManager()
     const providerConfigurationService = new ProviderConfigurationService(
       new DrizzleProviderConfigurationRepository(database),
@@ -48,9 +48,14 @@ void app.whenReady().then(async () => {
       repository: new DrizzleConversationRepository(database),
       providerManager,
     })
+    const workspaceCoachService = new WorkspaceCoachService({
+      repository: new DrizzleConversationRepository(database),
+      providerManager,
+      getWorkspace: (id) => workspaceRepository.findById(id),
+    })
     registerApplicationHandlers()
     registerWorkspaceHandlers(workspaceService)
-    registerConversationHandlers(homePlannerService)
+    registerConversationHandlers(homePlannerService, workspaceCoachService)
     registerProviderHandlers(providerConfigurationService)
     createMainWindow()
   } catch (error) {

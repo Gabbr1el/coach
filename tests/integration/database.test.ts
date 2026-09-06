@@ -120,4 +120,18 @@ describe('Coach database migrations', () => {
     expect((await repository.listMessages(threadId, 100)).map((message) => [message.sequence, message.role])).toEqual([[1, 'user'], [2, 'assistant']])
     database.close()
   })
+
+  it('creates an isolated conversation thread for a workspace', async () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    const workspaces = new DrizzleWorkspaceRepository(database)
+    const conversations = new DrizzleConversationRepository(database)
+    const workspace = await workspaces.create({ id: '00000000-0000-4000-8000-000000000111', name: 'Cálculo', objective: 'Derivadas', createdAt: 1, updatedAt: 1 })
+    const threadId = '00000000-0000-4000-8000-000000000222'
+
+    await conversations.ensureWorkspaceThread(threadId, workspace.id, workspace.name, 2)
+    const row = database.sqlite.prepare('SELECT scope, workspace_id AS workspaceId, title FROM conversation_threads WHERE id = ?').get(threadId)
+
+    expect(row).toEqual({ scope: 'workspace', workspaceId: workspace.id, title: workspace.name })
+    database.close()
+  })
 })

@@ -13,6 +13,7 @@ export interface CreateConversationMessageRecord {
 
 export interface ConversationRepository {
   ensureHomeThread(threadId: string, now: number): Promise<void>
+  ensureWorkspaceThread(threadId: string, workspaceId: string, title: string, now: number): Promise<void>
   listMessages(threadId: string, limit: number): Promise<ConversationMessage[]>
   addTurn(records: {
     readonly threadId: string

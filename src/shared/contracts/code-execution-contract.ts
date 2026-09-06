@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { workspaceIdSchema } from './workspace-contract'
+import type { ObserverState } from './observer-contract'
 
 export const executeCodeInputSchema = z.object({
   workspaceId: workspaceIdSchema,
@@ -15,6 +16,7 @@ export interface CodeExecutionResult {
   readonly timedOut: boolean
   readonly durationMs: number
   readonly errorSignature: string | null
+  readonly observerState?: ObserverState
 }
 
 export interface CodeExecutionApi {

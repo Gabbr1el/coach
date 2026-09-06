@@ -57,6 +57,13 @@
       "when": 1788707633334,
       "tag": "0007_volatile_wendell_rand",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1788712257028,
+      "tag": "0008_rainy_blink",
+      "breakpoints": true
     }
   ]
 }

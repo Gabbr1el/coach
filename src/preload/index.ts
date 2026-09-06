@@ -8,6 +8,7 @@ import { CONVERSATION_CHANNELS } from '../shared/contracts/conversation-channels
 import { PROVIDER_CHANNELS } from '../shared/contracts/provider-channels'
 import { STUDY_WORKSPACE_CHANNELS } from '../shared/contracts/study-workspace-channels'
 import { CODE_EXECUTION_CHANNELS } from '../shared/contracts/code-execution-channels'
+import { OBSERVER_CHANNELS } from '../shared/contracts/observer-channels'
 
 const api: CoachDesktopApi = {
   application: {
@@ -93,6 +94,10 @@ const api: CoachDesktopApi = {
   },
   codeExecution: {
     execute: (input) => ipcRenderer.invoke(CODE_EXECUTION_CHANNELS.execute, input),
+  },
+  observer: {
+    getState: (workspaceId) => ipcRenderer.invoke(OBSERVER_CHANNELS.getState, { workspaceId }),
+    recordFocus: (input) => ipcRenderer.invoke(OBSERVER_CHANNELS.recordFocus, input),
   },
 }
 

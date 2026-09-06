@@ -38,13 +38,14 @@ describe('Coach database migrations', () => {
       { name: '__drizzle_migrations' },
       { name: 'conversation_messages' },
       { name: 'conversation_threads' },
+      { name: 'learning_events' },
       { name: 'provider_configurations' },
       { name: 'study_plan_items' },
       { name: 'study_sessions' },
       { name: 'workspace_study_states' },
       { name: 'workspaces' },
     ])
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 8 })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 9 })
     database.close()
   })
 

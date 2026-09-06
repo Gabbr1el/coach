@@ -20,6 +20,9 @@ import { StudyWorkspaceService } from '../application/study-workspaces/study-wor
 import { DrizzleStudyWorkspaceRepository } from './repositories/drizzle-study-workspace-repository'
 import { registerStudyWorkspaceHandlers } from './ipc/study-workspace-handlers'
 import { registerCodeExecutionHandlers } from './ipc/code-execution-handlers'
+import { ObserverService } from '../application/observer/observer-service'
+import { DrizzleObserverRepository } from './repositories/drizzle-observer-repository'
+import { registerObserverHandlers } from './ipc/observer-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -62,7 +65,9 @@ void app.whenReady().then(async () => {
     registerWorkspaceHandlers(workspaceService)
     registerConversationHandlers(homePlannerService, workspaceCoachService)
     registerStudyWorkspaceHandlers(studyWorkspaceService)
-    registerCodeExecutionHandlers(async (id) => Boolean(await workspaceRepository.findById(id)))
+    const observerService = new ObserverService(new DrizzleObserverRepository(database))
+    registerCodeExecutionHandlers(async (id) => Boolean(await workspaceRepository.findById(id)), observerService)
+    registerObserverHandlers(observerService)
     registerProviderHandlers(providerConfigurationService)
     createMainWindow()
   } catch (error) {

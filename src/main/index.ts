@@ -91,7 +91,8 @@ void app.whenReady().then(async () => {
     const observerService = new ObserverService(new DrizzleObserverRepository(database))
     const getWorkspaceMemory = (id: string) => (database!.sqlite.prepare('SELECT summary FROM workspace_memories WHERE workspace_id = ?').get(id) as { summary: string } | undefined)?.summary ?? null
     const currentWorkspaceContext = new CurrentWorkspaceContextService({ getWorkspace: (id) => workspaceRepository.findById(id), getStudyState: (id) => studyWorkspaceService.getState(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory })
-    const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory, getCurrentContext: (id) => currentWorkspaceContext.get(id) })
+    const materialService = new PdfMaterialService(database)
+    const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory, getCurrentContext: (id) => currentWorkspaceContext.get(id), searchMaterials: (id, query) => materialService.search(id, query) })
     registerApplicationHandlers()
     registerWorkspaceHandlers(workspaceService)
     registerConversationHandlers(homePlannerService, workspaceCoachService)
@@ -101,7 +102,7 @@ void app.whenReady().then(async () => {
     registerObserverHandlers(observerService)
     const planningService = new PlanningService(new DrizzlePlanningRepository(database))
     registerPlanningHandlers(planningService)
-    registerMaterialHandlers(new PdfMaterialService(database), async (id) => Boolean(await workspaceRepository.findById(id)))
+    registerMaterialHandlers(materialService, async (id) => Boolean(await workspaceRepository.findById(id)))
     registerSessionNavigationHandlers(database)
     registerBackupHandlers(database)
     registerProjectHandlers(new ProjectService(projectRepository, async (id) => Boolean(await workspaceRepository.findById(id))))

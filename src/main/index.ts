@@ -32,6 +32,8 @@ import { registerMaterialHandlers } from './ipc/material-handlers'
 import { registerSessionNavigationHandlers } from './ipc/session-navigation-handlers'
 import { registerBackupHandlers } from './ipc/backup-handlers'
 import { finishPendingRestore, recoverPendingRestore, rollbackPendingRestore, validateCoachDatabaseSchema } from './database/restore-recovery'
+import { CurrentWorkspaceContextService } from '../application/workspaces/current-workspace-context'
+import { WorkspaceEventBus } from '../application/events/workspace-event-bus'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -75,9 +77,12 @@ void app.whenReady().then(async () => {
       repository: new DrizzleConversationRepository(database),
       providerManager,
     })
-    const studyWorkspaceService = new StudyWorkspaceService({ repository: new DrizzleStudyWorkspaceRepository(database), getWorkspace: (id) => workspaceRepository.findById(id) })
+    const workspaceEventBus = new WorkspaceEventBus()
+    const studyWorkspaceService = new StudyWorkspaceService({ repository: new DrizzleStudyWorkspaceRepository(database), getWorkspace: (id) => workspaceRepository.findById(id), eventBus: workspaceEventBus })
     const observerService = new ObserverService(new DrizzleObserverRepository(database))
-    const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory: (id) => (database!.sqlite.prepare('SELECT summary FROM workspace_memories WHERE workspace_id = ?').get(id) as { summary: string } | undefined)?.summary ?? null })
+    const getWorkspaceMemory = (id: string) => (database!.sqlite.prepare('SELECT summary FROM workspace_memories WHERE workspace_id = ?').get(id) as { summary: string } | undefined)?.summary ?? null
+    const currentWorkspaceContext = new CurrentWorkspaceContextService({ getWorkspace: (id) => workspaceRepository.findById(id), getStudyState: (id) => studyWorkspaceService.getState(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory })
+    const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory, getCurrentContext: (id) => currentWorkspaceContext.get(id) })
     registerApplicationHandlers()
     registerWorkspaceHandlers(workspaceService)
     registerConversationHandlers(homePlannerService, workspaceCoachService)

@@ -2,12 +2,14 @@ import type { Workspace } from '../../shared/contracts/workspace-contract'
 import type { StudyPlanItem, StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
 import type { StudySessionSummary } from '../../shared/contracts/study-workspace-contract'
 import type { StudyWorkspaceRepository } from './study-workspace-repository'
+import { createWorkspaceEvent, type WorkspaceEventBus } from '../events/workspace-event-bus'
 
 export interface StudyWorkspaceServiceDependencies {
   readonly repository: StudyWorkspaceRepository
   readonly getWorkspace: (id: string) => Promise<Workspace | null>
   readonly now?: () => number
   readonly createId?: () => string
+  readonly eventBus?: WorkspaceEventBus
 }
 
 const DEFAULT_CODE = `class Node:
@@ -76,7 +78,9 @@ export class StudyWorkspaceService {
       accumulatedFocusSeconds: 0,
     }
     try {
-      return await this.dependencies.repository.createState(initialState)
+      const created = await this.dependencies.repository.createState(initialState)
+      this.publish(created, 'session.started', { source: 'workspace-initialization' })
+      return created
     } catch (error) {
       const concurrent = await this.dependencies.repository.findState(workspaceId, now)
       if (concurrent) return concurrent
@@ -87,13 +91,17 @@ export class StudyWorkspaceService {
   async saveDocument(workspaceId: string, fileName: string, language: string, content: string, revision: number): Promise<StudyWorkspaceState> {
     await this.getState(workspaceId)
     await this.dependencies.repository.saveDocument(workspaceId, fileName.trim(), language.trim(), content, revision, this.now())
-    return this.getState(workspaceId)
+    const next = await this.getState(workspaceId)
+    this.publish(next, 'document.changed', { fileName: next.fileName, revision: next.documentRevision })
+    return next
   }
 
   async saveNotes(workspaceId: string, notes: string, revision: number): Promise<StudyWorkspaceState> {
     await this.getState(workspaceId)
     await this.dependencies.repository.saveNotes(workspaceId, notes, revision, this.now())
-    return this.getState(workspaceId)
+    const next = await this.getState(workspaceId)
+    this.publish(next, 'notes.changed', { revision: next.notesRevision })
+    return next
   }
 
   async updateContextSharing(workspaceId: string, enabled: boolean): Promise<StudyWorkspaceState> {
@@ -121,7 +129,9 @@ export class StudyWorkspaceService {
       }
     }
     await this.dependencies.repository.replacePlanStatuses(workspaceId, state.sessionId, nextStatuses, this.now())
-    return this.getState(workspaceId)
+    const next = await this.getState(workspaceId)
+    this.publish(next, 'plan.changed', { itemId, status: next.plan.find((candidate) => candidate.id === itemId)?.status })
+    return next
   }
 
   async updateTimer(workspaceId: string, action: 'start' | 'pause' | 'reset'): Promise<StudyWorkspaceState> {
@@ -136,7 +146,9 @@ export class StudyWorkspaceService {
           ? { timerStatus: 'idle' as const, timerRemainingSeconds: 0, timerStartedAt: null, accumulatedFocusSeconds: state.accumulatedFocusSeconds }
           : { timerStatus: 'running' as const, timerRemainingSeconds: remaining, timerStartedAt: now, accumulatedFocusSeconds: state.accumulatedFocusSeconds }
     await this.dependencies.repository.updateTimer(workspaceId, state.sessionId, timer, now)
-    return this.getState(workspaceId)
+    const next = await this.getState(workspaceId)
+    this.publish(next, 'timer.changed', { action, status: next.timerStatus, remainingSeconds: next.timerRemainingSeconds })
+    return next
   }
 
   async completeSession(workspaceId: string): Promise<StudyWorkspaceState> {
@@ -145,7 +157,10 @@ export class StudyWorkspaceService {
     const now = this.now()
     const focusSeconds = state.accumulatedFocusSeconds + state.timerDurationSeconds - this.effectiveRemaining(state, now)
     this.dependencies.repository.completeAndCreateSession(workspaceId, state.sessionId, this.createId(), createDefaultPlan(workspace, this.createId), focusSeconds, state.timerDurationSeconds, now)
-    return this.getState(workspaceId)
+    const next = await this.getState(workspaceId)
+    this.dependencies.eventBus?.publish(createWorkspaceEvent(workspaceId, state.sessionId, 'session.completed', { focusSeconds }, now))
+    this.publish(next, 'session.started', { source: 'previous-session-completed' })
+    return next
   }
 
   async listSessionHistory(workspaceId: string): Promise<StudySessionSummary[]> {
@@ -166,5 +181,9 @@ export class StudyWorkspaceService {
     const workspace = await this.dependencies.getWorkspace(workspaceId)
     if (!workspace || workspace.status !== 'active') throw new Error('Workspace not found')
     return workspace
+  }
+
+  private publish(state: StudyWorkspaceState, type: Parameters<typeof createWorkspaceEvent>[2], payload: unknown): void {
+    this.dependencies.eventBus?.publish(createWorkspaceEvent(state.workspaceId, state.sessionId, type, payload, this.now()))
   }
 }

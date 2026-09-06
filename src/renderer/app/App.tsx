@@ -451,7 +451,7 @@ export function App() {
     const workspaceId = selected.id
     const epoch = workspaceLoadEpoch.current
     const isCurrentRequest = () => workspaceLoadEpoch.current === epoch
-    workspaceStreamHandle.current = window.coach.conversation.streamWorkspaceMessage({ requestId, workspaceId, content, studyContext: studyState?.workspaceId === workspaceId && studyState.shareContextWithAi ? { fileName: studyState.fileName, editorContent: editorContent.slice(0, 50_000), notes: studyNotes.slice(0, 20_000), activePlanItem: studyState.plan.find((item) => item.status === 'active')?.title ?? null } : undefined }, (event) => {
+    workspaceStreamHandle.current = window.coach.conversation.streamWorkspaceMessage({ requestId, workspaceId, content }, (event) => {
       if (!isCurrentRequest()) return
       if (event.type === 'text-delta') setWorkspaceStreamedContent((current) => current + event.content)
       if (event.type === 'completed') {

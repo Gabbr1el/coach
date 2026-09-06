@@ -6,6 +6,7 @@ import type { ConversationMessage, StreamWorkspaceMessageInput } from '../../sha
 import type { ConversationRepository } from './conversation-repository'
 import { ContextRouter } from '../ai/context-router'
 import type { ObserverState } from '../../shared/contracts/observer-contract'
+import type { CurrentWorkspaceContext } from '../workspaces/current-workspace-context'
 
 export interface WorkspaceCoachServiceDependencies {
   readonly repository: ConversationRepository
@@ -14,6 +15,7 @@ export interface WorkspaceCoachServiceDependencies {
   readonly getObserverState?: (workspaceId: string) => ObserverState
   readonly contextRouter?: ContextRouter
   readonly getWorkspaceMemory?: (workspaceId: string) => string | null
+  readonly getCurrentContext?: (workspaceId: string) => Promise<CurrentWorkspaceContext>
   readonly now?: () => number
   readonly createId?: () => string
 }
@@ -51,8 +53,16 @@ export class WorkspaceCoachService {
     }
     const provider = this.dependencies.providerManager.getActive()
     if (!provider?.streamMessage) throw new Error('An active streaming provider is required')
-    const routed = (this.dependencies.contextRouter ?? new ContextRouter()).route(input, this.dependencies.getObserverState?.(workspaceId))
-    const workspaceMemory = routed.depth === 'WORKSPACE' || routed.depth === 'DEEP' ? this.dependencies.getWorkspaceMemory?.(workspaceId) ?? null : null
+    const current = await this.dependencies.getCurrentContext?.(workspaceId)
+    const observer = current?.observer ?? this.dependencies.getObserverState?.(workspaceId)
+    const authorizedContext = current?.study.shareContextWithAi ? {
+      fileName: current.study.fileName,
+      editorContent: current.study.editorContent.slice(0, 50_000),
+      notes: current.study.notes.slice(0, 20_000),
+      activePlanItem: current.activePlanItem,
+    } : undefined
+    const routed = (this.dependencies.contextRouter ?? new ContextRouter()).route(input, observer, authorizedContext)
+    const workspaceMemory = routed.depth === 'WORKSPACE' || routed.depth === 'DEEP' ? current?.memory ?? this.dependencies.getWorkspaceMemory?.(workspaceId) ?? null : null
     const recentMessages = await this.dependencies.repository.listMessages(threadId, routed.depth === 'MINIMAL' ? 6 : routed.depth === 'SESSION' ? 16 : 30)
     const userContent = input.content.trim()
     let content = ''

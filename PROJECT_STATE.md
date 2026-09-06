@@ -1,6 +1,6 @@
 # PROJECT STATE
 
-Execution roadmap: `ROADMAP.md`. The next vertical slice is durable project files and controlled C execution.
+Execution roadmap: `ROADMAP.md`. The local MVP vertical slices 0-8 are implemented; next work is cross-platform hardening and richer pedagogy.
 
 ## Stack
 
@@ -37,7 +37,7 @@ Execution roadmap: `ROADMAP.md`. The next vertical slice is durable project file
 - Packaged-bundle smoke test verified with sandboxed preload and typed IPC
 - SQLite database created under Electron `userData`
 - Drizzle migration history is the single executable migration source
-- `workspaces` is the only MVP 0 domain table
+- Versioned SQLite domain schema evolved through 14 forward migrations
 - WAL, foreign keys, busy timeout and deterministic close lifecycle
 - Linux unpacked package validated with rebuilt native SQLite addon
 - Typed Workspace contracts validated at runtime with Zod
@@ -76,16 +76,21 @@ Execution roadmap: `ROADMAP.md`. The next vertical slice is durable project file
 - Durable SessionMemory and compact rolling WorkspaceMemory derived from local events
 - Collapsible current-session outline and persistent distraction parking list
 - Atomic local SQLite backup export after WAL checkpoint
+- Validated crash-recoverable backup restoration with migration, schema, FK and integrity checks
 
-## Pending
+## Pending beyond the local MVP
 
-- MVP 1.4: structured deadlines, availability and Planner-generated schedule proposals
+- Cross-platform execution and PDF extraction for Windows/macOS; sandbox tooling is Linux-first
+- Full PDF page renderer, FTS/semantic indexing, OCR and material relevance confirmation
+- Editable deadlines, explicit weekly availability and generated calendar schedules
+- Rich topic extraction, clickable conversation anchors and expanded pedagogical reports
+- Optional cloud account, license, sync and focused video integrations
 
 ## Database
 
 - Database file: `coach.sqlite` under Electron `userData`.
-- Current migration: `0000_watery_penance.sql`.
-- Domain tables: `workspaces` only.
+- Current migration: `0013_fat_donald_blake.sql` (14 total).
+- Domain tables cover workspaces, conversations, providers, study state, sessions, plans, events, priorities, materials, memories, outlines and saved distractions.
 - Infrastructure table: `__drizzle_migrations`.
 - Migrations are forward-only and executed transactionally by Drizzle.
 
@@ -93,8 +98,8 @@ Execution roadmap: `ROADMAP.md`. The next vertical slice is durable project file
 
 - `/home/gabiru/coach` is the official project.
 - `/home/gabiru/ed-coach` is a disposable proof of concept and remains untouched.
-- C will be the first programming language when the editor arrives.
-- No AI, chat, Observer or code execution is included in MVP 0.
+- Python is the first executable learning language; language adapters remain replaceable.
+- AI, chat, Observer and code execution are implemented as isolated subsystems.
 - The HOME owns the PLANNER conversation; Workspaces will own TUTOR conversations.
 - Planner currently uses transparent local rules until a provider is explicitly connected.
 - API keys are encrypted through Electron safeStorage in restricted local files; SQLite stores only a secret reference.

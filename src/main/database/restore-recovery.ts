@@ -2,6 +2,8 @@ import { closeSync, existsSync, fsyncSync, openSync, renameSync, rmSync } from '
 import { dirname } from 'node:path'
 import type Database from 'better-sqlite3'
 
+export const CURRENT_MIGRATION_COUNT = 14
+
 function syncDirectory(path: string): void {
   const descriptor = openSync(dirname(path), 'r')
   try { fsyncSync(descriptor) } finally { closeSync(descriptor) }
@@ -42,6 +44,8 @@ export function validateCoachDatabaseSchema(sqlite: Database.Database): void {
   if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok') throw new Error('Coach database integrity check failed')
   const foreignKeyErrors = sqlite.pragma('foreign_key_check') as unknown[]
   if (foreignKeyErrors.length) throw new Error('Coach database contains invalid relationships')
+  const migrationCount = (sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get() as { count: number }).count
+  if (migrationCount !== CURRENT_MIGRATION_COUNT) throw new Error('Coach backup version is incompatible with this application')
   const requirements: Record<string, string[]> = {
     workspaces: ['id', 'name', 'objective'], conversation_threads: ['id', 'workspace_id'], conversation_messages: ['id', 'thread_id', 'content'],
     study_sessions: ['id', 'workspace_id', 'status'], workspace_study_states: ['workspace_id', 'active_session_id'], learning_events: ['id', 'session_id', 'type'],

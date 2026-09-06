@@ -1,6 +1,6 @@
 import { app, dialog, ipcMain } from 'electron'
 import Database from 'better-sqlite3'
-import { open, rename, rm } from 'node:fs/promises'
+import { chmod, open, rename, rm } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import type { CoachDatabase } from '../database/connection'
@@ -24,6 +24,7 @@ export function registerBackupHandlers(database: CoachDatabase): void {
       if (resolve(selected.filePath) === resolve(database.path) || (() => { try { return realpathSync(selected.filePath!) === realpathSync(database.path) } catch { return false } })()) throw new Error('Backup destination cannot be the active database')
       temporary = resolve(dirname(selected.filePath), `.coach-backup-${crypto.randomUUID()}.partial`)
       await database.sqlite.backup(temporary)
+      await chmod(temporary, 0o600)
       await rename(temporary, selected.filePath)
       return selected.filePath
     } catch (error) { if (temporary) await rm(temporary, { force: true }); throw error }
@@ -59,6 +60,8 @@ export function registerBackupHandlers(database: CoachDatabase): void {
       try { await markerHandle.writeFile('pending\n'); await markerHandle.sync() } finally { await markerHandle.close() }
       const directoryHandle = await open(dirname(database.path), 'r')
       try { await directoryHandle.sync() } finally { await directoryHandle.close() }
+      database.sqlite.pragma('wal_checkpoint(TRUNCATE)')
+      database.close()
       app.relaunch()
       app.exit(0)
       return true

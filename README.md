@@ -14,6 +14,17 @@ pnpm install
 pnpm dev
 ```
 
+## Local MVP
+
+The current Linux-first desktop MVP includes local Workspaces, BYOK provider switching, Planner and Tutor modes, Monaco-based Python study execution, active-session focus tracking, the event-driven Observer, progressive ContextRouter assistance, layered memory, PDF import/search, priorities, session history/outline, distraction parking, and backup export/restore.
+
+Runtime requirements for the hardened local tools:
+
+- `python3`, `bwrap`, and `prlimit` for sandboxed learning-code execution
+- `pdftotext` (Poppler), `bwrap`, and `prlimit` for sandboxed PDF extraction
+
+Provider API keys remain in Electron `safeStorage` (or session memory when secure persistence is unavailable). Study data stays in `coach.sqlite` under Electron's `userData` directory.
+
 If Chromium cannot start its GPU process on Linux, use the documented fallback:
 
 ```bash

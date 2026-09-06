@@ -60,7 +60,6 @@ void app.whenReady().then(async () => {
       database = openCoachDatabase()
       validateCoachDatabaseSchema(database.sqlite)
     }
-    finishPendingRestore(databasePath)
     const workspaceRepository = new DrizzleWorkspaceRepository(database)
     const workspaceService = new WorkspaceService({ repository: workspaceRepository })
     const providerManager = new AIProviderManager()
@@ -90,6 +89,7 @@ void app.whenReady().then(async () => {
     registerSessionNavigationHandlers(database)
     registerBackupHandlers(database)
     registerProviderHandlers(providerConfigurationService)
+    finishPendingRestore(databasePath)
     createMainWindow()
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown startup error'

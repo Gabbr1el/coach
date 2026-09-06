@@ -42,6 +42,9 @@ export interface StudySessionSummary {
   readonly interventions: number
   readonly focusExits: number
   readonly completedPlanItems: number
+  readonly successRate?: number
+  readonly focusRetentionPercent?: number
+  readonly recommendation?: string
 }
 
 export interface StudyPlanItem {

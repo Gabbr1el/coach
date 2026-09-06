@@ -79,7 +79,7 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
   }
 
   listSessionHistory(workspaceId: string, limit: number): StudySessionSummary[] {
-    return this.database.sqlite.prepare(`SELECT s.id, s.started_at AS startedAt, s.ended_at AS endedAt, s.focus_seconds AS focusSeconds,
+    const sessions = this.database.sqlite.prepare(`SELECT s.id, s.started_at AS startedAt, s.ended_at AS endedAt, s.focus_seconds AS focusSeconds,
       SUM(CASE WHEN e.type IN ('code_executed','execution_error') THEN 1 ELSE 0 END) AS executions,
       SUM(CASE WHEN e.type = 'execution_error' THEN 1 ELSE 0 END) AS errors,
       SUM(CASE WHEN e.type = 'possible_learning_loop' THEN 1 ELSE 0 END) AS interventions,
@@ -87,5 +87,12 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
       (SELECT COUNT(*) FROM study_plan_items p WHERE p.session_id = s.id AND p.status = 'completed') AS completedPlanItems
       FROM study_sessions s LEFT JOIN learning_events e ON e.session_id = s.id
       WHERE s.workspace_id = ? AND s.status = 'completed' GROUP BY s.id ORDER BY s.started_at DESC LIMIT ?`).all(workspaceId, limit) as StudySessionSummary[]
+    return sessions.map((session) => {
+      const successRate = session.executions ? Math.round(Math.max(0, session.executions - session.errors) / session.executions * 100) : 100
+      const elapsed = Math.max(1, Math.floor((session.endedAt - session.startedAt) / 1000))
+      const focusRetentionPercent = Math.min(100, Math.round(session.focusSeconds / elapsed * 100))
+      const recommendation = successRate < 50 ? 'Revise o conceito ativo antes de avançar e use uma pista curta.' : session.focusExits >= 3 ? 'Faça o próximo sprint em 15 minutos e elimine uma distração.' : 'Avance para prática independente e explique sua solução.'
+      return { ...session, successRate, focusRetentionPercent, recommendation }
+    })
   }
 }

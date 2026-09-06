@@ -151,6 +151,14 @@ export class StudyWorkspaceService {
     return next
   }
 
+  async setTimerDuration(workspaceId: string, durationSeconds: number): Promise<StudyWorkspaceState> {
+    const state = await this.getState(workspaceId)
+    await this.dependencies.repository.setTimerDuration(workspaceId, state.sessionId, durationSeconds, this.now())
+    const next = await this.getState(workspaceId)
+    this.publish(next, 'timer.changed', { action: 'duration', durationSeconds })
+    return next
+  }
+
   async completeSession(workspaceId: string): Promise<StudyWorkspaceState> {
     const state = await this.getState(workspaceId)
     const workspace = await this.requireWorkspace(workspaceId)

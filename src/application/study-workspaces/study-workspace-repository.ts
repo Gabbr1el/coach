@@ -8,6 +8,7 @@ export interface StudyWorkspaceRepository {
   updateContextSharing(workspaceId: string, enabled: boolean, now: number): Promise<void>
   replacePlanStatuses(workspaceId: string, sessionId: string, statuses: ReadonlyArray<{ id: string; status: StudyPlanItem['status'] }>, now: number): Promise<void>
   updateTimer(workspaceId: string, sessionId: string, timer: Pick<StudyWorkspaceState, 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'accumulatedFocusSeconds'>, now: number): Promise<void>
+  setTimerDuration(workspaceId: string, sessionId: string, durationSeconds: number, now: number): Promise<void>
   flushDrafts(input: { workspaceId: string; fileName: string; language: string; content: string; notes: string; documentRevision: number; notesRevision: number; now: number }): void
   completeAndCreateSession(workspaceId: string, currentSessionId: string, nextSessionId: string, plan: StudyPlanItem[], focusSeconds: number, timerDurationSeconds: number, now: number): void
   listSessionHistory(workspaceId: string, limit: number): StudySessionSummary[]

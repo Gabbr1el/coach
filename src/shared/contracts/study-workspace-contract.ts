@@ -29,6 +29,7 @@ export const toggleStudyPlanItemInputSchema = studyWorkspaceIdInputSchema.extend
 export const updateStudyTimerInputSchema = studyWorkspaceIdInputSchema.extend({
   action: z.enum(['start', 'pause', 'reset']),
 }).strict()
+export const setStudyTimerDurationInputSchema = studyWorkspaceIdInputSchema.extend({ durationSeconds: z.number().int().min(300).max(10800) }).strict()
 export const completeStudySessionInputSchema = studyWorkspaceIdInputSchema
 
 export interface StudySessionSummary {
@@ -78,6 +79,7 @@ export interface StudyWorkspaceApi {
   updateContextSharing(input: z.infer<typeof updateContextSharingInputSchema>): Promise<StudyWorkspaceState>
   togglePlanItem(input: z.infer<typeof toggleStudyPlanItemInputSchema>): Promise<StudyWorkspaceState>
   updateTimer(input: z.infer<typeof updateStudyTimerInputSchema>): Promise<StudyWorkspaceState>
+  setTimerDuration(input: z.infer<typeof setStudyTimerDurationInputSchema>): Promise<StudyWorkspaceState>
   flushDrafts(input: z.infer<typeof flushWorkspaceDraftsInputSchema>): boolean
   completeSession(workspaceId: string): Promise<StudyWorkspaceState>
   listSessionHistory(workspaceId: string): Promise<StudySessionSummary[]>

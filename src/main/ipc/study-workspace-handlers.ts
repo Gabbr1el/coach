@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import type { StudyWorkspaceService } from '../../application/study-workspaces/study-workspace-service'
 import { STUDY_WORKSPACE_CHANNELS } from '../../shared/contracts/study-workspace-channels'
-import { flushWorkspaceDraftsInputSchema, saveWorkspaceDocumentInputSchema, saveWorkspaceNotesInputSchema, studyWorkspaceIdInputSchema, toggleStudyPlanItemInputSchema, updateContextSharingInputSchema, updateStudyTimerInputSchema } from '../../shared/contracts/study-workspace-contract'
+import { flushWorkspaceDraftsInputSchema, saveWorkspaceDocumentInputSchema, saveWorkspaceNotesInputSchema, setStudyTimerDurationInputSchema, studyWorkspaceIdInputSchema, toggleStudyPlanItemInputSchema, updateContextSharingInputSchema, updateStudyTimerInputSchema } from '../../shared/contracts/study-workspace-contract'
 import { assertTrustedSender } from './trusted-sender'
 
 export function registerStudyWorkspaceHandlers(service: StudyWorkspaceService): void {
@@ -34,6 +34,7 @@ export function registerStudyWorkspaceHandlers(service: StudyWorkspaceService): 
     const input = updateStudyTimerInputSchema.parse(payload)
     return service.updateTimer(input.workspaceId, input.action)
   })
+  ipcMain.handle(STUDY_WORKSPACE_CHANNELS.setTimerDuration, (event, payload: unknown) => { assertTrustedSender(event); const input = setStudyTimerDurationInputSchema.parse(payload); return service.setTimerDuration(input.workspaceId, input.durationSeconds) })
   ipcMain.on(STUDY_WORKSPACE_CHANNELS.flushDrafts, (event, payload: unknown) => {
     try {
       assertTrustedSender(event)

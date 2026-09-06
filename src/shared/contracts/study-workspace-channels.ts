@@ -5,6 +5,7 @@ export const STUDY_WORKSPACE_CHANNELS = {
   updateContextSharing: 'study-workspace:update-context-sharing',
   togglePlanItem: 'study-workspace:toggle-plan-item',
   updateTimer: 'study-workspace:update-timer',
+  setTimerDuration: 'study-workspace:set-timer-duration',
   flushDrafts: 'study-workspace:flush-drafts',
   completeSession: 'study-workspace:complete-session',
   listSessionHistory: 'study-workspace:list-session-history',

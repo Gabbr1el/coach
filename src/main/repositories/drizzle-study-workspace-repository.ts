@@ -50,6 +50,11 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
     if (result.changes !== 1) throw new Error('Study session changed while updating timer')
   }
 
+  async setTimerDuration(workspaceId: string, sessionId: string, durationSeconds: number, now: number): Promise<void> {
+    const result = this.database.sqlite.prepare("UPDATE workspace_study_states SET timer_duration_seconds = ?, timer_remaining_seconds = ?, timer_status = 'idle', timer_started_at = NULL, updated_at = ? WHERE workspace_id = ? AND active_session_id = ?").run(durationSeconds, durationSeconds, now, workspaceId, sessionId)
+    if (result.changes !== 1) throw new Error('Study session changed while updating timer duration')
+  }
+
   flushDrafts(input: { workspaceId: string; fileName: string; language: string; content: string; notes: string; documentRevision: number; notesRevision: number; now: number }): void {
     this.database.sqlite.transaction(() => {
       this.database.sqlite.prepare('UPDATE workspace_study_states SET file_name = ?, language = ?, editor_content = ?, document_revision = ?, updated_at = ? WHERE workspace_id = ? AND document_revision < ?').run(input.fileName, input.language, input.content, input.documentRevision, input.now, input.workspaceId, input.documentRevision)

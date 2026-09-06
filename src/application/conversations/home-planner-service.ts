@@ -1,5 +1,7 @@
 import type { ConversationMessage, SendHomeMessageInput } from '../../shared/contracts/conversation-contract'
 import type { ConversationRepository } from './conversation-repository'
+import type { AIProviderManager } from '../ai/ai-provider-manager'
+import { COACH_POLICY } from '../ai/coach-policy'
 
 const HOME_THREAD_ID = '00000000-0000-4000-8000-000000000000'
 
@@ -7,6 +9,7 @@ export interface HomePlannerServiceDependencies {
   readonly repository: ConversationRepository
   readonly now?: () => number
   readonly createId?: () => string
+  readonly providerManager?: AIProviderManager
 }
 
 function localPlannerReply(content: string): string {
@@ -24,11 +27,13 @@ export class HomePlannerService {
   private readonly repository: ConversationRepository
   private readonly now: () => number
   private readonly createId: () => string
+  private readonly providerManager: AIProviderManager | null
 
-  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID() }: HomePlannerServiceDependencies) {
+  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), providerManager }: HomePlannerServiceDependencies) {
     this.repository = repository
     this.now = now
     this.createId = createId
+    this.providerManager = providerManager ?? null
   }
 
   async listMessages(): Promise<ConversationMessage[]> {
@@ -48,14 +53,40 @@ export class HomePlannerService {
       providerId: null,
       modelId: null,
     }
+    const provider = this.providerManager?.getActive() ?? null
+    let assistantContent = localPlannerReply(userMessage.content)
+    let providerId = 'coach-local'
+    let modelId = 'planner-rules-v1'
+
+    if (provider) {
+      const recentMessages = await this.repository.listMessages(HOME_THREAD_ID, 20)
+      try {
+        const response = await provider.sendMessage({
+          messages: [
+            { role: 'system', content: `Você é o Planner acadêmico do Coach. Regras: ${COACH_POLICY.principles.join(' ')} Organize prioridades, mas não invente datas nem disponibilidade.` },
+            ...recentMessages.map((message) => ({ role: message.role, content: message.content })),
+            { role: 'user', content: userMessage.content },
+          ],
+          maxOutputTokens: 300,
+        })
+        assistantContent = response.content
+        providerId = response.providerId
+        modelId = response.modelId
+      } catch {
+        assistantContent = 'Não consegui consultar a IA conectada agora. Sua mensagem foi preservada localmente. Você pode tentar novamente depois ou continuar organizando em modo local.'
+        providerId = 'coach-local'
+        modelId = 'provider-failure-v1'
+      }
+    }
+
     const assistantMessage = {
       id: this.createId(),
       threadId: HOME_THREAD_ID,
       role: 'assistant' as const,
-      content: localPlannerReply(userMessage.content),
+      content: assistantContent,
       createdAt: now + 1,
-      providerId: 'coach-local',
-      modelId: 'planner-rules-v1',
+      providerId,
+      modelId,
     }
     return this.repository.addTurn({ threadId: HOME_THREAD_ID, user: userMessage, assistant: assistantMessage })
   }

@@ -5,6 +5,7 @@ import {
 } from '../shared/contracts/application-contract'
 import { WORKSPACE_CHANNELS } from '../shared/contracts/workspace-channels'
 import { CONVERSATION_CHANNELS } from '../shared/contracts/conversation-channels'
+import { PROVIDER_CHANNELS } from '../shared/contracts/provider-channels'
 
 const api: CoachDesktopApi = {
   application: {
@@ -19,6 +20,11 @@ const api: CoachDesktopApi = {
   conversation: {
     listHomeMessages: () => ipcRenderer.invoke(CONVERSATION_CHANNELS.listHomeMessages),
     sendHomeMessage: (input) => ipcRenderer.invoke(CONVERSATION_CHANNELS.sendHomeMessage, input),
+  },
+  provider: {
+    getStatus: () => ipcRenderer.invoke(PROVIDER_CHANNELS.getStatus),
+    configureOpenAI: (input) => ipcRenderer.invoke(PROVIDER_CHANNELS.configureOpenAI, input),
+    disconnect: (providerId) => ipcRenderer.invoke(PROVIDER_CHANNELS.disconnect, providerId),
   },
 }
 

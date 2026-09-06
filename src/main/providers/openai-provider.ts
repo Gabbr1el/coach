@@ -1,0 +1,81 @@
+import type { AIProvider, AIProviderCapabilities, AIRequest, AIResponse } from '../../application/ai/ai-provider'
+
+type Fetcher = typeof fetch
+
+interface OpenAIResponseBody {
+  readonly model?: string
+  readonly output_text?: string
+  readonly output?: Array<{ content?: Array<{ type?: string; text?: string }> }>
+  readonly usage?: { input_tokens?: number; output_tokens?: number }
+  readonly error?: { message?: string }
+}
+
+function extractText(body: OpenAIResponseBody): string {
+  if (body.output_text) return body.output_text
+  return body.output?.flatMap((item) => item.content ?? []).filter((item) => item.type === 'output_text').map((item) => item.text ?? '').join('') ?? ''
+}
+
+export class OpenAIProvider implements AIProvider {
+  readonly id = 'openai'
+  readonly name = 'OpenAI'
+
+  constructor(
+    private readonly apiKey: string,
+    private readonly defaultModel: string,
+    private readonly fetcher: Fetcher = fetch,
+  ) {}
+
+  getCapabilities(): AIProviderCapabilities {
+    return { streaming: false, usageInformation: true, supportedInput: ['text'] }
+  }
+
+  async testConnection(): Promise<void> {
+    await this.request({ messages: [{ role: 'user', content: 'Reply only with OK.' }], maxOutputTokens: 8 })
+  }
+
+  sendMessage(request: AIRequest): Promise<AIResponse> {
+    return this.request(request)
+  }
+
+  private async request(request: AIRequest): Promise<AIResponse> {
+    const timeoutController = new AbortController()
+    const timeout = setTimeout(() => timeoutController.abort(), 30_000)
+    const abortFromCaller = () => timeoutController.abort()
+    request.signal?.addEventListener('abort', abortFromCaller, { once: true })
+    let response: Response
+    let body: OpenAIResponseBody
+    try {
+      response = await this.fetcher('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: request.model ?? this.defaultModel,
+          input: request.messages.map((message) => ({ role: message.role, content: message.content })),
+          max_output_tokens: request.maxOutputTokens,
+          store: false,
+        }),
+        signal: timeoutController.signal,
+      })
+      body = await response.json() as OpenAIResponseBody
+    } catch (error) {
+      if (timeoutController.signal.aborted) throw new Error('OpenAI request was cancelled or timed out')
+      throw new Error('Could not connect to OpenAI', { cause: error })
+    } finally {
+      clearTimeout(timeout)
+      request.signal?.removeEventListener('abort', abortFromCaller)
+    }
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403) throw new Error('OpenAI rejected the API credential')
+      if (response.status === 429) throw new Error('OpenAI rate limit or quota was reached')
+      throw new Error(`OpenAI request failed with status ${response.status}`)
+    }
+    const content = extractText(body)
+    if (!content) throw new Error('OpenAI returned an empty response')
+    return {
+      content,
+      providerId: this.id,
+      modelId: body.model ?? request.model ?? this.defaultModel,
+      ...(body.usage ? { usage: { inputTokens: body.usage.input_tokens ?? 0, outputTokens: body.usage.output_tokens ?? 0 } } : {}),
+    }
+  }
+}

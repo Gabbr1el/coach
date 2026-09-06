@@ -47,10 +47,15 @@
 - AIProviderManager independent from conversation persistence
 - HOME Planner conversation persisted locally
 - Planner panel clearly identifies local mode without external AI calls
+- BYOK metadata stored separately from credentials
+- Electron safeStorage vault with insecure Linux fallback rejected
+- OpenAI adapter using the official Responses API
+- Provider configuration dialog and explicit connection test
+- HOME Planner uses the selected provider while Coach retains the conversation
 
 ## Pending
 
-- MVP 1.1: secure BYOK credential storage and first provider adapter
+- MVP 1.2: streaming, cancellation, normalized provider errors and provider-account management
 
 ## Database
 
@@ -68,6 +73,9 @@
 - No AI, chat, Observer or code execution is included in MVP 0.
 - The HOME owns the PLANNER conversation; Workspaces will own TUTOR conversations.
 - Planner currently uses transparent local rules until a provider is explicitly connected.
+- API keys are encrypted through Electron safeStorage in restricted local files; SQLite stores only a secret reference.
+- Linux `basic_text` safeStorage is rejected instead of silently storing weakly protected credentials.
+- OpenAI is the first provider; no SDK is exposed to renderer or application contracts.
 - Application identity is frozen as `br.coach.study`, product name `Coach`.
 - A single-instance lock prevents concurrent startup migrations.
 - Renderer never receives generic IPC, filesystem, database or process APIs.
@@ -83,4 +91,4 @@
 
 ## Next Step
 
-MVP 1.1: add secure operating-system credential storage, provider configuration metadata and the first officially supported provider adapter.
+MVP 1.2: add response streaming/cancellation, user-safe normalized provider errors and multiple replaceable provider-account configurations.

@@ -9,6 +9,10 @@ export class AIProviderManager {
     this.providers.set(provider.id, provider)
   }
 
+  replace(provider: AIProvider): void {
+    this.providers.set(provider.id, provider)
+  }
+
   select(providerId: string): void {
     if (!this.providers.has(providerId)) throw new Error(`AI provider '${providerId}' is not registered`)
     this.activeProviderId = providerId
@@ -16,6 +20,15 @@ export class AIProviderManager {
 
   getActive(): AIProvider | null {
     return this.activeProviderId ? this.providers.get(this.activeProviderId) ?? null : null
+  }
+
+  clearSelection(): void {
+    this.activeProviderId = null
+  }
+
+  remove(providerId: string): void {
+    if (this.activeProviderId === providerId) this.activeProviderId = null
+    this.providers.delete(providerId)
   }
 
   list(): readonly AIProvider[] {

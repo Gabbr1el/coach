@@ -6,8 +6,9 @@ import { app } from 'electron'
 import { migrateDatabase } from './migrate'
 import * as workspaceSchema from './schema/workspaces'
 import * as conversationSchema from './schema/conversations'
+import * as providerSchema from './schema/provider-configurations'
 
-const schema = { ...workspaceSchema, ...conversationSchema }
+const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema }
 
 export interface CoachDatabase {
   readonly sqlite: Database.Database

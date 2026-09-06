@@ -8,6 +8,12 @@ import { registerWorkspaceHandlers } from './ipc/workspace-handlers'
 import { HomePlannerService } from '../application/conversations/home-planner-service'
 import { DrizzleConversationRepository } from './repositories/drizzle-conversation-repository'
 import { registerConversationHandlers } from './ipc/conversation-handlers'
+import { AIProviderManager } from '../application/ai/ai-provider-manager'
+import { ProviderConfigurationService } from '../application/ai/provider-configuration-service'
+import { DrizzleProviderConfigurationRepository } from './repositories/drizzle-provider-configuration-repository'
+import { ElectronCredentialVault } from './security/electron-credential-vault'
+import { OpenAIProvider } from './providers/openai-provider'
+import { registerProviderHandlers } from './ipc/provider-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -22,18 +28,28 @@ if (process.env['COACH_DISABLE_HARDWARE_ACCELERATION']) {
   app.commandLine.appendSwitch('disable-gpu-compositing')
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
   try {
     database = openCoachDatabase()
     const workspaceService = new WorkspaceService({
       repository: new DrizzleWorkspaceRepository(database),
     })
+    const providerManager = new AIProviderManager()
+    const providerConfigurationService = new ProviderConfigurationService(
+      new DrizzleProviderConfigurationRepository(database),
+      new ElectronCredentialVault(),
+      providerManager,
+      (apiKey, model) => new OpenAIProvider(apiKey, model),
+    )
+    await providerConfigurationService.initialize()
     const homePlannerService = new HomePlannerService({
       repository: new DrizzleConversationRepository(database),
+      providerManager,
     })
     registerApplicationHandlers()
     registerWorkspaceHandlers(workspaceService)
     registerConversationHandlers(homePlannerService)
+    registerProviderHandlers(providerConfigurationService)
     createMainWindow()
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown startup error'

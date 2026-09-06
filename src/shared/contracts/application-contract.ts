@@ -21,4 +21,5 @@ export interface CoachDesktopApi {
   codeExecution: import('./code-execution-contract').CodeExecutionApi
   observer: import('./observer-contract').ObserverApi
   planning: import('./planning-contract').PlanningApi
+  material: import('./material-contract').MaterialApi
 }

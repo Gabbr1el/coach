@@ -72,6 +72,7 @@ Execution roadmap: `ROADMAP.md`. The next vertical slice is durable project file
 - ContextRouter with MINIMAL/SESSION/WORKSPACE/DEEP plans and progressive output budgets
 - Explicit session completion, durable metrics and automatic fresh-session rollover
 - Structured study deadlines, routine notes and explainable multi-factor Workspace priorities
+- Local PDF import, page extraction, chunk persistence and scoped material search
 
 ## Pending
 

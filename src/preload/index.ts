@@ -10,6 +10,7 @@ import { STUDY_WORKSPACE_CHANNELS } from '../shared/contracts/study-workspace-ch
 import { CODE_EXECUTION_CHANNELS } from '../shared/contracts/code-execution-channels'
 import { OBSERVER_CHANNELS } from '../shared/contracts/observer-channels'
 import { PLANNING_CHANNELS } from '../shared/contracts/planning-channels'
+import { MATERIAL_CHANNELS } from '../shared/contracts/material-channels'
 
 const api: CoachDesktopApi = {
   application: {
@@ -106,6 +107,11 @@ const api: CoachDesktopApi = {
     listPriorities: () => ipcRenderer.invoke(PLANNING_CHANNELS.listPriorities),
     createDeadline: (input) => ipcRenderer.invoke(PLANNING_CHANNELS.createDeadline, input),
     addRoutineNote: (content) => ipcRenderer.invoke(PLANNING_CHANNELS.addRoutineNote, { content }),
+  },
+  material: {
+    importPdf: (workspaceId) => ipcRenderer.invoke(MATERIAL_CHANNELS.importPdf, { workspaceId }),
+    list: (workspaceId) => ipcRenderer.invoke(MATERIAL_CHANNELS.list, { workspaceId }),
+    search: (input) => ipcRenderer.invoke(MATERIAL_CHANNELS.search, input),
   },
 }
 

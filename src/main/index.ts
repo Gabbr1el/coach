@@ -26,6 +26,8 @@ import { registerObserverHandlers } from './ipc/observer-handlers'
 import { PlanningService } from '../application/planning/planning-service'
 import { DrizzlePlanningRepository } from './repositories/drizzle-planning-repository'
 import { registerPlanningHandlers } from './ipc/planning-handlers'
+import { PdfMaterialService } from './materials/pdf-material-service'
+import { registerMaterialHandlers } from './ipc/material-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -68,6 +70,7 @@ void app.whenReady().then(async () => {
     registerCodeExecutionHandlers(async (id) => Boolean(await workspaceRepository.findById(id)), observerService)
     registerObserverHandlers(observerService)
     registerPlanningHandlers(new PlanningService(new DrizzlePlanningRepository(database)))
+    registerMaterialHandlers(new PdfMaterialService(database), async (id) => Boolean(await workspaceRepository.findById(id)))
     registerProviderHandlers(providerConfigurationService)
     createMainWindow()
   } catch (error) {

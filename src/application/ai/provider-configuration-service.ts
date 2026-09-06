@@ -8,6 +8,7 @@ const OPENAI_SECRET_REFERENCE = 'provider-openai-api-key'
 
 export class ProviderConfigurationService {
   private operationQueue: Promise<void> = Promise.resolve()
+  private sessionAccount: ProviderAccountSummary | null = null
 
   constructor(
     private readonly repository: ProviderConfigurationRepository,
@@ -29,39 +30,49 @@ export class ProviderConfigurationService {
 
   async getStatus(): Promise<ProviderStatus> {
     const configuration = await this.repository.getActive()
+    const sessionActive = Boolean(this.sessionAccount && this.manager.getActiveRegistrationId() === this.sessionAccount.id)
     return {
-      configured: Boolean(configuration && this.manager.getActive() && configuration.id === this.manager.getActiveRegistrationId()),
-      providerId: configuration?.providerId ?? null,
-      providerName: configuration?.displayName ?? null,
-      model: configuration?.model ?? null,
+      configured: sessionActive || Boolean(configuration && this.manager.getActive() && configuration.id === this.manager.getActiveRegistrationId()),
+      providerId: sessionActive ? this.sessionAccount!.providerId : configuration?.providerId ?? null,
+      providerName: sessionActive ? this.sessionAccount!.providerName : configuration?.displayName ?? null,
+      model: sessionActive ? this.sessionAccount!.model : configuration?.model ?? null,
       secureStorageAvailable: this.vault.isAvailable(),
-      activeAccountId: configuration?.id ?? null,
+      activeAccountId: sessionActive ? this.sessionAccount!.id : configuration?.id ?? null,
+      sessionOnly: sessionActive,
     }
   }
 
   async listAccounts(): Promise<ProviderAccountSummary[]> {
     const operationalAccountId = this.manager.getActiveRegistrationId()
-    return (await this.repository.list()).map((configuration) => ({
+    const persisted = (await this.repository.list()).map((configuration) => ({
       id: configuration.id,
       providerId: configuration.providerId,
       providerName: configuration.displayName,
       label: configuration.label,
       model: configuration.model,
       isActive: configuration.isActive && configuration.id === operationalAccountId,
+      sessionOnly: false,
     }))
+    return this.sessionAccount ? [this.sessionAccount, ...persisted] : persisted
   }
 
-  async configureOpenAI(label: string, apiKey: string, model: string): Promise<ProviderStatus> {
-    return this.exclusive(() => this.configureOpenAIExclusive(label, apiKey, model))
+  async configureOpenAI(label: string, apiKey: string, model: string, persistence: 'secure-vault' | 'session'): Promise<ProviderStatus> {
+    return this.exclusive(() => this.configureOpenAIExclusive(label, apiKey, model, persistence))
   }
 
-  private async configureOpenAIExclusive(label: string, apiKey: string, model: string): Promise<ProviderStatus> {
-    if (!this.vault.isAvailable()) {
+  private async configureOpenAIExclusive(label: string, apiKey: string, model: string, persistence: 'secure-vault' | 'session'): Promise<ProviderStatus> {
+    if (persistence === 'secure-vault' && !this.vault.isAvailable()) {
       throw new Error('Secure operating-system credential storage is unavailable')
     }
 
     const provider = this.createOpenAIProvider(apiKey, model)
     await provider.testConnection()
+    if (persistence === 'session') {
+      const accountId = crypto.randomUUID()
+      this.sessionAccount = { id: accountId, providerId: 'openai', providerName: 'OpenAI', label, model, isActive: true, sessionOnly: true }
+      this.registerAndSelect(accountId, provider)
+      return this.getStatus()
+    }
     const accountId = crypto.randomUUID()
     const secretReference = `${OPENAI_SECRET_REFERENCE}-${accountId}`
     await this.vault.set(secretReference, apiKey)
@@ -87,6 +98,7 @@ export class ProviderConfigurationService {
       throw error
     }
     this.registerAndSelect(accountId, provider)
+    this.sessionAccount = null
     return this.getStatus()
   }
 
@@ -103,6 +115,7 @@ export class ProviderConfigurationService {
     const provider = this.createOpenAIProvider(apiKey, configuration.model)
     if (testConnection) await provider.testConnection()
     await this.repository.activate(accountId, this.now())
+    this.sessionAccount = null
     this.registerAndSelect(accountId, provider)
     return this.getStatus()
   }
@@ -113,12 +126,18 @@ export class ProviderConfigurationService {
 
   private async removeAccountExclusive(accountId: string): Promise<ProviderStatus> {
     const configuration = await this.repository.findById(accountId)
-    if (!configuration) return this.getStatus()
+    if (!configuration) {
+      if (this.sessionAccount?.id === accountId) {
+        this.manager.remove(accountId)
+        this.sessionAccount = null
+      }
+      return this.getStatus()
+    }
     if (configuration.isActive) this.manager.remove(accountId)
     await this.vault.delete(configuration.secretReference)
     const removed = await this.repository.remove(accountId)
     if (!configuration.isActive) this.manager.remove(accountId)
-    if (removed?.isActive) {
+    if (removed?.isActive && !this.sessionAccount) {
       await this.activateFirstUsable(await this.repository.list(), true)
     }
     return this.getStatus()

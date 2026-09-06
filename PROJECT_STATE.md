@@ -58,6 +58,7 @@
 - Request-scoped Planner streaming over validated IPC
 - Cancellation aborts the provider request and discards incomplete turns
 - OpenAI Responses API SSE normalized into provider-independent stream events
+- Session-only BYOK fallback when the operating-system vault is unavailable
 
 ## Pending
 
@@ -81,6 +82,7 @@
 - Planner currently uses transparent local rules until a provider is explicitly connected.
 - API keys are encrypted through Electron safeStorage in restricted local files; SQLite stores only a secret reference.
 - Linux `basic_text` safeStorage is rejected instead of silently storing weakly protected credentials.
+- Session-only keys are kept in Main process memory, never persisted, and forgotten when Coach closes.
 - OpenAI is the first provider; no SDK is exposed to renderer or application contracts.
 - Inactive provider keys remain only in the encrypted vault; adapters retain only the currently active key in memory.
 - Application identity is frozen as `br.coach.study`, product name `Coach`.

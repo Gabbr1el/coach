@@ -4,6 +4,7 @@ export const configureOpenAIInputSchema = z.object({
   label: z.string().trim().min(1).max(60),
   apiKey: z.string().trim().min(20).max(512),
   model: z.string().trim().min(1).max(100).default('gpt-5-mini'),
+  persistence: z.enum(['secure-vault', 'session']).default('secure-vault'),
 }).strict()
 
 export const providerAccountIdSchema = z.uuid()
@@ -17,6 +18,7 @@ export interface ProviderStatus {
   readonly model: string | null
   readonly secureStorageAvailable: boolean
   readonly activeAccountId: string | null
+  readonly sessionOnly: boolean
 }
 
 export interface ProviderAccountSummary {
@@ -26,6 +28,7 @@ export interface ProviderAccountSummary {
   readonly label: string
   readonly model: string
   readonly isActive: boolean
+  readonly sessionOnly: boolean
 }
 
 export interface ProviderApi {

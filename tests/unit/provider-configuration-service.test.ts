@@ -38,7 +38,7 @@ describe('ProviderConfigurationService', () => {
     const manager = new AIProviderManager()
     const service = new ProviderConfigurationService(repository, vault, manager, provider, () => 50)
 
-    const status = await service.configureOpenAI('Principal', 'secret-key-value-that-is-long-enough', 'gpt-test')
+    const status = await service.configureOpenAI('Principal', 'secret-key-value-that-is-long-enough', 'gpt-test', 'secure-vault')
 
     expect(status.configured).toBe(true)
     expect(vault.value).toBe('secret-key-value-that-is-long-enough')
@@ -48,7 +48,20 @@ describe('ProviderConfigurationService', () => {
 
   it('fails closed when secure storage is unavailable', async () => {
     const service = new ProviderConfigurationService(new MemoryConfigurationRepository(), new MemoryVault(false), new AIProviderManager(), provider)
-    await expect(service.configureOpenAI('Principal', 'secret-key-value-that-is-long-enough', 'gpt-test')).rejects.toThrow(/unavailable/)
+    await expect(service.configureOpenAI('Principal', 'secret-key-value-that-is-long-enough', 'gpt-test', 'secure-vault')).rejects.toThrow(/unavailable/)
+  })
+
+  it('allows a session-only provider when persistent secure storage is unavailable', async () => {
+    const repository = new MemoryConfigurationRepository()
+    const manager = new AIProviderManager()
+    const vault = new MemoryVault(false)
+    const service = new ProviderConfigurationService(repository, vault, manager, provider)
+
+    const status = await service.configureOpenAI('Sessão', 'secret-key-value-that-is-long-enough', 'gpt-test', 'session')
+
+    expect(status).toMatchObject({ configured: true, sessionOnly: true, secureStorageAvailable: false })
+    expect(repository.configurations).toEqual([])
+    expect(vault.value).toBeNull()
   })
 
   it('removes the active provider before a credential deletion failure', async () => {

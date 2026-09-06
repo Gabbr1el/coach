@@ -74,12 +74,11 @@ function CreateWorkspaceDialog({ open, submitting, onClose, onSubmit }: {
   )
 }
 
-function ProviderSettingsDialog({ open, status, accounts, onClose, onConfigured, onSelect, onRemove }: {
-  open: boolean
+function ProviderSettingsDialog({ status, accounts, onClose, onConfigured, onSelect, onRemove }: {
   status: ProviderStatus | null
   accounts: ProviderAccountSummary[]
   onClose: () => void
-  onConfigured: (label: string, apiKey: string, model: string) => Promise<void>
+  onConfigured: (label: string, apiKey: string, model: string, persistence: 'secure-vault' | 'session') => Promise<void>
   onSelect: (accountId: string) => Promise<void>
   onRemove: (accountId: string) => Promise<void>
 }) {
@@ -88,15 +87,16 @@ function ProviderSettingsDialog({ open, status, accounts, onClose, onConfigured,
   const [model, setModel] = useState('gpt-5-mini')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [persistence, setPersistence] = useState<'secure-vault' | 'session'>('secure-vault')
 
-  if (!open) return null
   const secureStorageUnavailable = status?.secureStorageAvailable === false
+  const effectivePersistence = secureStorageUnavailable ? 'session' : persistence
 
   async function configure() {
     setSaving(true)
     setError(null)
     try {
-      await onConfigured(label, apiKey, model)
+      await onConfigured(label, apiKey, model, effectivePersistence)
       setApiKey('')
     } catch {
       setError('A conexão falhou. Verifique a chave, o modelo e o acesso de API da conta.')
@@ -108,16 +108,17 @@ function ProviderSettingsDialog({ open, status, accounts, onClose, onConfigured,
   return (
     <div className="fixed inset-0 z-30 grid place-items-center bg-coach-ink/55 p-5 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="provider-settings-title">
       <section className="w-full max-w-lg rounded-[2rem] bg-coach-paper p-7 shadow-2xl">
-        <div className="flex items-start justify-between"><div><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">BYOK · sua chave</p><h2 id="provider-settings-title" className="mt-2 font-display text-3xl font-black">Provedor de IA</h2></div><button aria-label="Fechar" disabled={saving} onClick={onClose} className="rounded-full p-2 hover:bg-black/5"><X /></button></div>
+        <div className="flex items-start justify-between"><div><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">BYOK · sua chave</p><h2 id="provider-settings-title" className="mt-2 font-display text-3xl font-black">Provedor de IA</h2></div><button aria-label="Fechar" disabled={saving} onClick={() => { setApiKey(''); onClose() }} className="rounded-full p-2 hover:bg-black/5"><X /></button></div>
         <p className="mt-4 text-sm leading-6 text-coach-muted">A assinatura do ChatGPT não é uma chave de API. Use apenas uma chave criada oficialmente na plataforma da OpenAI. Ela não será salva no SQLite. Quando conectada, as mensagens recentes necessárias serão enviadas à API para gerar respostas, com armazenamento remoto desativado na requisição.</p>
         {accounts.length > 0 && <div className="mt-6 space-y-2">{accounts.map((account) => <div key={account.id} className={`flex items-center justify-between rounded-xl border p-3 ${account.isActive ? 'border-emerald-300 bg-emerald-50' : 'border-coach-line bg-white'}`}><div><p className="font-bold">{account.label}</p><p className="text-xs text-coach-muted">{account.providerName} · {account.model}</p></div><div className="flex gap-2">{!account.isActive && <button type="button" disabled={saving} onClick={() => { setSaving(true); setError(null); void onSelect(account.id).catch(() => setError('Não foi possível ativar esta conta. Verifique a credencial e a conexão.')).finally(() => setSaving(false)) }} className="rounded-lg border border-coach-line px-3 py-2 text-xs font-bold">Usar</button>}<button type="button" disabled={saving} onClick={() => { setSaving(true); setError(null); void onRemove(account.id).catch(() => setError('Não foi possível remover a conta com segurança.')).finally(() => setSaving(false)) }} className="rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-700">Remover</button></div></div>)}</div>}
           <form className="mt-6" onSubmit={(event) => { event.preventDefault(); void configure() }}>
-            {secureStorageUnavailable && <div className="mb-5 rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">O cofre seguro do sistema operacional não está disponível. O Coach não salvará a chave de forma insegura.</div>}
+            {secureStorageUnavailable && <div className="mb-5 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">O cofre seguro persistente não está disponível neste Linux. Você ainda pode usar a chave somente nesta sessão; ela será esquecida ao fechar o Coach.</div>}
             {error && <div className="mb-5 rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">{error}</div>}
-            <label className="block text-sm font-bold">Nome desta conta<input required maxLength={60} disabled={secureStorageUnavailable} value={label} onChange={(event) => setLabel(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 outline-none focus:border-coach-green" /></label>
-            <label className="mt-5 block text-sm font-bold">Chave de API OpenAI<input type="password" autoComplete="off" required minLength={20} maxLength={512} disabled={secureStorageUnavailable} value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="sk-…" className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 font-mono outline-none focus:border-coach-green" /></label>
-            <label className="mt-5 block text-sm font-bold">Modelo<input required maxLength={100} disabled={secureStorageUnavailable} value={model} onChange={(event) => setModel(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 outline-none focus:border-coach-green" /></label>
-            <button disabled={saving || secureStorageUnavailable || !apiKey.trim()} className="mt-6 w-full rounded-xl bg-coach-orange px-5 py-3 font-extrabold text-white disabled:opacity-45">{saving ? 'Testando conexão…' : accounts.length ? 'Adicionar e usar conta' : 'Testar e conectar'}</button>
+            <label className="block text-sm font-bold">Nome desta conta<input required maxLength={60} value={label} onChange={(event) => setLabel(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 outline-none focus:border-coach-green" /></label>
+            <label className="mt-5 block text-sm font-bold">Chave de API OpenAI<input type="password" autoComplete="off" required minLength={20} maxLength={512} value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="sk-…" className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 font-mono outline-none focus:border-coach-green" /></label>
+            <label className="mt-5 block text-sm font-bold">Modelo<input required maxLength={100} value={model} onChange={(event) => setModel(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 outline-none focus:border-coach-green" /></label>
+            <label className="mt-5 block text-sm font-bold">Armazenamento<select value={effectivePersistence} onChange={(event) => setPersistence(event.target.value as 'secure-vault' | 'session')} className="mt-2 w-full rounded-xl border border-coach-line bg-white px-4 py-3 outline-none"><option value="session">Somente nesta sessão</option>{!secureStorageUnavailable && <option value="secure-vault">Cofre seguro do sistema</option>}</select></label>
+            <button disabled={saving || !apiKey.trim()} className="mt-6 w-full rounded-xl bg-coach-orange px-5 py-3 font-extrabold text-white disabled:opacity-45">{saving ? 'Testando conexão…' : accounts.length ? 'Adicionar e usar conta' : 'Testar e conectar'}</button>
           </form>
       </section>
     </div>
@@ -291,7 +292,7 @@ export function App() {
       </section>
       <footer className="mx-auto mt-20 flex max-w-7xl justify-between border-t border-coach-line py-5 text-xs text-coach-muted"><span>Dados locais por padrão</span><span>{applicationInfo ? `${applicationInfo.name} ${applicationInfo.version} · API ${applicationInfo.apiVersion}` : 'Conectando…'}</span></footer>
       <CreateWorkspaceDialog open={dialogOpen} submitting={submitting} onClose={() => setDialogOpen(false)} onSubmit={createWorkspace} />
-      <ProviderSettingsDialog open={providerDialogOpen} status={providerStatus} accounts={providerAccounts} onClose={() => setProviderDialogOpen(false)} onConfigured={async (label, apiKey, model) => { const status = await window.coach.provider.configureOpenAI({ label, apiKey, model }); setProviderStatus(status); setProviderAccounts(await window.coach.provider.listAccounts()) }} onSelect={async (accountId) => { setProviderStatus(await window.coach.provider.selectAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} onRemove={async (accountId) => { setProviderStatus(await window.coach.provider.removeAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} />
+      {providerDialogOpen && <ProviderSettingsDialog status={providerStatus} accounts={providerAccounts} onClose={() => setProviderDialogOpen(false)} onConfigured={async (label, apiKey, model, persistence) => { const status = await window.coach.provider.configureOpenAI({ label, apiKey, model, persistence }); setProviderStatus(status); setProviderAccounts(await window.coach.provider.listAccounts()) }} onSelect={async (accountId) => { setProviderStatus(await window.coach.provider.selectAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} onRemove={async (accountId) => { setProviderStatus(await window.coach.provider.removeAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} />}
     </main>
   )
 }

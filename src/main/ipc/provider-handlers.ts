@@ -18,7 +18,7 @@ export function registerProviderHandlers(service: ProviderConfigurationService):
   ipcMain.handle(PROVIDER_CHANNELS.configureOpenAI, async (event, payload: unknown) => {
     assertTrustedSender(event)
     const input = configureOpenAIInputSchema.parse(payload)
-    return service.configureOpenAI(input.label, input.apiKey, input.model)
+    return service.configureOpenAI(input.label, input.apiKey, input.model, input.persistence)
   })
 
   ipcMain.handle(PROVIDER_CHANNELS.selectAccount, (event, payload: unknown) => {

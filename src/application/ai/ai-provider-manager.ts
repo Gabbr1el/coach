@@ -9,8 +9,8 @@ export class AIProviderManager {
     this.providers.set(provider.id, provider)
   }
 
-  replace(provider: AIProvider): void {
-    this.providers.set(provider.id, provider)
+  replace(provider: AIProvider, registrationId = provider.id): void {
+    this.providers.set(registrationId, provider)
   }
 
   select(providerId: string): void {
@@ -22,8 +22,17 @@ export class AIProviderManager {
     return this.activeProviderId ? this.providers.get(this.activeProviderId) ?? null : null
   }
 
+  getActiveRegistrationId(): string | null {
+    return this.activeProviderId
+  }
+
   clearSelection(): void {
     this.activeProviderId = null
+  }
+
+  clear(): void {
+    this.activeProviderId = null
+    this.providers.clear()
   }
 
   remove(providerId: string): void {

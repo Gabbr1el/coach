@@ -52,10 +52,13 @@
 - OpenAI adapter using the official Responses API
 - Provider configuration dialog and explicit connection test
 - HOME Planner uses the selected provider while Coach retains the conversation
+- Multiple named OpenAI accounts with explicit selection and removal
+- Provider switching reconstructs only the selected adapter and retains Coach-owned context
+- Database-enforced single active provider account
 
 ## Pending
 
-- MVP 1.2: streaming, cancellation, normalized provider errors and provider-account management
+- MVP 1.3: streaming, cancellation and structured user-safe provider errors
 
 ## Database
 
@@ -76,6 +79,7 @@
 - API keys are encrypted through Electron safeStorage in restricted local files; SQLite stores only a secret reference.
 - Linux `basic_text` safeStorage is rejected instead of silently storing weakly protected credentials.
 - OpenAI is the first provider; no SDK is exposed to renderer or application contracts.
+- Inactive provider keys remain only in the encrypted vault; adapters retain only the currently active key in memory.
 - Application identity is frozen as `br.coach.study`, product name `Coach`.
 - A single-instance lock prevents concurrent startup migrations.
 - Renderer never receives generic IPC, filesystem, database or process APIs.
@@ -91,4 +95,4 @@
 
 ## Next Step
 
-MVP 1.2: add response streaming/cancellation, user-safe normalized provider errors and multiple replaceable provider-account configurations.
+MVP 1.3: add response streaming and cancellation over a request-scoped IPC protocol, plus structured user-safe provider errors.

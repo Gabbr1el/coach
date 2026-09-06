@@ -1,6 +1,8 @@
 export interface ProviderConfiguration {
+  readonly id: string
   readonly providerId: 'openai'
   readonly displayName: string
+  readonly label: string
   readonly model: string
   readonly secretReference: string
   readonly isActive: boolean
@@ -10,6 +12,9 @@ export interface ProviderConfiguration {
 
 export interface ProviderConfigurationRepository {
   getActive(): Promise<ProviderConfiguration | null>
-  upsert(configuration: ProviderConfiguration): Promise<void>
-  disconnect(providerId: 'openai', updatedAt: number): Promise<void>
+  findById(id: string): Promise<ProviderConfiguration | null>
+  list(): Promise<ProviderConfiguration[]>
+  createAndActivate(configuration: ProviderConfiguration): Promise<void>
+  activate(id: string, updatedAt: number): Promise<void>
+  remove(id: string): Promise<ProviderConfiguration | null>
 }

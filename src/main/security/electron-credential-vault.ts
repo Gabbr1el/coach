@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { app, safeStorage } from 'electron'
 import type { CredentialVault } from '../../application/ai/credential-vault'
@@ -31,6 +31,20 @@ export class ElectronCredentialVault implements CredentialVault {
 
   async delete(reference: string): Promise<void> {
     await rm(this.pathFor(reference), { force: true })
+  }
+
+  async removeOrphans(validReferences: ReadonlySet<string>): Promise<void> {
+    let files: string[]
+    try {
+      files = await readdir(this.directory)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw error
+    }
+    await Promise.all(files.filter((file) => file.endsWith('.bin')).map(async (file) => {
+      const reference = file.slice(0, -4)
+      if (!validReferences.has(reference)) await this.delete(reference)
+    }))
   }
 
   private pathFor(reference: string): string {

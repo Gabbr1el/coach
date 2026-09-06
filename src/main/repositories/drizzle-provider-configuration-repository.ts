@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm'
+import { and, desc, eq, ne } from 'drizzle-orm'
 import type { ProviderConfiguration, ProviderConfigurationRepository } from '../../application/ai/provider-configuration-repository'
 import type { CoachDatabase } from '../database/connection'
 import { providerConfigurations } from '../database/schema/provider-configurations'
@@ -10,20 +10,30 @@ export class DrizzleProviderConfigurationRepository implements ProviderConfigura
     return this.database.orm.select().from(providerConfigurations).where(eq(providerConfigurations.isActive, true)).get() ?? null
   }
 
-  async upsert(configuration: ProviderConfiguration): Promise<void> {
-    this.database.orm.insert(providerConfigurations).values(configuration).onConflictDoUpdate({
-      target: providerConfigurations.providerId,
-      set: {
-        displayName: configuration.displayName,
-        model: configuration.model,
-        secretReference: configuration.secretReference,
-        isActive: true,
-        updatedAt: configuration.updatedAt,
-      },
-    }).run()
+  async findById(id: string): Promise<ProviderConfiguration | null> {
+    return this.database.orm.select().from(providerConfigurations).where(eq(providerConfigurations.id, id)).get() ?? null
   }
 
-  async disconnect(providerId: 'openai', updatedAt: number): Promise<void> {
-    this.database.orm.update(providerConfigurations).set({ isActive: false, updatedAt }).where(eq(providerConfigurations.providerId, providerId)).run()
+  async list(): Promise<ProviderConfiguration[]> {
+    return this.database.orm.select().from(providerConfigurations).orderBy(desc(providerConfigurations.updatedAt), desc(providerConfigurations.createdAt), desc(providerConfigurations.id)).all()
+  }
+
+  async createAndActivate(configuration: ProviderConfiguration): Promise<void> {
+    this.database.sqlite.transaction(() => {
+      this.database.orm.update(providerConfigurations).set({ isActive: false }).where(eq(providerConfigurations.isActive, true)).run()
+      this.database.orm.insert(providerConfigurations).values(configuration).run()
+    })()
+  }
+
+  async activate(id: string, updatedAt: number): Promise<void> {
+    this.database.sqlite.transaction(() => {
+      this.database.orm.update(providerConfigurations).set({ isActive: false }).where(and(eq(providerConfigurations.isActive, true), ne(providerConfigurations.id, id))).run()
+      const selected = this.database.orm.update(providerConfigurations).set({ isActive: true, updatedAt }).where(eq(providerConfigurations.id, id)).returning({ id: providerConfigurations.id }).get()
+      if (!selected) throw new Error('Provider account not found')
+    })()
+  }
+
+  async remove(id: string): Promise<ProviderConfiguration | null> {
+    return this.database.orm.delete(providerConfigurations).where(eq(providerConfigurations.id, id)).returning().get() ?? null
   }
 }

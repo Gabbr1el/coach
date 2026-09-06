@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `provider_configurations_single_active_idx` ON `provider_configurations` (`is_active`) WHERE "provider_configurations"."is_active" = 1;

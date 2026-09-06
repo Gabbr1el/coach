@@ -23,8 +23,10 @@ const api: CoachDesktopApi = {
   },
   provider: {
     getStatus: () => ipcRenderer.invoke(PROVIDER_CHANNELS.getStatus),
+    listAccounts: () => ipcRenderer.invoke(PROVIDER_CHANNELS.listAccounts),
     configureOpenAI: (input) => ipcRenderer.invoke(PROVIDER_CHANNELS.configureOpenAI, input),
-    disconnect: (providerId) => ipcRenderer.invoke(PROVIDER_CHANNELS.disconnect, providerId),
+    selectAccount: (accountId) => ipcRenderer.invoke(PROVIDER_CHANNELS.selectAccount, accountId),
+    removeAccount: (accountId) => ipcRenderer.invoke(PROVIDER_CHANNELS.removeAccount, accountId),
   },
 }
 

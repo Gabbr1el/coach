@@ -22,6 +22,20 @@
       "when": 1788653308040,
       "tag": "0002_salty_speed_demon",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1788654752279,
+      "tag": "0003_chunky_gravity",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1788655370560,
+      "tag": "0004_abnormal_vapor",
+      "breakpoints": true
     }
   ]
 }

@@ -69,6 +69,7 @@ Execution roadmap: `ROADMAP.md`. The next vertical slice is durable project file
 - Persistent study Workspace with guided plan, editor draft, notes, focus timer and AI context
 - Monaco learning editor and controlled Python execution with timeout, output limits and error signatures
 - Visible local Observer with focus events, structured executions and repeated-error loop detection
+- ContextRouter with MINIMAL/SESSION/WORKSPACE/DEEP plans and progressive output budgets
 
 ## Pending
 

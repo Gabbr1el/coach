@@ -55,17 +55,13 @@ void app.whenReady().then(async () => {
       repository: new DrizzleConversationRepository(database),
       providerManager,
     })
-    const workspaceCoachService = new WorkspaceCoachService({
-      repository: new DrizzleConversationRepository(database),
-      providerManager,
-      getWorkspace: (id) => workspaceRepository.findById(id),
-    })
     const studyWorkspaceService = new StudyWorkspaceService({ repository: new DrizzleStudyWorkspaceRepository(database), getWorkspace: (id) => workspaceRepository.findById(id) })
+    const observerService = new ObserverService(new DrizzleObserverRepository(database))
+    const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id) })
     registerApplicationHandlers()
     registerWorkspaceHandlers(workspaceService)
     registerConversationHandlers(homePlannerService, workspaceCoachService)
     registerStudyWorkspaceHandlers(studyWorkspaceService)
-    const observerService = new ObserverService(new DrizzleObserverRepository(database))
     registerCodeExecutionHandlers(async (id) => Boolean(await workspaceRepository.findById(id)), observerService)
     registerObserverHandlers(observerService)
     registerProviderHandlers(providerConfigurationService)

@@ -8,14 +8,16 @@ import type { StudySessionSummary, StudyWorkspaceState } from '../../shared/cont
 import type { CodeExecutionResult } from '../../shared/contracts/code-execution-contract'
 import { WorkspaceEditor } from './WorkspaceEditor'
 import type { ObserverState } from '../../shared/contracts/observer-contract'
+import type { WorkspacePriority } from '../../shared/contracts/planning-contract'
 
 function relativeDate(timestamp: number | null): string {
   if (!timestamp) return 'Ainda não aberto'
   return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(timestamp)
 }
 
-function WorkspaceCard({ workspace, onOpen, onArchive }: {
+function WorkspaceCard({ workspace, priority, onOpen, onArchive }: {
   workspace: WorkspaceSummary
+  priority: WorkspacePriority | undefined
   onOpen: (id: string) => void
   onArchive: (id: string) => void
 }) {
@@ -29,14 +31,28 @@ function WorkspaceCard({ workspace, onOpen, onArchive }: {
           <MoreHorizontal size={19} />
         </button>
       </div>
+      <div className="mt-5 flex items-center justify-between"><span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase ${priority?.level === 'urgent' ? 'bg-red-100 text-red-700' : priority?.level === 'attention' ? 'bg-coach-yellow/30 text-amber-800' : priority ? 'bg-coach-green/10 text-coach-green' : 'bg-black/5 text-coach-muted'}`}>{priority?.level === 'urgent' ? 'Urgente' : priority?.level === 'attention' ? 'Atenção' : priority ? 'Em dia' : 'Sem dados'}</span>{priority && <span className="text-xs font-black text-coach-muted">prioridade {priority.score}</span>}</div>
       <h2 className="mt-7 font-display text-2xl font-extrabold">{workspace.name}</h2>
-      <p className="mt-2 min-h-12 text-sm leading-6 text-coach-muted">{workspace.objective || 'Objetivo ainda não definido.'}</p>
+      <p className="mt-2 min-h-12 text-sm leading-6 text-coach-muted">{priority?.reason ?? workspace.objective ?? 'Objetivo ainda não definido.'}</p>
       <div className="mt-7 flex items-center justify-between border-t border-coach-line pt-4">
         <span className="text-xs text-coach-muted">Último acesso: {relativeDate(workspace.lastOpenedAt)}</span>
         <button onClick={() => onOpen(workspace.id)} className="rounded-xl bg-coach-ink px-4 py-2 text-sm font-extrabold text-white hover:bg-coach-green">Abrir</button>
       </div>
     </article>
   )
+}
+
+function DeadlineDialog({ open, workspaces, onClose, onSubmit }: { open: boolean; workspaces: WorkspaceSummary[]; onClose(): void; onSubmit(input: { workspaceId: string; title: string; dueAt: number; estimatedMinutes: number; masteryPercent: number }): Promise<void> }) {
+  const [workspaceId, setWorkspaceId] = useState('')
+  const [title, setTitle] = useState('Prova')
+  const [dueDate, setDueDate] = useState('')
+  const [estimatedMinutes, setEstimatedMinutes] = useState(120)
+  const [masteryPercent, setMasteryPercent] = useState(50)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  if (!open) return null
+  const selectedId = workspaceId || workspaces[0]?.id || ''
+  return <div className="fixed inset-0 z-30 grid place-items-center bg-black/35 p-5" onMouseDown={onClose}><form className="w-full max-w-lg rounded-[2rem] bg-coach-paper p-7 shadow-2xl" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); if (!selectedId || !dueDate || saving) return; setSaving(true); setSaveError(null); void onSubmit({ workspaceId: selectedId, title, dueAt: new Date(`${dueDate}T23:59:59`).getTime(), estimatedMinutes, masteryPercent }).catch(() => setSaveError('Não foi possível salvar este prazo.')).finally(() => setSaving(false)) }}><div className="flex items-center justify-between"><div><p className="text-xs font-black uppercase tracking-wider text-coach-green">Planejamento local</p><h2 className="font-display text-2xl font-black">Adicionar prazo</h2></div><button type="button" onClick={onClose}><X /></button></div><label className="mt-6 block text-xs font-black uppercase text-coach-muted">Workspace<select value={selectedId} onChange={(event) => setWorkspaceId(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-white p-3 text-sm normal-case text-coach-ink">{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label><label className="mt-4 block text-xs font-black uppercase text-coach-muted">Título<input value={title} maxLength={160} onChange={(event) => setTitle(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-white p-3 text-sm normal-case text-coach-ink" /></label><div className="mt-4 grid gap-4 sm:grid-cols-2"><label className="text-xs font-black uppercase text-coach-muted">Data<input required type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-white p-3 text-sm text-coach-ink" /></label><label className="text-xs font-black uppercase text-coach-muted">Carga estimada (min)<input type="number" min="1" max="100000" value={estimatedMinutes} onChange={(event) => setEstimatedMinutes(Number(event.target.value))} className="mt-2 w-full rounded-xl border border-coach-line bg-white p-3 text-sm text-coach-ink" /></label></div><label className="mt-4 block text-xs font-black uppercase text-coach-muted">Domínio atual: {masteryPercent}%<input type="range" min="0" max="100" value={masteryPercent} onChange={(event) => setMasteryPercent(Number(event.target.value))} className="mt-3 w-full accent-coach-green" /></label>{saveError && <p className="mt-4 text-sm text-red-700">{saveError}</p>}<button disabled={saving} className="mt-6 w-full rounded-xl bg-coach-orange px-5 py-3 font-black text-white disabled:opacity-50">{saving ? 'Salvando…' : 'Salvar e recalcular prioridades'}</button></form></div>
 }
 
 function CreateWorkspaceDialog({ open, submitting, onClose, onSubmit }: {
@@ -196,6 +212,8 @@ export function App() {
   const [timerUpdating, setTimerUpdating] = useState(false)
   const [sessionHistory, setSessionHistory] = useState<StudySessionSummary[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [priorities, setPriorities] = useState<WorkspacePriority[]>([])
+  const [deadlineOpen, setDeadlineOpen] = useState(false)
   const studyStateRef = useRef<StudyWorkspaceState | null>(null)
   const editorContentRef = useRef('')
   const studyNotesRef = useRef('')
@@ -217,6 +235,7 @@ export function App() {
     void window.coach.application.getInfo().then(setApplicationInfo).catch(() => setError('A integração desktop está indisponível.'))
     void loadWorkspaces()
     void window.coach.conversation.listHomeMessages().then(setMessages).catch(() => setPlannerError('Não foi possível carregar a conversa do Planner.')).finally(() => setPlannerLoading(false))
+    void window.coach.planning.listPriorities().then(setPriorities)
     void window.coach.provider.getStatus().then(setProviderStatus).catch(() => setError('Não foi possível consultar a configuração de IA.'))
     void window.coach.provider.listAccounts().then(setProviderAccounts).catch(() => setError('Não foi possível listar as contas de IA.'))
   }, [loadWorkspaces])
@@ -456,7 +475,7 @@ export function App() {
     }
     return (
       <main className="min-h-screen bg-[#f5f3ec] text-coach-ink">
-        <header className="flex min-h-16 flex-wrap items-center justify-between gap-4 border-b border-coach-line bg-white/85 px-5 py-3"><div className="flex items-center gap-4"><button onClick={() => setSelected(null)} className="grid size-10 place-items-center rounded-xl bg-coach-ink text-white" aria-label="Voltar à Home"><ArrowLeft size={18} /></button><div><h1 className="font-display text-lg font-black">{selected.name}</h1><p className="text-xs text-coach-muted">{selected.objective || 'Workspace de estudos'}</p></div></div><div className="flex items-center gap-3"><span className="hidden text-xs font-bold text-coach-muted sm:block">Sessão ativa · {studyState ? new Date(studyState.sessionStartedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '...'}</span><button onClick={() => { setHistoryOpen(true); void window.coach.studyWorkspace.listSessionHistory(selected.id).then(setSessionHistory).catch(() => setWorkspaceError('Não foi possível carregar o histórico.')) }} className="rounded-xl border border-coach-line px-4 py-2 text-sm font-bold">Histórico</button><button onClick={() => setNotesOpen((open) => !open)} className="rounded-xl border border-coach-line px-4 py-2 text-sm font-bold">Anotações</button><button disabled={!studyState || sessionCompleting || executing || planUpdating || timerUpdating} onClick={() => { if (!studyState || !window.confirm('Finalizar esta sessão e iniciar uma nova?')) return; if (!flushStudyDrafts(selected.id)) return; const workspaceId = selected.id; const epoch = workspaceLoadEpoch.current; setSessionCompleting(true); void window.coach.studyWorkspace.completeSession(workspaceId).then((state) => { if (workspaceLoadEpoch.current !== epoch) return; setStudyState(state); setObserverState({ active: true, repeatedErrorCount: 0, interventionSuggested: false, focusExitCount: 0, timeAwaySeconds: 0 }); setTimerNow(Date.now()) }).catch(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceError('Não foi possível finalizar a sessão.') }).finally(() => { if (workspaceLoadEpoch.current === epoch) setSessionCompleting(false) }) }} className="rounded-xl bg-coach-orange px-4 py-2 text-sm font-black text-white disabled:opacity-40">{sessionCompleting ? 'Finalizando…' : 'Finalizar sessão'}</button></div></header>
+        <header className="flex min-h-16 flex-wrap items-center justify-between gap-4 border-b border-coach-line bg-white/85 px-5 py-3"><div className="flex items-center gap-4"><button onClick={() => { setSelected(null); void window.coach.planning.listPriorities().then(setPriorities) }} className="grid size-10 place-items-center rounded-xl bg-coach-ink text-white" aria-label="Voltar à Home"><ArrowLeft size={18} /></button><div><h1 className="font-display text-lg font-black">{selected.name}</h1><p className="text-xs text-coach-muted">{selected.objective || 'Workspace de estudos'}</p></div></div><div className="flex items-center gap-3"><span className="hidden text-xs font-bold text-coach-muted sm:block">Sessão ativa · {studyState ? new Date(studyState.sessionStartedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '...'}</span><button onClick={() => { setHistoryOpen(true); void window.coach.studyWorkspace.listSessionHistory(selected.id).then(setSessionHistory).catch(() => setWorkspaceError('Não foi possível carregar o histórico.')) }} className="rounded-xl border border-coach-line px-4 py-2 text-sm font-bold">Histórico</button><button onClick={() => setNotesOpen((open) => !open)} className="rounded-xl border border-coach-line px-4 py-2 text-sm font-bold">Anotações</button><button disabled={!studyState || sessionCompleting || executing || planUpdating || timerUpdating} onClick={() => { if (!studyState || !window.confirm('Finalizar esta sessão e iniciar uma nova?')) return; if (!flushStudyDrafts(selected.id)) return; const workspaceId = selected.id; const epoch = workspaceLoadEpoch.current; setSessionCompleting(true); void window.coach.studyWorkspace.completeSession(workspaceId).then((state) => { if (workspaceLoadEpoch.current !== epoch) return; setStudyState(state); setObserverState({ active: true, repeatedErrorCount: 0, interventionSuggested: false, focusExitCount: 0, timeAwaySeconds: 0 }); setTimerNow(Date.now()) }).catch(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceError('Não foi possível finalizar a sessão.') }).finally(() => { if (workspaceLoadEpoch.current === epoch) setSessionCompleting(false) }) }} className="rounded-xl bg-coach-orange px-4 py-2 text-sm font-black text-white disabled:opacity-40">{sessionCompleting ? 'Finalizando…' : 'Finalizar sessão'}</button></div></header>
         {workspaceError && <div className="border-b border-red-200 bg-red-50 px-5 py-3 text-sm text-red-800">{workspaceError}</div>}
         <section className="grid min-h-[calc(100dvh-4rem)] xl:grid-cols-[285px_minmax(480px,1fr)_350px]">
           <aside className="border-r border-coach-line bg-[#faf9f4] p-6"><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Seu roteiro</p><div className="mt-5 flex items-center justify-between"><h2 className="font-display text-xl font-black">Plano de hoje</h2><span className="text-xs font-bold text-coach-muted">{completedItems} de {studyState?.plan.length ?? 0}</span></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-coach-line"><div className="h-full bg-coach-green transition-all" style={{ width: `${studyState?.plan.length ? completedItems / studyState.plan.length * 100 : 0}%` }} /></div><div className="mt-7 space-y-2">{studyState?.plan.map((item) => <button disabled={planUpdating || sessionCompleting} key={item.id} onClick={() => { const workspaceId = selected.id; const epoch = workspaceLoadEpoch.current; setPlanUpdating(true); void window.coach.studyWorkspace.togglePlanItem({ workspaceId, itemId: item.id }).then(applyStudyState(workspaceId, epoch)).finally(() => { if (workspaceLoadEpoch.current === epoch) setPlanUpdating(false) }) }} className={`flex w-full gap-3 rounded-2xl p-3 text-left ${item.status === 'active' ? 'bg-coach-yellow/25' : 'hover:bg-black/4'}`}><span className={`mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border ${item.status === 'completed' ? 'border-coach-green bg-coach-green text-white' : 'border-coach-line'}`}>{item.status === 'completed' ? '✓' : ''}</span><span><strong className={`block text-sm ${item.status === 'completed' ? 'line-through opacity-50' : ''}`}>{item.title}</strong><small className="text-coach-muted">{item.durationMinutes} min</small></span></button>)}</div><div className="mt-8 rounded-2xl border border-coach-yellow/50 bg-coach-yellow/15 p-4"><p className="text-sm font-black">Dica do Coach</p><p className="mt-2 text-xs leading-5 text-coach-muted">Tente explicar sua estratégia antes de pedir a solução. O Coach intervém quando detectar um desvio ou erro provável.</p></div></aside>
@@ -473,7 +492,7 @@ export function App() {
     <main className="min-h-screen px-6 py-8 text-coach-ink md:px-10 lg:px-16">
       <header className="mx-auto flex max-w-7xl items-center justify-between">
         <div className="flex items-center gap-3"><div className="grid size-11 place-items-center rounded-2xl rounded-bl-md bg-coach-ink font-display text-sm font-black text-white">CO</div><div><p className="font-display text-lg font-extrabold leading-none">Coach</p><p className="mt-1 text-xs text-coach-muted">Seu sistema de estudos</p></div></div>
-        <div className="flex items-center gap-3"><button onClick={() => setProviderDialogOpen(true)} className="rounded-xl border border-coach-line bg-white/60 px-4 py-2.5 text-sm font-bold">{providerStatus?.configured ? 'IA conectada' : 'Conectar IA'}</button><button onClick={() => setDialogOpen(true)} className="flex items-center gap-2 rounded-xl bg-coach-orange px-4 py-2.5 text-sm font-extrabold text-white"><Plus size={18} /> Novo Workspace</button></div>
+        <div className="flex items-center gap-3"><button disabled={!workspaces.length} onClick={() => setDeadlineOpen(true)} className="rounded-xl border border-coach-line bg-white/60 px-4 py-2.5 text-sm font-bold disabled:opacity-40">Adicionar prazo</button><button onClick={() => setProviderDialogOpen(true)} className="rounded-xl border border-coach-line bg-white/60 px-4 py-2.5 text-sm font-bold">{providerStatus?.configured ? 'IA conectada' : 'Conectar IA'}</button><button onClick={() => setDialogOpen(true)} className="flex items-center gap-2 rounded-xl bg-coach-orange px-4 py-2.5 text-sm font-extrabold text-white"><Plus size={18} /> Novo Workspace</button></div>
       </header>
 
       <section className="mx-auto mt-20 max-w-7xl">
@@ -481,7 +500,7 @@ export function App() {
         {error && <div role="alert" className="mt-7 rounded-xl border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>}
         <div className="mt-12 grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_390px]">
           <div>{loading ? <p className="text-coach-muted">Carregando Workspaces…</p> : workspaces.length ? (
-          <div className="grid gap-5 md:grid-cols-2">{workspaces.map((workspace) => <WorkspaceCard key={workspace.id} workspace={workspace} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} />)}</div>
+          <div className="grid gap-5 md:grid-cols-2">{workspaces.map((workspace) => <WorkspaceCard key={workspace.id} workspace={workspace} priority={priorities.find((priority) => priority.workspaceId === workspace.id)} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} />)}</div>
         ) : (
           <div className="grid gap-5">
             <section className="relative overflow-hidden rounded-[2rem] border border-coach-line bg-white/70 p-8 shadow-soft backdrop-blur-xl"><div className="absolute -right-16 -top-16 size-52 rounded-full bg-coach-yellow/25 blur-2xl" /><div className="relative"><div className="grid size-12 place-items-center rounded-2xl bg-coach-green/10 text-coach-green"><BookOpen size={23} /></div><h2 className="mt-7 font-display text-3xl font-extrabold">Ainda não há Workspaces</h2><p className="mt-3 max-w-xl leading-7 text-coach-muted">Crie um ambiente para uma matéria, informe seu objetivo e o Coach manterá esse contexto separado dos demais estudos.</p><button onClick={() => setDialogOpen(true)} className="mt-8 inline-flex items-center gap-3 rounded-xl bg-coach-orange px-5 py-3 font-extrabold text-white"><Plus size={18} /> Criar primeiro Workspace</button></div></section>
@@ -506,6 +525,7 @@ export function App() {
       </section>
       <footer className="mx-auto mt-20 flex max-w-7xl justify-between border-t border-coach-line py-5 text-xs text-coach-muted"><span>Dados locais por padrão</span><span>{applicationInfo ? `${applicationInfo.name} ${applicationInfo.version} · API ${applicationInfo.apiVersion}` : 'Conectando…'}</span></footer>
       <CreateWorkspaceDialog open={dialogOpen} submitting={submitting} onClose={() => setDialogOpen(false)} onSubmit={createWorkspace} />
+      <DeadlineDialog open={deadlineOpen} workspaces={workspaces} onClose={() => setDeadlineOpen(false)} onSubmit={async (input) => { await window.coach.planning.createDeadline(input); setPriorities(await window.coach.planning.listPriorities()); setDeadlineOpen(false) }} />
       {providerDialogOpen && <ProviderSettingsDialog status={providerStatus} accounts={providerAccounts} onClose={() => setProviderDialogOpen(false)} onConfigured={async (label, apiKey, model, persistence) => { const result = await window.coach.provider.configureOpenAI({ label, apiKey, model, persistence }); if (result.ok) { setProviderStatus(result.status); setProviderAccounts(await window.coach.provider.listAccounts()) } return result }} onConfiguredCompatible={async (label, baseUrl, apiKey, model, persistence) => { const result = await window.coach.provider.configureCompatible({ label, baseUrl, apiKey, model, persistence }); if (result.ok) { setProviderStatus(result.status); setProviderAccounts(await window.coach.provider.listAccounts()) } return result }} onSelect={async (accountId) => { setProviderStatus(await window.coach.provider.selectAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} onRemove={async (accountId) => { setProviderStatus(await window.coach.provider.removeAccount(accountId)); setProviderAccounts(await window.coach.provider.listAccounts()) }} />}
     </main>
   )

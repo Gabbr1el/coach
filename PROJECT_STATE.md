@@ -71,6 +71,7 @@ Execution roadmap: `ROADMAP.md`. The next vertical slice is durable project file
 - Visible local Observer with focus events, structured executions and repeated-error loop detection
 - ContextRouter with MINIMAL/SESSION/WORKSPACE/DEEP plans and progressive output budgets
 - Explicit session completion, durable metrics and automatic fresh-session rollover
+- Structured study deadlines, routine notes and explainable multi-factor Workspace priorities
 
 ## Pending
 

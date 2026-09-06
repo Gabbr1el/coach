@@ -20,4 +20,5 @@ export interface CoachDesktopApi {
   studyWorkspace: import('./study-workspace-contract').StudyWorkspaceApi
   codeExecution: import('./code-execution-contract').CodeExecutionApi
   observer: import('./observer-contract').ObserverApi
+  planning: import('./planning-contract').PlanningApi
 }

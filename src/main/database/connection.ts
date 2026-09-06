@@ -9,8 +9,9 @@ import * as conversationSchema from './schema/conversations'
 import * as providerSchema from './schema/provider-configurations'
 import * as studyWorkspaceSchema from './schema/study-workspaces'
 import * as learningEventSchema from './schema/learning-events'
+import * as planningSchema from './schema/planning'
 
-const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema, ...studyWorkspaceSchema, ...learningEventSchema }
+const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema, ...studyWorkspaceSchema, ...learningEventSchema, ...planningSchema }
 
 export interface CoachDatabase {
   readonly sqlite: Database.Database

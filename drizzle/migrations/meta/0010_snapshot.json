@@ -1,0 +1,1054 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "b2daf452-f830-4d62-802a-d6ee0cb8a51c",
+  "prevId": "007fee53-e320-4055-a847-66cf23312162",
+  "tables": {
+    "conversation_messages": {
+      "name": "conversation_messages",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "thread_id": {
+          "name": "thread_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider_id": {
+          "name": "provider_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "model_id": {
+          "name": "model_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sequence": {
+          "name": "sequence",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "conversation_messages_thread_sequence_idx": {
+          "name": "conversation_messages_thread_sequence_idx",
+          "columns": [
+            "thread_id",
+            "sequence"
+          ],
+          "isUnique": true
+        },
+        "conversation_messages_thread_created_idx": {
+          "name": "conversation_messages_thread_created_idx",
+          "columns": [
+            "thread_id",
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "conversation_messages_thread_id_conversation_threads_id_fk": {
+          "name": "conversation_messages_thread_id_conversation_threads_id_fk",
+          "tableFrom": "conversation_messages",
+          "tableTo": "conversation_threads",
+          "columnsFrom": [
+            "thread_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "conversation_messages_role_check": {
+          "name": "conversation_messages_role_check",
+          "value": "\"conversation_messages\".\"role\" in ('user', 'assistant', 'system')"
+        }
+      }
+    },
+    "conversation_threads": {
+      "name": "conversation_threads",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "scope": {
+          "name": "scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "conversation_threads_workspace_id_workspaces_id_fk": {
+          "name": "conversation_threads_workspace_id_workspaces_id_fk",
+          "tableFrom": "conversation_threads",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "conversation_threads_scope_check": {
+          "name": "conversation_threads_scope_check",
+          "value": "\"conversation_threads\".\"scope\" in ('home', 'workspace')"
+        },
+        "conversation_threads_scope_workspace_check": {
+          "name": "conversation_threads_scope_workspace_check",
+          "value": "(\"conversation_threads\".\"scope\" = 'home' and \"conversation_threads\".\"workspace_id\" is null) or (\"conversation_threads\".\"scope\" = 'workspace' and \"conversation_threads\".\"workspace_id\" is not null)"
+        }
+      }
+    },
+    "learning_events": {
+      "name": "learning_events",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "payload_json": {
+          "name": "payload_json",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'{}'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "learning_events_session_created_idx": {
+          "name": "learning_events_session_created_idx",
+          "columns": [
+            "session_id",
+            "created_at"
+          ],
+          "isUnique": false
+        },
+        "learning_events_workspace_type_idx": {
+          "name": "learning_events_workspace_type_idx",
+          "columns": [
+            "workspace_id",
+            "type",
+            "created_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "learning_events_workspace_id_workspaces_id_fk": {
+          "name": "learning_events_workspace_id_workspaces_id_fk",
+          "tableFrom": "learning_events",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "learning_events_session_id_study_sessions_id_fk": {
+          "name": "learning_events_session_id_study_sessions_id_fk",
+          "tableFrom": "learning_events",
+          "tableTo": "study_sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "learning_events_type_check": {
+          "name": "learning_events_type_check",
+          "value": "\"learning_events\".\"type\" in ('session_started','session_completed','window_blurred','window_focused','code_executed','execution_error','possible_learning_loop','plan_item_changed')"
+        }
+      }
+    },
+    "routine_notes": {
+      "name": "routine_notes",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "study_deadlines": {
+      "name": "study_deadlines",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "due_at": {
+          "name": "due_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "estimated_minutes": {
+          "name": "estimated_minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 120
+        },
+        "mastery_percent": {
+          "name": "mastery_percent",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 50
+        },
+        "completed": {
+          "name": "completed",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "study_deadlines_due_idx": {
+          "name": "study_deadlines_due_idx",
+          "columns": [
+            "due_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "study_deadlines_workspace_id_workspaces_id_fk": {
+          "name": "study_deadlines_workspace_id_workspaces_id_fk",
+          "tableFrom": "study_deadlines",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "study_deadlines_mastery_check": {
+          "name": "study_deadlines_mastery_check",
+          "value": "\"study_deadlines\".\"mastery_percent\" between 0 and 100"
+        },
+        "study_deadlines_minutes_check": {
+          "name": "study_deadlines_minutes_check",
+          "value": "\"study_deadlines\".\"estimated_minutes\" between 1 and 100000"
+        }
+      }
+    },
+    "provider_configurations": {
+      "name": "provider_configurations",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "provider_id": {
+          "name": "provider_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "base_url": {
+          "name": "base_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "model": {
+          "name": "model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "secret_reference": {
+          "name": "secret_reference",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "provider_configurations_single_active_idx": {
+          "name": "provider_configurations_single_active_idx",
+          "columns": [
+            "is_active"
+          ],
+          "isUnique": true,
+          "where": "\"provider_configurations\".\"is_active\" = 1"
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "provider_configurations_provider_check": {
+          "name": "provider_configurations_provider_check",
+          "value": "\"provider_configurations\".\"provider_id\" in ('openai', 'openai-compatible')"
+        },
+        "provider_configurations_secret_reference_check": {
+          "name": "provider_configurations_secret_reference_check",
+          "value": "length(trim(\"provider_configurations\".\"secret_reference\")) > 0"
+        },
+        "provider_configurations_label_check": {
+          "name": "provider_configurations_label_check",
+          "value": "length(trim(\"provider_configurations\".\"label\")) between 1 and 60"
+        },
+        "provider_configurations_base_url_check": {
+          "name": "provider_configurations_base_url_check",
+          "value": "(\"provider_configurations\".\"provider_id\" = 'openai' and \"provider_configurations\".\"base_url\" is null) or (\"provider_configurations\".\"provider_id\" = 'openai-compatible' and \"provider_configurations\".\"base_url\" is not null and length(trim(\"provider_configurations\".\"base_url\")) > 0)"
+        }
+      }
+    },
+    "study_plan_items": {
+      "name": "study_plan_items",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "duration_minutes": {
+          "name": "duration_minutes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "position": {
+          "name": "position",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'pending'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "study_plan_items_session_position_idx": {
+          "name": "study_plan_items_session_position_idx",
+          "columns": [
+            "session_id",
+            "position"
+          ],
+          "isUnique": true
+        },
+        "study_plan_items_one_active_idx": {
+          "name": "study_plan_items_one_active_idx",
+          "columns": [
+            "session_id"
+          ],
+          "isUnique": true,
+          "where": "\"study_plan_items\".\"status\" = 'active'"
+        },
+        "study_plan_items_workspace_idx": {
+          "name": "study_plan_items_workspace_idx",
+          "columns": [
+            "workspace_id",
+            "updated_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "study_plan_items_workspace_id_workspaces_id_fk": {
+          "name": "study_plan_items_workspace_id_workspaces_id_fk",
+          "tableFrom": "study_plan_items",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "study_plan_items_session_id_study_sessions_id_fk": {
+          "name": "study_plan_items_session_id_study_sessions_id_fk",
+          "tableFrom": "study_plan_items",
+          "tableTo": "study_sessions",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "study_plan_items_title_check": {
+          "name": "study_plan_items_title_check",
+          "value": "length(trim(\"study_plan_items\".\"title\")) between 1 and 160"
+        },
+        "study_plan_items_duration_check": {
+          "name": "study_plan_items_duration_check",
+          "value": "\"study_plan_items\".\"duration_minutes\" between 1 and 480"
+        },
+        "study_plan_items_position_check": {
+          "name": "study_plan_items_position_check",
+          "value": "\"study_plan_items\".\"position\" > 0"
+        },
+        "study_plan_items_status_check": {
+          "name": "study_plan_items_status_check",
+          "value": "\"study_plan_items\".\"status\" in ('pending', 'active', 'completed')"
+        }
+      }
+    },
+    "study_sessions": {
+      "name": "study_sessions",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'active'"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "ended_at": {
+          "name": "ended_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "focus_seconds": {
+          "name": "focus_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {
+        "study_sessions_one_active_per_workspace_idx": {
+          "name": "study_sessions_one_active_per_workspace_idx",
+          "columns": [
+            "workspace_id"
+          ],
+          "isUnique": true,
+          "where": "\"study_sessions\".\"status\" = 'active'"
+        },
+        "study_sessions_workspace_started_idx": {
+          "name": "study_sessions_workspace_started_idx",
+          "columns": [
+            "workspace_id",
+            "started_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "study_sessions_workspace_id_workspaces_id_fk": {
+          "name": "study_sessions_workspace_id_workspaces_id_fk",
+          "tableFrom": "study_sessions",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "study_sessions_status_check": {
+          "name": "study_sessions_status_check",
+          "value": "\"study_sessions\".\"status\" in ('active', 'completed')"
+        },
+        "study_sessions_end_check": {
+          "name": "study_sessions_end_check",
+          "value": "(\"study_sessions\".\"status\" = 'active' and \"study_sessions\".\"ended_at\" is null) or (\"study_sessions\".\"status\" = 'completed' and \"study_sessions\".\"ended_at\" is not null)"
+        },
+        "study_sessions_focus_check": {
+          "name": "study_sessions_focus_check",
+          "value": "\"study_sessions\".\"focus_seconds\" >= 0"
+        }
+      }
+    },
+    "workspace_study_states": {
+      "name": "workspace_study_states",
+      "columns": {
+        "workspace_id": {
+          "name": "workspace_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "active_session_id": {
+          "name": "active_session_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "file_name": {
+          "name": "file_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "language": {
+          "name": "language",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "editor_content": {
+          "name": "editor_content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "''"
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "''"
+        },
+        "share_context_with_ai": {
+          "name": "share_context_with_ai",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
+        "timer_duration_seconds": {
+          "name": "timer_duration_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1500
+        },
+        "timer_remaining_seconds": {
+          "name": "timer_remaining_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 1500
+        },
+        "timer_status": {
+          "name": "timer_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'idle'"
+        },
+        "timer_started_at": {
+          "name": "timer_started_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "document_revision": {
+          "name": "document_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "notes_revision": {
+          "name": "notes_revision",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "accumulated_focus_seconds": {
+          "name": "accumulated_focus_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "workspace_study_states_workspace_id_workspaces_id_fk": {
+          "name": "workspace_study_states_workspace_id_workspaces_id_fk",
+          "tableFrom": "workspace_study_states",
+          "tableTo": "workspaces",
+          "columnsFrom": [
+            "workspace_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "workspace_study_states_active_session_id_study_sessions_id_fk": {
+          "name": "workspace_study_states_active_session_id_study_sessions_id_fk",
+          "tableFrom": "workspace_study_states",
+          "tableTo": "study_sessions",
+          "columnsFrom": [
+            "active_session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "workspace_study_states_filename_check": {
+          "name": "workspace_study_states_filename_check",
+          "value": "length(trim(\"workspace_study_states\".\"file_name\")) between 1 and 120"
+        },
+        "workspace_study_states_timer_check": {
+          "name": "workspace_study_states_timer_check",
+          "value": "\"workspace_study_states\".\"timer_duration_seconds\" between 60 and 10800 and \"workspace_study_states\".\"timer_remaining_seconds\" between 0 and \"workspace_study_states\".\"timer_duration_seconds\""
+        },
+        "workspace_study_states_timer_status_check": {
+          "name": "workspace_study_states_timer_status_check",
+          "value": "\"workspace_study_states\".\"timer_status\" in ('idle', 'running', 'paused')"
+        },
+        "workspace_study_states_timer_started_check": {
+          "name": "workspace_study_states_timer_started_check",
+          "value": "(\"workspace_study_states\".\"timer_status\" = 'running' and \"workspace_study_states\".\"timer_started_at\" is not null) or (\"workspace_study_states\".\"timer_status\" != 'running' and \"workspace_study_states\".\"timer_started_at\" is null)"
+        },
+        "workspace_study_states_context_check": {
+          "name": "workspace_study_states_context_check",
+          "value": "\"workspace_study_states\".\"share_context_with_ai\" in (0, 1)"
+        },
+        "workspace_study_states_revision_check": {
+          "name": "workspace_study_states_revision_check",
+          "value": "\"workspace_study_states\".\"document_revision\" >= 0 and \"workspace_study_states\".\"notes_revision\" >= 0"
+        },
+        "workspace_study_states_focus_check": {
+          "name": "workspace_study_states_focus_check",
+          "value": "\"workspace_study_states\".\"accumulated_focus_seconds\" >= 0"
+        }
+      }
+    },
+    "workspaces": {
+      "name": "workspaces",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "objective": {
+          "name": "objective",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "''"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'active'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "last_opened_at": {
+          "name": "last_opened_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "archived_at": {
+          "name": "archived_at",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "workspaces_status_updated_idx": {
+          "name": "workspaces_status_updated_idx",
+          "columns": [
+            "status",
+            "updated_at"
+          ],
+          "isUnique": false
+        },
+        "workspaces_last_opened_idx": {
+          "name": "workspaces_last_opened_idx",
+          "columns": [
+            "last_opened_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "workspaces_name_length_check": {
+          "name": "workspaces_name_length_check",
+          "value": "length(trim(\"workspaces\".\"name\")) between 1 and 80"
+        },
+        "workspaces_status_check": {
+          "name": "workspaces_status_check",
+          "value": "\"workspaces\".\"status\" in ('active', 'archived')"
+        },
+        "workspaces_archive_consistency_check": {
+          "name": "workspaces_archive_consistency_check",
+          "value": "(\"workspaces\".\"status\" = 'active' and \"workspaces\".\"archived_at\" is null) or (\"workspaces\".\"status\" = 'archived' and \"workspaces\".\"archived_at\" is not null)"
+        }
+      }
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}

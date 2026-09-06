@@ -26,7 +26,7 @@ export class OpenAIProvider implements AIProvider {
   ) {}
 
   getCapabilities(): AIProviderCapabilities {
-    return { streaming: false, usageInformation: true, supportedInput: ['text'] }
+    return { streaming: true, usageInformation: true, supportedInput: ['text'] }
   }
 
   async testConnection(): Promise<void> {
@@ -35,6 +35,62 @@ export class OpenAIProvider implements AIProvider {
 
   sendMessage(request: AIRequest): Promise<AIResponse> {
     return this.request(request)
+  }
+
+  async *streamMessage(request: AIRequest): AsyncIterable<import('../../application/ai/ai-provider').AIStreamEvent> {
+    if (request.signal?.aborted) throw new DOMException('Request cancelled', 'AbortError')
+    const timeoutController = new AbortController()
+    const timeout = setTimeout(() => timeoutController.abort(), 60_000)
+    const abort = () => timeoutController.abort()
+    request.signal?.addEventListener('abort', abort, { once: true })
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let content = ''
+    let completed = false
+    try {
+      const response = await this.fetcher('https://api.openai.com/v1/responses', {
+        method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: request.model ?? this.defaultModel, input: request.messages.map((message) => ({ role: message.role, content: message.content })), max_output_tokens: request.maxOutputTokens, store: false, stream: true }),
+        signal: timeoutController.signal,
+      })
+      if (!response.ok || !response.body) throw new Error(`OpenAI streaming request failed with status ${response.status}`)
+      reader = response.body.getReader()
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        if (buffer.length > 1_000_000) throw new Error('OpenAI stream frame exceeded the safe limit')
+        const frames = buffer.split(/\r?\n\r?\n/)
+        buffer = frames.pop() ?? ''
+        for (const frame of frames) {
+          for (const line of frame.split('\n')) {
+            const match = /^data:\s?(.*)$/.exec(line.replace(/\r$/, ''))
+            if (!match) continue
+            const data = match[1] ?? ''
+            if (!data) continue
+            if (data === '[DONE]') continue
+            const event = JSON.parse(data) as { type?: string; delta?: string; response?: OpenAIResponseBody }
+            if (event.type === 'response.output_text.delta' && event.delta) {
+              content += event.delta
+              yield { type: 'text-delta', content: event.delta }
+            }
+            if (event.type === 'response.completed' && event.response) {
+              completed = true
+              yield { type: 'completed', response: { content: extractText(event.response) || content, providerId: this.id, modelId: event.response.model ?? request.model ?? this.defaultModel } }
+            }
+          }
+        }
+      }
+      if (!completed) throw new Error('OpenAI stream ended before completion')
+    } finally {
+      clearTimeout(timeout)
+      request.signal?.removeEventListener('abort', abort)
+      if (reader) {
+        if (!completed) await reader.cancel().catch(() => {})
+        reader.releaseLock()
+      }
+    }
   }
 
   private async request(request: AIRequest): Promise<AIResponse> {

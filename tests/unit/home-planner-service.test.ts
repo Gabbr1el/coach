@@ -58,4 +58,19 @@ describe('HomePlannerService', () => {
     expect(messages[1]?.modelId).toBe('provider-failure-v1')
     expect(repository.messages).toHaveLength(2)
   })
+
+  it('persists a streamed turn only after successful completion', async () => {
+    const repository = new MemoryConversationRepository()
+    const manager = new AIProviderManager()
+    manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'stream-model' }), streamMessage: async function* () { yield { type: 'text-delta', content: 'Plano ' }; yield { type: 'text-delta', content: 'pronto' }; yield { type: 'completed', response: { content: 'Plano pronto', providerId: 'stream', modelId: 'stream-model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
+    manager.select('stream')
+    let id = 0
+    const service = new HomePlannerService({ repository, providerManager: manager, now: () => 400, createId: () => `stream-${++id}` })
+
+    const deltas = []
+    for await (const delta of service.streamMessage({ content: 'Planeje' }, new AbortController().signal)) deltas.push(delta)
+
+    expect(deltas.join('')).toBe('Plano pronto')
+    expect(repository.messages.map((message) => message.content)).toEqual(['Planeje', 'Plano pronto'])
+  })
 })

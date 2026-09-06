@@ -55,10 +55,13 @@
 - Multiple named OpenAI accounts with explicit selection and removal
 - Provider switching reconstructs only the selected adapter and retains Coach-owned context
 - Database-enforced single active provider account
+- Request-scoped Planner streaming over validated IPC
+- Cancellation aborts the provider request and discards incomplete turns
+- OpenAI Responses API SSE normalized into provider-independent stream events
 
 ## Pending
 
-- MVP 1.3: streaming, cancellation and structured user-safe provider errors
+- MVP 1.4: structured deadlines, availability and Planner-generated schedule proposals
 
 ## Database
 
@@ -95,4 +98,4 @@
 
 ## Next Step
 
-MVP 1.3: add response streaming and cancellation over a request-scoped IPC protocol, plus structured user-safe provider errors.
+MVP 1.4: add structured academic deadlines and weekly availability, then let the HOME Planner propose schedules that require explicit student confirmation.

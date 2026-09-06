@@ -26,4 +26,27 @@ describe('OpenAIProvider', () => {
 
     await expect(provider.testConnection()).rejects.toThrow('OpenAI rejected the API credential')
   })
+
+  it('parses Responses API server-sent text deltas', async () => {
+    const encoder = new TextEncoder()
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"type":"response.output_text.delta","delta":"Olá "}\n\n'))
+        controller.enqueue(encoder.encode('data: {"type":"response.output_text.delta","delta":"mundo"}\n\n'))
+        controller.enqueue(encoder.encode('data: {"type":"response.completed","response":{"model":"gpt-test","output_text":"Olá mundo"}}\n\n'))
+        controller.close()
+      },
+    })
+    const fetcher: typeof fetch = async () => new Response(body, { status: 200 })
+    const provider = new OpenAIProvider('secret-key-value-that-is-long-enough', 'gpt-test', fetcher)
+
+    const events = []
+    for await (const event of provider.streamMessage!({ messages: [{ role: 'user', content: 'Olá' }], maxOutputTokens: 50 })) events.push(event)
+
+    expect(events).toEqual([
+      { type: 'text-delta', content: 'Olá ' },
+      { type: 'text-delta', content: 'mundo' },
+      { type: 'completed', response: { content: 'Olá mundo', providerId: 'openai', modelId: 'gpt-test' } },
+    ])
+  })
 })

@@ -90,4 +90,65 @@ export class HomePlannerService {
     }
     return this.repository.addTurn({ threadId: HOME_THREAD_ID, user: userMessage, assistant: assistantMessage })
   }
+
+  async *streamMessage(input: SendHomeMessageInput, signal: AbortSignal): AsyncIterable<string> {
+    const provider = this.providerManager?.getActive() ?? null
+    if (!provider) {
+      if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
+      const messages = await this.sendMessage(input)
+      if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
+      yield messages[1]?.content ?? ''
+      return
+    }
+    if (!provider.streamMessage) throw new Error('Active provider does not support streaming')
+
+    const recentMessages = await this.repository.listMessages(HOME_THREAD_ID, 20)
+    let content = ''
+    let providerId = provider.id
+    let modelId = 'unknown'
+    let completed = false
+    try {
+      for await (const event of provider.streamMessage({
+        messages: [
+          { role: 'system', content: `Você é o Planner acadêmico do Coach. Regras: ${COACH_POLICY.principles.join(' ')} Organize prioridades, mas não invente datas nem disponibilidade.` },
+          ...recentMessages.map((message) => ({ role: message.role, content: message.content })),
+          { role: 'user', content: input.content.trim() },
+        ],
+        maxOutputTokens: 300,
+        signal,
+      })) {
+        if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
+        if (event.type === 'text-delta') {
+          content += event.content
+          if (content.length > 32_000) throw new Error('Provider response exceeded the safe limit')
+          yield event.content
+        } else {
+          completed = true
+          content = event.response.content || content
+          providerId = event.response.providerId
+          modelId = event.response.modelId
+        }
+      }
+      if (!completed) throw new Error('Provider stream ended before completion')
+    } catch (error) {
+      if (signal.aborted) throw error
+      const now = this.now()
+      await this.repository.ensureHomeThread(HOME_THREAD_ID, now)
+      await this.repository.addTurn({
+        threadId: HOME_THREAD_ID,
+        user: { id: this.createId(), threadId: HOME_THREAD_ID, role: 'user', content: input.content.trim(), createdAt: now, providerId: null, modelId: null },
+        assistant: { id: this.createId(), threadId: HOME_THREAD_ID, role: 'assistant', content: 'Não consegui consultar a IA conectada agora. Sua mensagem foi preservada localmente.', createdAt: now + 1, providerId: 'coach-local', modelId: 'provider-failure-v1' },
+      })
+      throw error
+    }
+
+    if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
+    const now = this.now()
+    await this.repository.ensureHomeThread(HOME_THREAD_ID, now)
+    await this.repository.addTurn({
+      threadId: HOME_THREAD_ID,
+      user: { id: this.createId(), threadId: HOME_THREAD_ID, role: 'user', content: input.content.trim(), createdAt: now, providerId: null, modelId: null },
+      assistant: { id: this.createId(), threadId: HOME_THREAD_ID, role: 'assistant', content, createdAt: now + 1, providerId, modelId },
+    })
+  }
 }

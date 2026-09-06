@@ -20,6 +20,30 @@ const api: CoachDesktopApi = {
   conversation: {
     listHomeMessages: () => ipcRenderer.invoke(CONVERSATION_CHANNELS.listHomeMessages),
     sendHomeMessage: (input) => ipcRenderer.invoke(CONVERSATION_CHANNELS.sendHomeMessage, input),
+    streamHomeMessage: (input, onEvent) => {
+      let disposed = false
+      const dispose = () => {
+        if (disposed) return
+        disposed = true
+        ipcRenderer.removeListener(CONVERSATION_CHANNELS.homeStreamEvent, listener)
+      }
+      const listener = (_event: Electron.IpcRendererEvent, streamEvent: Parameters<typeof onEvent>[0]) => {
+        if (streamEvent.requestId !== input.requestId) return
+        onEvent(streamEvent)
+        if (streamEvent.type === 'completed' || streamEvent.type === 'cancelled' || streamEvent.type === 'error') dispose()
+      }
+      ipcRenderer.on(CONVERSATION_CHANNELS.homeStreamEvent, listener)
+      void ipcRenderer.invoke(CONVERSATION_CHANNELS.streamHomeMessage, input).catch(() => {
+        onEvent({ requestId: input.requestId, type: 'error', code: 'REQUEST_FAILED' })
+        dispose()
+      })
+      return {
+        cancel: () => {
+          if (!disposed) void ipcRenderer.invoke(CONVERSATION_CHANNELS.cancelHomeStream, { requestId: input.requestId })
+        },
+        dispose,
+      }
+    },
   },
   provider: {
     getStatus: () => ipcRenderer.invoke(PROVIDER_CHANNELS.getStatus),

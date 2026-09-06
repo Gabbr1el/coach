@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, BookOpen, Brain, CalendarDays, MoreHorizontal, Plus, Send, Sparkles, X } from 'lucide-react'
 import type { ApplicationInfo } from '../../shared/contracts/application-contract'
 import type { CreateWorkspaceInput, Workspace, WorkspaceSummary } from '../../shared/contracts/workspace-contract'
@@ -135,6 +135,8 @@ export function App() {
   const [messages, setMessages] = useState<ConversationMessage[]>([])
   const [plannerInput, setPlannerInput] = useState('')
   const [plannerSending, setPlannerSending] = useState(false)
+  const [streamedContent, setStreamedContent] = useState('')
+  const streamHandle = useRef<{ cancel(): void; dispose(): void } | null>(null)
   const [plannerLoading, setPlannerLoading] = useState(true)
   const [plannerError, setPlannerError] = useState<string | null>(null)
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null)
@@ -160,19 +162,45 @@ export function App() {
     void window.coach.provider.listAccounts().then(setProviderAccounts).catch(() => setError('Não foi possível listar as contas de IA.'))
   }, [loadWorkspaces])
 
+  useEffect(() => () => {
+    streamHandle.current?.cancel()
+    streamHandle.current?.dispose()
+  }, [])
+
   async function sendPlannerMessage() {
     const content = plannerInput.trim()
     if (!content || plannerSending || plannerLoading) return
     setPlannerSending(true)
     setPlannerInput('')
+    setStreamedContent('')
     try {
-      const newMessages = await window.coach.conversation.sendHomeMessage({ content })
-      setMessages((current) => [...current, ...newMessages])
-      setPlannerError(null)
+      const requestId = crypto.randomUUID()
+      streamHandle.current = window.coach.conversation.streamHomeMessage({ requestId, content }, (event) => {
+        if (event.type === 'text-delta') setStreamedContent((current) => current + event.content)
+        if (event.type === 'completed') {
+          setMessages(event.messages)
+          setStreamedContent('')
+          setPlannerSending(false)
+          streamHandle.current = null
+          setPlannerError(null)
+        }
+        if (event.type === 'cancelled') {
+          setStreamedContent('')
+          setPlannerSending(false)
+          streamHandle.current = null
+          setPlannerInput(content)
+        }
+        if (event.type === 'error') {
+          setStreamedContent('')
+          setPlannerSending(false)
+          streamHandle.current = null
+          setPlannerError('A IA conectada não respondeu. Tente novamente ou troque de conta.')
+          void window.coach.conversation.listHomeMessages().then(setMessages)
+        }
+      })
     } catch {
       setPlannerInput(content)
-      setPlannerError('Não foi possível enviar sua mensagem ao Planner.')
-    } finally {
+      setPlannerError('Não foi possível iniciar a resposta do Planner.')
       setPlannerSending(false)
     }
   }
@@ -251,10 +279,12 @@ export function App() {
               {plannerLoading && <div className="text-sm text-white/45">Carregando conversa…</div>}
               {!plannerLoading && messages.length === 0 && <div className="rounded-2xl bg-white/7 p-4 text-sm leading-6 text-white/65">Conte sobre provas, horários, trabalhos ou dificuldades. Esta conversa pertence à Home e fica salva localmente.</div>}
               {messages.map((message) => <div key={message.id} className={`max-w-[90%] rounded-2xl px-4 py-3 text-sm leading-6 ${message.role === 'user' ? 'ml-auto bg-coach-green text-white' : 'bg-white/8 text-white/75'}`}>{message.content}</div>)}
+              {plannerSending && streamedContent && <div className="max-w-[90%] rounded-2xl bg-white/8 px-4 py-3 text-sm leading-6 text-white/75">{streamedContent}<span className="ml-1 inline-block h-4 w-1 animate-pulse bg-coach-yellow" /></div>}
             </div>
             <form className="border-t border-white/10 p-4" onSubmit={(event) => { event.preventDefault(); void sendPlannerMessage() }}>
               <div className="flex items-end gap-2 rounded-2xl bg-white/8 p-2"><textarea disabled={plannerLoading} aria-label="Mensagem para o Planner" value={plannerInput} onChange={(event) => setPlannerInput(event.target.value)} maxLength={4000} placeholder="Ex.: Tenho prova de C dia 16…" className="max-h-32 min-h-12 flex-1 resize-none bg-transparent px-2 py-2 text-sm text-white outline-none placeholder:text-white/35 disabled:opacity-40" /><button disabled={!plannerInput.trim() || plannerSending || plannerLoading} aria-label="Enviar" className="grid size-11 shrink-0 place-items-center rounded-xl bg-coach-yellow text-coach-ink disabled:opacity-35"><Send size={18} /></button></div>
               <p className="mt-2 px-1 text-[11px] text-white/35">{providerStatus?.configured ? `Conectado a ${providerStatus.providerName} · ${providerStatus.model}` : 'Modo local · nenhuma mensagem é enviada para uma IA externa'}</p>
+              {plannerSending && <button type="button" onClick={() => streamHandle.current?.cancel()} className="mt-2 px-1 text-xs font-bold text-coach-yellow">Cancelar resposta</button>}
             </form>
           </aside>
         </div>

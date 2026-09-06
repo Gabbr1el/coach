@@ -53,7 +53,7 @@ export class HomePlannerService {
       providerId: null,
       modelId: null,
     }
-    const provider = this.providerManager?.getActive() ?? null
+    const provider = this.providerManager?.route('planner') ?? null
     let assistantContent = localPlannerReply(userMessage.content)
     let providerId = 'coach-local'
     let modelId = 'planner-rules-v1'
@@ -92,7 +92,7 @@ export class HomePlannerService {
   }
 
   async *streamMessage(input: SendHomeMessageInput, signal: AbortSignal): AsyncIterable<string> {
-    const provider = this.providerManager?.getActive() ?? null
+    const provider = this.providerManager?.route('planner') ?? null
     if (!provider) {
       if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
       const messages = await this.sendMessage(input)

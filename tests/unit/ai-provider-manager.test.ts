@@ -25,6 +25,16 @@ describe('AIProviderManager', () => {
     expect(manager.getActive()?.id).toBe('b')
   })
 
+  it('routes providers by task purpose with active fallback', () => {
+    const manager = new AIProviderManager()
+    const provider = { id: 'omniroute', name: 'OmniRoute', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'omniroute', modelId: 'model' }), getCapabilities: () => ({ streaming: false, usageInformation: false, supportedInput: ['text'] as const }) }
+    manager.register(provider)
+    manager.select(provider.id)
+    manager.setRoute('roadmap', provider.id)
+    expect(manager.route('roadmap')).toBe(provider)
+    expect(manager.route('tutor')).toBe(provider)
+  })
+
   it('rejects duplicate and unknown providers', () => {
     const manager = new AIProviderManager()
     manager.register(provider('a'))

@@ -3,6 +3,7 @@ import type { AIProvider } from './ai-provider'
 export class AIProviderManager {
   private readonly providers = new Map<string, AIProvider>()
   private activeProviderId: string | null = null
+  private readonly purposeRoutes = new Map<'planner' | 'tutor' | 'roadmap' | 'report', string>()
 
   register(provider: AIProvider): void {
     if (this.providers.has(provider.id)) throw new Error(`AI provider '${provider.id}' is already registered`)
@@ -22,6 +23,16 @@ export class AIProviderManager {
     return this.activeProviderId ? this.providers.get(this.activeProviderId) ?? null : null
   }
 
+  route(purpose: 'planner' | 'tutor' | 'roadmap' | 'report'): AIProvider | null {
+    const providerId = this.purposeRoutes.get(purpose)
+    return providerId ? this.providers.get(providerId) ?? this.getActive() : this.getActive()
+  }
+
+  setRoute(purpose: 'planner' | 'tutor' | 'roadmap' | 'report', providerId: string): void {
+    if (!this.providers.has(providerId)) throw new Error(`AI provider '${providerId}' is not registered`)
+    this.purposeRoutes.set(purpose, providerId)
+  }
+
   getActiveRegistrationId(): string | null {
     return this.activeProviderId
   }
@@ -33,11 +44,13 @@ export class AIProviderManager {
   clear(): void {
     this.activeProviderId = null
     this.providers.clear()
+    this.purposeRoutes.clear()
   }
 
   remove(providerId: string): void {
     if (this.activeProviderId === providerId) this.activeProviderId = null
     this.providers.delete(providerId)
+    for (const [purpose, route] of this.purposeRoutes) if (route === providerId) this.purposeRoutes.delete(purpose)
   }
 
   list(): readonly AIProvider[] {

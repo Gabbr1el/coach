@@ -33,7 +33,7 @@ export class RoadmapService {
     const workspace = await this.requireWorkspace(workspaceId)
     let proposal = fallback(workspace)
     let providerId: string | null = 'coach-local'; let modelId: string | null = 'roadmap-rules-v1'
-    const provider = this.providers.getActive()
+    const provider = this.providers.route('roadmap')
     if (provider) try {
       const response = await provider.sendMessage({ messages: [{ role: 'system', content: 'Crie um roadmap acadêmico progressivo. Responda somente JSON válido: {"title":string,"modules":[{"title":string,"objective":string,"estimatedMinutes":number,"outcomes":[string]}]}. Use entre 3 e 10 módulos, sem inventar prazos.' }, { role: 'user', content: Buffer.from(JSON.stringify({ subject: workspace.name, objective: workspace.objective }), 'utf8').toString('base64') }], maxOutputTokens: 1200 })
       proposal = roadmapProposalSchema.parse(extractJson(response.content)); providerId = response.providerId; modelId = response.modelId

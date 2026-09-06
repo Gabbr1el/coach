@@ -53,7 +53,7 @@ export class WorkspaceCoachService {
       await this.dependencies.repository.addTurn({ threadId, user: { id: this.createId(), threadId, role: 'user', content: input.content.trim(), providerId: null, modelId: null, createdAt: this.now() }, assistant: { id: this.createId(), threadId, role: 'assistant', content: response, providerId: null, modelId: null, createdAt: this.now() } })
       return
     }
-    const provider = this.dependencies.providerManager.getActive()
+    const provider = this.dependencies.providerManager.route('tutor')
     if (!provider?.streamMessage) throw new Error('An active streaming provider is required')
     const current = await this.dependencies.getCurrentContext?.(workspaceId)
     const observer = current?.observer ?? this.dependencies.getObserverState?.(workspaceId)

@@ -65,6 +65,11 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
       this.database.orm.insert(studyPlanItems).values(plan.map((item) => ({ ...item, workspaceId, sessionId: nextSessionId, createdAt: now, updatedAt: now }))).run()
       const changed = this.database.orm.update(workspaceStudyStates).set({ activeSessionId: nextSessionId, timerStatus: 'idle', timerStartedAt: null, timerRemainingSeconds: timerDurationSeconds, accumulatedFocusSeconds: 0, updatedAt: now }).where(and(eq(workspaceStudyStates.workspaceId, workspaceId), eq(workspaceStudyStates.activeSessionId, currentSessionId))).run()
       if (changed.changes !== 1) throw new Error('Study session changed while completing')
+      const metrics = this.database.sqlite.prepare("SELECT SUM(type = 'execution_error') AS errors, SUM(type = 'code_executed') AS successes, SUM(type = 'possible_learning_loop') AS loops, SUM(type = 'window_blurred') AS exits FROM learning_events WHERE session_id = ?").get(currentSessionId) as { errors: number | null; successes: number | null; loops: number | null; exits: number | null }
+      const summary = `Sessão de ${Math.floor(focusSeconds / 60)} minutos focados; ${metrics.successes ?? 0} execuções bem-sucedidas; ${metrics.errors ?? 0} erros; ${metrics.loops ?? 0} loops; ${metrics.exits ?? 0} saídas de foco.`
+      this.database.sqlite.prepare('INSERT INTO session_memories (id, session_id, summary, created_at) VALUES (?, ?, ?, ?)').run(crypto.randomUUID(), currentSessionId, summary, now)
+      const recent = this.database.sqlite.prepare('SELECT summary FROM session_memories sm JOIN study_sessions s ON s.id = sm.session_id WHERE s.workspace_id = ? ORDER BY s.ended_at DESC, s.started_at DESC, sm.rowid DESC LIMIT 8').all(workspaceId) as Array<{ summary: string }>
+      this.database.sqlite.prepare('INSERT INTO workspace_memories (id, workspace_id, summary, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET summary = excluded.summary, updated_at = excluded.updated_at').run(crypto.randomUUID(), workspaceId, recent.map((item) => item.summary).join('\n'), now)
     })()
   }
 

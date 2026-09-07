@@ -2,7 +2,7 @@ import { closeSync, existsSync, fsyncSync, openSync, renameSync, rmSync } from '
 import { dirname } from 'node:path'
 import type Database from 'better-sqlite3'
 
-export const CURRENT_MIGRATION_COUNT = 27
+export const CURRENT_MIGRATION_COUNT = 28
 
 function syncDirectory(path: string): void {
   const descriptor = openSync(dirname(path), 'r')
@@ -55,7 +55,7 @@ export function validateCoachDatabaseSchema(sqlite: Database.Database): void {
     roadmaps: ['id', 'workspace_id', 'status', 'generation_kind', 'version'], study_lessons: ['id', 'workspace_id', 'roadmap_id', 'topic_id', 'generation_kind', 'content_json'], roadmap_modules: ['id', 'roadmap_id', 'position', 'status', 'topics_json', 'practice', 'completion_criteria_json', 'resources_json'],
     topic_learning_states: ['workspace_id', 'topic_id', 'evidence_count', 'difficulty_level', 'mastery_estimate', 'confidence', 'needs_review', 'reasons_json'],
     roadmap_adaptations: ['id', 'roadmap_id', 'module_id', 'topic_id', 'kind', 'source', 'reason_json'],
-    planner_actions: ['id', 'idempotency_key', 'type', 'status', 'payload_json'],
+    planner_actions: ['id', 'origin_message_id', 'label', 'context_version', 'idempotency_key', 'type', 'status', 'payload_json'],
   }
   for (const [table, requiredColumns] of Object.entries(requirements)) {
     const columns = new Set((sqlite.pragma(`table_info(${table})`) as Array<{ name: string }>).map((column) => column.name))

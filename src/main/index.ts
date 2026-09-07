@@ -7,6 +7,7 @@ import { WorkspaceService } from '../application/workspaces/workspace-service'
 import { DrizzleWorkspaceRepository } from './repositories/drizzle-workspace-repository'
 import { registerWorkspaceHandlers } from './ipc/workspace-handlers'
 import { HomePlannerService } from '../application/conversations/home-planner-service'
+import { HomeOrganizerService } from '../application/conversations/home-organizer-service'
 import { DrizzleConversationRepository } from './repositories/drizzle-conversation-repository'
 import { registerConversationHandlers } from './ipc/conversation-handlers'
 import { AIProviderManager } from '../application/ai/ai-provider-manager'
@@ -109,7 +110,6 @@ void app.whenReady().then(async () => {
     registerStudyProgressHandlers(database)
     registerStudyLessonHandlers(new StudyLessonService(new SqliteStudyLessonRepository(database), providerManager, (id) => workspaceRepository.findById(id), (id) => roadmapRepository.findCurrent(id)))
     registerWorkspaceHandlers(workspaceService)
-    registerConversationHandlers(homePlannerService, workspaceCoachService)
     registerStudyWorkspaceHandlers(studyWorkspaceService)
     const projectRepository = new DrizzleProjectRepository(database)
     registerCodeExecutionHandlers(async (id) => Boolean(await workspaceRepository.findById(id)), observerService, projectRepository, database)
@@ -121,7 +121,9 @@ void app.whenReady().then(async () => {
     registerBackupHandlers(database)
     registerProjectHandlers(new ProjectService(projectRepository, async (id) => Boolean(await workspaceRepository.findById(id))))
     registerRoadmapHandlers(new RoadmapService(new DrizzleRoadmapRepository(database), providerManager, (id) => workspaceRepository.findById(id), (id) => { const difficulties = (database!.sqlite.prepare("SELECT topic_id AS topicId FROM topic_learning_states WHERE workspace_id = ? AND (difficulty_level IN ('medium','high') OR needs_review = 1) ORDER BY difficulty_level DESC").all(id) as Array<{ topicId: string }>).map((item) => item.topicId.split(':').at(-1) ?? item.topicId); const deadline = (database!.sqlite.prepare('SELECT due_at AS dueAt FROM academic_events WHERE workspace_id = ? AND due_at >= ? ORDER BY due_at LIMIT 1').get(id, Date.now()) as { dueAt: number } | undefined)?.dueAt ?? null; const availability = database!.sqlite.prepare('SELECT weekday, minutes FROM academic_availability ORDER BY weekday').all() as Array<{ weekday: number; minutes: number }>; const knownContext = (database!.sqlite.prepare('SELECT content FROM routine_notes ORDER BY created_at DESC LIMIT 10').all() as Array<{ content: string }>).map((item) => item.content); return { difficulties, deadline, availability, knownContext } }))
-    registerPlannerActionHandlers(new PlannerActionService({ repository: new DrizzlePlannerActionRepository(database), createWorkspace: (input) => workspaceService.create(input), createProject: (workspaceId, name, language) => new ProjectService(projectRepository, async (id) => Boolean(await workspaceRepository.findById(id))).create(workspaceId, name, language), createDeadline: (input) => planningService.createDeadline(input), addRoutine: (content) => planningService.addRoutineNote(content) }))
+    const plannerActionService = new PlannerActionService({ repository: new DrizzlePlannerActionRepository(database), createWorkspace: (input) => workspaceService.create(input), createProject: (workspaceId, name, language) => new ProjectService(projectRepository, async (id) => Boolean(await workspaceRepository.findById(id))).create(workspaceId, name, language), createDeadline: (input) => planningService.createDeadline(input), addRoutine: (content) => planningService.addRoutineNote(content) })
+    registerPlannerActionHandlers(plannerActionService)
+    registerConversationHandlers(homePlannerService, workspaceCoachService, new HomeOrganizerService(homePlannerService, planningService, plannerActionService, () => workspaceRepository.listActive(), (id) => studyWorkspaceService.recalculatePlan(id)))
     registerReportHandlers(new ReportService(new DrizzleReportRepository(database)))
     registerWorkspaceOnboardingHandlers(new WorkspaceOnboardingService({ repository: new DrizzleConversationRepository(database), providerManager }))
     registerProviderHandlers(providerConfigurationService)

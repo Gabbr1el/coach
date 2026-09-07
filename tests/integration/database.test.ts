@@ -9,6 +9,7 @@ import { CURRENT_MIGRATION_COUNT, validateCoachDatabaseSchema } from '../../src/
 import { DrizzleWorkspaceRepository } from '../../src/main/repositories/drizzle-workspace-repository'
 import { DrizzleConversationRepository } from '../../src/main/repositories/drizzle-conversation-repository'
 import { DrizzleStudyWorkspaceRepository } from '../../src/main/repositories/drizzle-study-workspace-repository'
+import { DrizzlePlannerActionRepository } from '../../src/main/repositories/drizzle-planner-action-repository'
 
 const temporaryDirectories: string[] = []
 const migrationsFolder = resolve('drizzle/migrations')
@@ -179,4 +180,27 @@ describe('Coach database migrations', () => {
     reopened.close()
   })
   it('persists a study workspace with an empty plan', async () => { const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const workspaces = new DrizzleWorkspaceRepository(database); const repository = new DrizzleStudyWorkspaceRepository(database); const workspace = await workspaces.create({ id: crypto.randomUUID(), name: 'C', objective: 'Estudar C', createdAt: 1, updatedAt: 1 }); const state = { workspaceId: workspace.id, sessionId: crypto.randomUUID(), sessionStartedAt: 2, fileName: 'main.c', language: 'c', editorContent: '', notes: '', shareContextWithAi: false, timerDurationSeconds: 1500, timerRemainingSeconds: 1500, timerStatus: 'idle' as const, timerStartedAt: null, plan: [], updatedAt: 3, documentRevision: 0, notesRevision: 0, accumulatedFocusSeconds: 0 }; await repository.createState(state); expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM study_plan_items WHERE session_id = ?').get(state.sessionId)).toEqual({ count: 0 }); expect(await repository.findState(workspace.id, 4)).toMatchObject({ sessionId: state.sessionId, plan: [] }); database.close() })
+  it('persists contextual planner actions and resolves them atomically', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    const repository = new DrizzlePlannerActionRepository(database)
+    const action = repository.create({ id: crypto.randomUUID(), originMessageId: crypto.randomUUID(), label: 'Criar Workspace de C', contextVersion: 10, type: 'workspace.create', status: 'proposed', payload: { name: 'C', objective: 'Estudar C' }, result: null, createdAt: 10, resolvedAt: null }, 'action-key')
+    expect(repository.listPending()[0]).toMatchObject({ id: action.id, label: 'Criar Workspace de C', contextVersion: 10 })
+    expect(repository.claim(action.id, 11).status).toBe('applying')
+    expect(() => repository.claim(action.id, 12)).toThrow('no longer pending')
+    expect(repository.complete(action.id, 'applied', { id: 'c' }, 13)).toMatchObject({ status: 'applied', result: { id: 'c' } })
+    database.close()
+  })
+  it('invalidates sibling decisions from the same message', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const repository = new DrizzlePlannerActionRepository(database); const messageId = crypto.randomUUID()
+    const create = (label: string, key: string) => repository.create({ id: crypto.randomUUID(), originMessageId: messageId, label, contextVersion: 10, type: 'routine.add', status: 'proposed', payload: { content: label }, result: null, createdAt: 10, resolvedAt: null }, key)
+    const first = create('Usar C', 'first'); const second = create('Usar ED', 'second'); repository.claim(first.id, 11); repository.complete(first.id, 'applied', { ok: true }, 12); repository.invalidateSiblings(messageId, first.id, 12)
+    expect(repository.find(second.id)?.status).toBe('obsolete'); database.close()
+  })
+  it('stores unknown mastery as null', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    database.sqlite.prepare('INSERT INTO workspaces (id, name, objective, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run('c', 'C', 'Estudar C', 1, 1)
+    database.sqlite.prepare('INSERT INTO study_deadlines (id, workspace_id, title, due_at, estimated_minutes, mastery_percent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('d', 'c', 'Prova C', 2, 120, null, 1)
+    expect(database.sqlite.prepare('SELECT mastery_percent AS masteryPercent FROM study_deadlines WHERE id = ?').get('d')).toEqual({ masteryPercent: null })
+    database.close()
+  })
 })

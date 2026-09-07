@@ -44,6 +44,8 @@ const api: CoachDesktopApi = {
   conversation: {
     listHomeMessages: () => ipcRenderer.invoke(CONVERSATION_CHANNELS.listHomeMessages),
     sendHomeMessage: (input) => ipcRenderer.invoke(CONVERSATION_CHANNELS.sendHomeMessage, input),
+    organizeHomeMessage: (input) => ipcRenderer.invoke(CONVERSATION_CHANNELS.organizeHomeMessage, input),
+    saveHomeActionResult: (content) => ipcRenderer.invoke(CONVERSATION_CHANNELS.saveHomeActionResult, content),
     streamHomeMessage: (input, onEvent) => {
       let disposed = false
       const dispose = () => {
@@ -168,7 +170,6 @@ const api: CoachDesktopApi = {
   },
   plannerAction: {
     listPending: () => ipcRenderer.invoke(PLANNER_ACTION_CHANNELS.listPending),
-    proposeFromText: (content) => ipcRenderer.invoke(PLANNER_ACTION_CHANNELS.proposeFromText, content),
     resolve: (input) => ipcRenderer.invoke(PLANNER_ACTION_CHANNELS.resolve, input),
   },
   report: { getGlobalOverview: () => ipcRenderer.invoke(REPORT_CHANNELS.getGlobalOverview) },

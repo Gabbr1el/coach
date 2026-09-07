@@ -410,43 +410,14 @@ export function App() {
   async function sendPlannerMessage() {
     const content = plannerInput.trim()
     if (!content || plannerSending || plannerLoading) return
-    setPlannerSending(true)
-    setMessages((current) => [...current, { id: `optimistic-${crypto.randomUUID()}`, role: 'user', content, createdAt: Date.now(), sequence: (current.at(-1)?.sequence ?? 0) + 1, providerId: null, modelId: null }])
-    setPlannerInput('')
-    const mutation = await window.coach.planning.applyAcademicMessage(content)
-    if (mutation.changed) { await Promise.all(mutation.workspaceIds.map((workspaceId) => window.coach.studyWorkspace.recalculatePlan({ workspaceId }).catch(() => null))); const [nextPriorities, nextSchedule, overview] = await Promise.all([window.coach.planning.listPriorities(), window.coach.planning.getSchedule(), window.coach.planning.getAcademicOverview()]); setPriorities(nextPriorities); setSchedule(nextSchedule); setAcademicOverview(overview) }
-    if (!mutation.changed) void window.coach.plannerAction.proposeFromText(content).then((actions) => setPlannerActions((current) => [...actions, ...current.filter((item) => !actions.some((action) => action.id === item.id))])).catch(() => setPlannerError('O Coach respondeu, mas não conseguiu preparar a ação no sistema.'))
-    setStreamedContent('')
+    setPlannerSending(true); setPlannerInput(''); setPlannerError(null)
     try {
-      const requestId = crypto.randomUUID()
-      streamHandle.current = window.coach.conversation.streamHomeMessage({ requestId, content }, (event) => {
-        if (event.type === 'text-delta') setStreamedContent((current) => current + event.content)
-        if (event.type === 'completed') {
-          setMessages(event.messages)
-          setStreamedContent('')
-          setPlannerSending(false)
-          streamHandle.current = null
-          setPlannerError(null)
-        }
-        if (event.type === 'cancelled') {
-          setStreamedContent('')
-          setPlannerSending(false)
-          streamHandle.current = null
-          setPlannerInput(content)
-        }
-        if (event.type === 'error') {
-          setStreamedContent('')
-          setPlannerSending(false)
-          streamHandle.current = null
-          setPlannerError('A IA conectada não respondeu. Tente novamente ou troque de conta.')
-          void window.coach.conversation.listHomeMessages().then(setMessages)
-        }
-      })
-    } catch {
-      setPlannerInput(content)
-      setPlannerError('Não foi possível iniciar a resposta do Planner.')
-      setPlannerSending(false)
-    }
+      const turn = await window.coach.conversation.organizeHomeMessage({ content })
+      setMessages(turn.messages); setPlannerActions(await window.coach.plannerAction.listPending())
+      if (turn.result.outcome === 'applied') { const [nextPriorities, nextSchedule, overview] = await Promise.all([window.coach.planning.listPriorities(), window.coach.planning.getSchedule(), window.coach.planning.getAcademicOverview()]); setPriorities(nextPriorities); setSchedule(nextSchedule); setAcademicOverview(overview) }
+      if (turn.result.outcome === 'failed') setPlannerError(turn.result.message)
+    } catch { setPlannerInput(content); setPlannerError('Não foi possível concluir este turno da Organizadora.') }
+    finally { setPlannerSending(false); setStreamedContent('') }
   }
 
   async function createWorkspace(input: CreateWorkspaceInput) {
@@ -582,7 +553,7 @@ export function App() {
   }
 
   return <>
-    <HomeScreen section={homeSection} loading={loading} error={error} report={globalReport} schedule={schedule} academicOverview={academicOverview} workspaces={workspaces} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={providerAccounts.find((account) => account.isActive)?.label ?? 'IA desconectada'} onSection={setHomeSection} onSettings={() => setProviderDialogOpen(true)} onCreate={() => setDialogOpen(true)} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} onPlannerInput={setPlannerInput} onPlannerSend={() => void sendPlannerMessage()} onResolveAction={(actionId, decision) => { void window.coach.plannerAction.resolve({ actionId, decision }).then(async () => { setPlannerActions((current) => current.filter((item) => item.id !== actionId)); await loadWorkspaces() }) }} />
+    <HomeScreen section={homeSection} loading={loading} error={error} report={globalReport} schedule={schedule} academicOverview={academicOverview} workspaces={workspaces} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={providerAccounts.find((account) => account.isActive)?.label ?? 'IA desconectada'} onSection={setHomeSection} onSettings={() => setProviderDialogOpen(true)} onCreate={() => setDialogOpen(true)} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} onPlannerInput={setPlannerInput} onPlannerSend={() => void sendPlannerMessage()} onResolveAction={(actionId, decision) => { if (plannerSending || plannerLoading) return; setPlannerSending(true); setPlannerError(null); void window.coach.plannerAction.resolve({ actionId, decision }).then(async (action) => { setPlannerActions(await window.coach.plannerAction.listPending()); await loadWorkspaces(); const message = decision === 'reject' ? `A ação ${action.label} foi descartada.` : action.type === 'workspace.create' ? `Criei o Workspace ${(action.result as { name?: string } | null)?.name ?? ''}.` : `${action.label} foi aplicada.`; setMessages(await window.coach.conversation.saveHomeActionResult(message)); const [nextPriorities, nextSchedule, overview] = await Promise.all([window.coach.planning.listPriorities(), window.coach.planning.getSchedule(), window.coach.planning.getAcademicOverview()]); setPriorities(nextPriorities); setSchedule(nextSchedule); setAcademicOverview(overview) }).catch(() => setPlannerError('Esta ação já foi executada ou ficou obsoleta.')).finally(() => setPlannerSending(false)) }} />
     {dialogOpen && <CreateWorkspaceDialog open={dialogOpen} submitting={submitting} onClose={() => setDialogOpen(false)} onSubmit={createWorkspace} />}
     {providerDialogOpen && <ProviderSettingsDialog status={providerStatus} accounts={providerAccounts} onClose={() => setProviderDialogOpen(false)} onConfigured={async (label, apiKey, model, persistence) => { const result = await window.coach.provider.configureOpenAI({ label, apiKey, model, persistence }); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()); return result }} onConfiguredCompatible={async (label, baseUrl, apiKey, model, persistence) => { const result = await window.coach.provider.configureCompatible({ label, baseUrl, apiKey, model, persistence }); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()); return result }} onSelect={async (accountId) => { await window.coach.provider.selectAccount(accountId); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()) }} onRemove={async (accountId) => { await window.coach.provider.removeAccount(accountId); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()) }} />}
   </>

@@ -1,11 +1,12 @@
 import { ipcMain } from 'electron'
 import type { HomePlannerService } from '../../application/conversations/home-planner-service'
+import type { HomeOrganizerService } from '../../application/conversations/home-organizer-service'
 import type { WorkspaceCoachService } from '../../application/conversations/workspace-coach-service'
 import { cancelHomeStreamInputSchema, cancelWorkspaceStreamInputSchema, sendHomeMessageInputSchema, streamHomeMessageInputSchema, streamWorkspaceMessageInputSchema, workspaceConversationInputSchema, type HomeStreamEvent } from '../../shared/contracts/conversation-contract'
 import { CONVERSATION_CHANNELS } from '../../shared/contracts/conversation-channels'
 import { assertTrustedSender } from './trusted-sender'
 
-export function registerConversationHandlers(service: HomePlannerService, workspaceService: WorkspaceCoachService): void {
+export function registerConversationHandlers(service: HomePlannerService, workspaceService: WorkspaceCoachService, organizer: HomeOrganizerService): void {
   const activeStreams = new Map<string, { controller: AbortController; senderId: number; threadKey: string }>()
   let homeStreamActive = false
   ipcMain.handle(CONVERSATION_CHANNELS.listHomeMessages, (event) => {
@@ -15,8 +16,10 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
 
   ipcMain.handle(CONVERSATION_CHANNELS.sendHomeMessage, (event, payload: unknown) => {
     assertTrustedSender(event)
-    return service.sendMessage(sendHomeMessageInputSchema.parse(payload))
+    return organizer.organize(sendHomeMessageInputSchema.parse(payload)).then((turn) => turn.messages)
   })
+  ipcMain.handle(CONVERSATION_CHANNELS.organizeHomeMessage, (event, payload: unknown) => { assertTrustedSender(event); return organizer.organize(sendHomeMessageInputSchema.parse(payload)) })
+  ipcMain.handle(CONVERSATION_CHANNELS.saveHomeActionResult, (event, payload: unknown) => { assertTrustedSender(event); return service.saveSystemResult(sendHomeMessageInputSchema.parse({ content: payload }).content) })
 
   ipcMain.handle(CONVERSATION_CHANNELS.streamHomeMessage, async (event, payload: unknown) => {
     assertTrustedSender(event)
@@ -36,10 +39,10 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
     }
     send({ requestId: input.requestId, type: 'started' })
     try {
-      for await (const content of service.streamMessage(input, controller.signal)) {
-        send({ requestId: input.requestId, type: 'text-delta', content })
-      }
-      send({ requestId: input.requestId, type: 'completed', messages: await service.listMessages() })
+      const turn = await organizer.organize(input)
+      if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
+      send({ requestId: input.requestId, type: 'text-delta', content: turn.result.message })
+      send({ requestId: input.requestId, type: 'completed', messages: turn.messages })
     } catch (error) {
       send(controller.signal.aborted
         ? { requestId: input.requestId, type: 'cancelled' }

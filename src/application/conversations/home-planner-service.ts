@@ -41,7 +41,8 @@ export class HomePlannerService {
     return this.repository.listMessages(HOME_THREAD_ID, 100)
   }
 
-  async sendMessage(input: SendHomeMessageInput): Promise<ConversationMessage[]> {
+  async sendMessage(input: SendHomeMessageInput): Promise<ConversationMessage[]> { return this.sendMessageWithAuthority(input, { currentTime: this.now(), currentDate: new Date(this.now()).toISOString().slice(0, 10), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, state: {}, operationResult: null, constraints: [] }) }
+  async sendMessageWithAuthority(input: SendHomeMessageInput, authority: { currentTime: number; currentDate: string; timezone: string; state: unknown; operationResult: unknown; constraints: string[] }): Promise<ConversationMessage[]> {
     const now = this.now()
     await this.repository.ensureHomeThread(HOME_THREAD_ID, now)
     const userMessage = {
@@ -63,7 +64,7 @@ export class HomePlannerService {
       try {
         const response = await provider.sendMessage({
           messages: [
-            { role: 'system', content: `Você é o cérebro operacional do aplicativo Coach, não um chatbot externo nem um terminal. O usuário conversa com você dentro do Coach. Você conhece e pode modificar o sistema por ações seguras: criar Workspaces, criar projetos, registrar prazos e rotinas; o aplicativo detecta a intenção, mostra uma proposta e persiste a mudança após confirmação do usuário. Nunca diga que não possui acesso ao Coach ou à interface. Quando pedirem uma alteração, confirme que preparou/proporá a ação no próprio Coach e peça somente os dados indispensáveis que faltarem. Você também deve usar e atualizar o contexto acadêmico aprendido na conversa. Regras: ${COACH_POLICY.principles.join(' ')} Não alegue que uma mudança já foi aplicada antes da confirmação visível. Não invente datas nem disponibilidade.` },
+            { role: 'system', content: `Você responde somente conversa informativa no Home. Operações já foram decididas por um orquestrador autoritativo. CURRENT_DATE=${authority.currentDate} CURRENT_TIME=${new Date(authority.currentTime).toISOString()} TIMEZONE=${authority.timezone} STATE=${JSON.stringify(authority.state)} OPERATION_RESULT=${JSON.stringify(authority.operationResult)} CONSTRAINTS=${authority.constraints.join(' ')} Nunca afirme ter criado, alterado, confirmado ou proposto algo. Não invente datas, conteúdos, duração ou cronograma. Regras: ${COACH_POLICY.principles.join(' ')}` },
             ...recentMessages.map((message) => ({ role: message.role, content: message.content })),
             { role: 'user', content: userMessage.content },
           ],
@@ -110,7 +111,7 @@ export class HomePlannerService {
     try {
       for await (const event of provider.streamMessage({
         messages: [
-          { role: 'system', content: `Você é o cérebro operacional do aplicativo Coach, onde esta conversa acontece. Você não é um terminal externo. O Coach lhe oferece ações persistentes para criar Workspaces e projetos, registrar prazos e rotinas. Ao reconhecer um pedido de mudança, diga que preparou uma proposta de ação no próprio Coach, que será aplicada após confirmação visível. Nunca responda que não tem acesso ao Coach ou à interface. Consulte o contexto da conversa, faça somente perguntas indispensáveis e nunca alegue que aplicou algo antes da confirmação. Regras: ${COACH_POLICY.principles.join(' ')}` },
+          { role: 'system', content: `Você responde somente conversa informativa no Home. Este caminho não executa nem propõe operações. CURRENT_DATE=${new Date(this.now()).toISOString().slice(0, 10)} CURRENT_TIME=${new Date(this.now()).toISOString()} TIMEZONE=${Intl.DateTimeFormat().resolvedOptions().timeZone}. Nunca afirme ter criado, alterado, confirmado ou preparado proposta. Não invente datas, conteúdos, duração ou cronograma. Regras: ${COACH_POLICY.principles.join(' ')}` },
           ...recentMessages.map((message) => ({ role: message.role, content: message.content })),
           { role: 'user', content: input.content.trim() },
         ],
@@ -151,4 +152,6 @@ export class HomePlannerService {
       assistant: { id: this.createId(), threadId: HOME_THREAD_ID, role: 'assistant', content, createdAt: now + 1, providerId, modelId },
     })
   }
+  async saveAuthoritativeTurn(content: string, assistantContent: string, assistantId?: string): Promise<ConversationMessage[]> { const now = this.now(); await this.repository.ensureHomeThread(HOME_THREAD_ID, now); return this.repository.addTurn({ threadId: HOME_THREAD_ID, user: { id: this.createId(), threadId: HOME_THREAD_ID, role: 'user', content, createdAt: now, providerId: null, modelId: null }, assistant: { id: assistantId ?? this.createId(), threadId: HOME_THREAD_ID, role: 'assistant', content: assistantContent, createdAt: now + 1, providerId: 'coach-local', modelId: 'home-organizer-v1' } }) }
+  saveSystemResult(content: string): Promise<ConversationMessage[]> { return this.saveAuthoritativeTurn('Ação aplicada pelo botão da Organizadora.', content) }
 }

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { workspaceIdSchema } from './workspace-contract'
+import type { HomeOrganizerResult } from './planning-contract'
 
 export const sendHomeMessageInputSchema = z.object({
   content: z.string().trim().min(1).max(4_000),
@@ -43,6 +44,8 @@ export interface ConversationMessage {
 export interface ConversationApi {
   listHomeMessages(): Promise<ConversationMessage[]>
   sendHomeMessage(input: SendHomeMessageInput): Promise<ConversationMessage[]>
+  organizeHomeMessage(input: SendHomeMessageInput): Promise<{ messages: ConversationMessage[]; result: HomeOrganizerResult }>
+  saveHomeActionResult(content: string): Promise<ConversationMessage[]>
   streamHomeMessage(input: StreamHomeMessageInput, onEvent: (event: HomeStreamEvent) => void): {
     cancel(): void
     dispose(): void

@@ -43,6 +43,9 @@ import { registerRoadmapHandlers } from './ipc/roadmap-handlers'
 import { PlannerActionService } from '../application/planning/planner-action-service'
 import { DrizzlePlannerActionRepository } from './repositories/drizzle-planner-action-repository'
 import { registerPlannerActionHandlers } from './ipc/planner-action-handlers'
+import { ReportService } from '../application/reports/report-service'
+import { DrizzleReportRepository } from './repositories/drizzle-report-repository'
+import { registerReportHandlers } from './ipc/report-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -108,6 +111,7 @@ void app.whenReady().then(async () => {
     registerProjectHandlers(new ProjectService(projectRepository, async (id) => Boolean(await workspaceRepository.findById(id))))
     registerRoadmapHandlers(new RoadmapService(new DrizzleRoadmapRepository(database), providerManager, (id) => workspaceRepository.findById(id)))
     registerPlannerActionHandlers(new PlannerActionService({ repository: new DrizzlePlannerActionRepository(database), createWorkspace: (input) => workspaceService.create(input), createProject: (workspaceId, name, language) => new ProjectService(projectRepository, async (id) => Boolean(await workspaceRepository.findById(id))).create(workspaceId, name, language), createDeadline: (input) => planningService.createDeadline(input), addRoutine: (content) => planningService.addRoutineNote(content) }))
+    registerReportHandlers(new ReportService(new DrizzleReportRepository(database)))
     registerProviderHandlers(providerConfigurationService)
     finishPendingRestore(databasePath)
     createMainWindow()

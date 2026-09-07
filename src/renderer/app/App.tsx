@@ -5,6 +5,7 @@ import type { CreateWorkspaceInput, Workspace, WorkspaceSummary } from '../../sh
 import type { ConversationMessage } from '../../shared/contracts/conversation-contract'
 import type { ConfigureProviderResult, ProviderAccountSummary, ProviderStatus } from '../../shared/contracts/provider-contract'
 import type { DailyStudyReport, StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
+import type { GlobalReportOverview } from '../../shared/contracts/report-contract'
 import type { CodeExecutionResult } from '../../shared/contracts/code-execution-contract'
 import { ProjectWorkspace } from './ProjectWorkspace'
 import { RoadmapPanel } from './RoadmapPanel'
@@ -232,6 +233,7 @@ export function App() {
   const [sessionHistory, setSessionHistory] = useState<DailyStudyReport[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
   const [priorities, setPriorities] = useState<WorkspacePriority[]>([])
+  const [globalReport, setGlobalReport] = useState<GlobalReportOverview | null>(null)
   const [deadlineOpen, setDeadlineOpen] = useState(false)
   const [planningOpen, setPlanningOpen] = useState(false)
   const [routineInput, setRoutineInput] = useState('')
@@ -271,6 +273,7 @@ export function App() {
     void window.coach.provider.getStatus().then(setProviderStatus).catch(() => setPlannerError('Não foi possível consultar a configuração de IA.'))
     void window.coach.provider.listAccounts().then(setProviderAccounts).catch(() => setPlannerError('Não foi possível listar as contas de IA.'))
     void window.coach.plannerAction.listPending().then(setPlannerActions)
+    void window.coach.report.getGlobalOverview().then(setGlobalReport).catch(() => setPlannerError('Não foi possível carregar o panorama geral.'))
   }, [loadWorkspaces])
 
   useEffect(() => () => {
@@ -531,7 +534,7 @@ export function App() {
   }
 
   return <>
-    <HomeScreen section={homeSection} loading={loading} error={error} workspaces={workspaces} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={providerAccounts.find((account) => account.isActive)?.label ?? 'IA desconectada'} onSection={setHomeSection} onSettings={() => setProviderDialogOpen(true)} onCreate={() => setDialogOpen(true)} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} onPlannerInput={setPlannerInput} onPlannerSend={() => void sendPlannerMessage()} onResolveAction={(actionId, decision) => { void window.coach.plannerAction.resolve({ actionId, decision }).then(async () => { setPlannerActions((current) => current.filter((item) => item.id !== actionId)); await loadWorkspaces() }) }} />
+    <HomeScreen section={homeSection} loading={loading} error={error} report={globalReport} workspaces={workspaces} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={providerAccounts.find((account) => account.isActive)?.label ?? 'IA desconectada'} onSection={setHomeSection} onSettings={() => setProviderDialogOpen(true)} onCreate={() => setDialogOpen(true)} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} onPlannerInput={setPlannerInput} onPlannerSend={() => void sendPlannerMessage()} onResolveAction={(actionId, decision) => { void window.coach.plannerAction.resolve({ actionId, decision }).then(async () => { setPlannerActions((current) => current.filter((item) => item.id !== actionId)); await loadWorkspaces() }) }} />
     {dialogOpen && <CreateWorkspaceDialog open={dialogOpen} submitting={submitting} onClose={() => setDialogOpen(false)} onSubmit={createWorkspace} />}
     {providerDialogOpen && <ProviderSettingsDialog status={providerStatus} accounts={providerAccounts} onClose={() => setProviderDialogOpen(false)} onConfigured={async (label, apiKey, model, persistence) => { const result = await window.coach.provider.configureOpenAI({ label, apiKey, model, persistence }); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()); return result }} onConfiguredCompatible={async (label, baseUrl, apiKey, model, persistence) => { const result = await window.coach.provider.configureCompatible({ label, baseUrl, apiKey, model, persistence }); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()); return result }} onSelect={async (accountId) => { await window.coach.provider.selectAccount(accountId); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()) }} onRemove={async (accountId) => { await window.coach.provider.removeAccount(accountId); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()) }} />}
   </>

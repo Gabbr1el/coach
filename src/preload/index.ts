@@ -16,6 +16,7 @@ import { BACKUP_CHANNELS } from '../shared/contracts/backup-channels'
 import { PROJECT_CHANNELS } from '../shared/contracts/project-channels'
 import { ROADMAP_CHANNELS } from '../shared/contracts/roadmap-channels'
 import { PLANNER_ACTION_CHANNELS } from '../shared/contracts/planner-action-channels'
+import { REPORT_CHANNELS } from '../shared/contracts/report-channels'
 
 const api: CoachDesktopApi = {
   application: {
@@ -152,6 +153,7 @@ const api: CoachDesktopApi = {
     proposeFromText: (content) => ipcRenderer.invoke(PLANNER_ACTION_CHANNELS.proposeFromText, content),
     resolve: (input) => ipcRenderer.invoke(PLANNER_ACTION_CHANNELS.resolve, input),
   },
+  report: { getGlobalOverview: () => ipcRenderer.invoke(REPORT_CHANNELS.getGlobalOverview) },
 }
 
 contextBridge.exposeInMainWorld('coach', Object.freeze(api))

@@ -27,4 +27,5 @@ export interface CoachDesktopApi {
   project: import('./project-contract').ProjectApi
   roadmap: import('./roadmap-contract').RoadmapApi
   plannerAction: import('./planner-action-contract').PlannerActionApi
+  report: import('./report-contract').ReportApi
 }

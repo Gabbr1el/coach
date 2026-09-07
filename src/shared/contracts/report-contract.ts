@@ -1,0 +1,3 @@
+export interface WorkspaceReportOverview { readonly workspaceId: string; readonly workspaceName: string; readonly focusSeconds: number; readonly executions: number; readonly errors: number; readonly interventions: number; readonly focusExits: number; readonly completedPlanItems: number; readonly sessionCount: number; readonly activeDays: number; readonly successRate: number }
+export interface GlobalReportOverview { readonly totalFocusSeconds: number; readonly totalSessions: number; readonly totalActiveDays: number; readonly averageSuccessRate: number; readonly workspaces: WorkspaceReportOverview[] }
+export interface ReportApi { getGlobalOverview(): Promise<GlobalReportOverview> }

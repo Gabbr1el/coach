@@ -37,7 +37,15 @@ export class PdfMaterialService {
     if (rawPages.at(-1)?.trim() === '') rawPages.pop()
     const pages = rawPages.map((page) => page.replace(/\s+/g, ' ').trim())
     if (pages.length > 500) throw new Error('PDF exceeds 500 pages')
-    const material: MaterialSummary = { id: crypto.randomUUID(), name: basename(path).slice(0, 240), pageCount: pages.length, status: 'ready', relevance: 50, sourceUrl: null, createdAt: Date.now() }
+    const workspace = this.database.sqlite.prepare('SELECT name, objective FROM workspaces WHERE id = ?').get(workspaceId) as { name: string; objective: string } | undefined
+    if (!workspace) throw new Error('Workspace not found')
+    const sample = `${basename(path)} ${pages.slice(0, 8).join(' ')}`.toLocaleLowerCase('pt-BR')
+    const terms = `${workspace.name} ${workspace.objective}`.toLocaleLowerCase('pt-BR').split(/[^\p{L}\p{N}+#]+/u).filter((term) => term.length >= 3 && !['para', 'com', 'uma', 'aprender', 'estudar', 'basico', 'básico', 'avancado', 'avançado'].includes(term))
+    const clearlyIrrelevant = /conta de (energia|luz)|energia elétrica|energia eletrica|fatura|vencimento|código de barras|codigo de barras|consumo kwh/.test(sample) && !terms.some((term) => sample.includes(term))
+    if (clearlyIrrelevant) throw new Error(`Este documento parece ser uma conta de energia e não possui relação com o objetivo deste Workspace (${workspace.name}).`)
+    const matches = terms.filter((term) => sample.includes(term)).length
+    const relevance = terms.length ? Math.min(100, Math.round(matches / Math.min(terms.length, 5) * 100)) : 50
+    const material: MaterialSummary = { id: crypto.randomUUID(), name: basename(path).slice(0, 240), pageCount: pages.length, status: 'ready', relevance, sourceUrl: null, createdAt: Date.now() }
     const chunks: Array<{ id: string; pageNumber: number; content: string }> = []
     let extractedCharacters = 0
     for (let pageNumber = 1; pageNumber <= pages.length; pageNumber += 1) {

@@ -7,7 +7,7 @@ class AcademicRepository implements PlanningRepository {
   createDeadline(input: { workspaceId: string; dueAt: number }) { this.deadlines.push(input) }
   addRoutineNote() {}; listRoutineNotes() { return [] }; getWorkspaceName() { return 'C' }; listPriorityInputs() { return this.deadlines.map((item) => ({ ...item, title: 'Prova C', estimatedMinutes: 240, masteryPercent: 50, recentFocusSeconds: 0 })) }
   listWorkspaces() { return [{ id: 'c-id', name: 'C', objective: 'Aprender C' }] }
-  upsertAcademicEvent(input: { id: string; workspaceId: string; type: 'exam' | 'assignment' | 'deadline'; title: string; dueAt: number }) { this.events.push({ ...input, workspaceName: 'C' }) }
+  upsertAcademicEvent(input: { id: string; workspaceId: string; type: 'exam' | 'assignment' | 'deadline'; title: string; dueAt: number }) { this.events.push({ ...input, workspaceName: 'C', phase: 'upcoming' }) }
   updateLatestAcademicEvent(workspaceId: string, type: 'exam' | 'assignment' | 'deadline', dueAt: number) { const event = [...this.events].reverse().find((item) => item.workspaceId === workspaceId && item.type === type); if (!event) return false; this.events = this.events.map((item) => item.id === event.id ? { ...item, dueAt } : item); return true }
   setAvailability(weekday: number, minutes: number) { this.availability = [...this.availability.filter((item) => item.weekday !== weekday), { weekday, minutes }] }
   getAcademicOverview() { return { events: this.events, availability: this.availability, workspaces: [], routine: [] } }

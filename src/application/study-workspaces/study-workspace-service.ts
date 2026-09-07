@@ -15,7 +15,7 @@ export interface StudyWorkspaceServiceDependencies {
   readonly eventBus?: WorkspaceEventBus
   readonly getRoadmap?: (workspaceId: string) => Roadmap | null
   readonly getStudyProgress?: (workspaceId: string) => StudyProgressState | null
-  readonly getPlanContext?: (workspaceId: string) => { availableMinutes: number; urgency: 'stable' | 'attention' | 'urgent'; difficultyTopicIds: Set<string>; startMinutes: number }
+  readonly getPlanContext?: (workspaceId: string) => { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; difficultyTopicIds: Set<string>; startMinutes: number; dayKey: string; lastPlannedDayKey: string | null }
 }
 
 const DEFAULT_CODE = `class Node:
@@ -40,7 +40,7 @@ class LinkedList:
         current.next = new_node
 `
 
-function createRoadmapPlan(workspaceId: string, roadmap: Roadmap | null, progress: StudyProgressState | null, existing: StudyPlanItem[], createId: () => string, context?: { availableMinutes: number; urgency: 'stable' | 'attention' | 'urgent'; difficultyTopicIds: Set<string>; startMinutes: number }): StudyPlanItem[] { return roadmap ? deriveDailyPlan({ workspaceId, roadmap, progress, availableMinutes: context?.availableMinutes ?? 120, urgency: context?.urgency ?? 'stable', difficultyTopicIds: context?.difficultyTopicIds ?? new Set(), startMinutes: context?.startMinutes ?? 18 * 60 }, existing, createId) : [] }
+function createRoadmapPlan(workspaceId: string, roadmap: Roadmap | null, progress: StudyProgressState | null, existing: StudyPlanItem[], createId: () => string, context?: { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; difficultyTopicIds: Set<string>; startMinutes: number }): StudyPlanItem[] { return roadmap ? deriveDailyPlan({ workspaceId, roadmap, progress, availableMinutes: context?.availableMinutes ?? 120, phase: context?.phase ?? null, difficultyTopicIds: context?.difficultyTopicIds ?? new Set(), startMinutes: context?.startMinutes ?? 18 * 60 }, existing, createId) : [] }
 
 export class StudyWorkspaceService {
   private readonly now: () => number
@@ -135,9 +135,11 @@ export class StudyWorkspaceService {
   async recalculatePlan(workspaceId: string): Promise<StudyWorkspaceState> {
     const state = await this.getState(workspaceId)
     const plan = createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, state.plan, this.createId, this.dependencies.getPlanContext?.(workspaceId))
-    await this.dependencies.repository.replacePlan(workspaceId, state.sessionId, plan, this.now())
+    const context = this.dependencies.getPlanContext?.(workspaceId)
+    await this.dependencies.repository.replacePlan(workspaceId, state.sessionId, plan, this.now(), context?.dayKey)
     return this.getState(workspaceId)
   }
+  async refreshLivePlan(workspaceId: string): Promise<StudyWorkspaceState> { const context = this.dependencies.getPlanContext?.(workspaceId); if (!context || context.lastPlannedDayKey === context.dayKey) return this.getState(workspaceId); return this.recalculatePlan(workspaceId) }
 
   async activatePlanItem(workspaceId: string, itemId: string): Promise<StudyWorkspaceState> {
     const state = await this.getState(workspaceId)

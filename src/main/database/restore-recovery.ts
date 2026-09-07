@@ -2,7 +2,7 @@ import { closeSync, existsSync, fsyncSync, openSync, renameSync, rmSync } from '
 import { dirname } from 'node:path'
 import type Database from 'better-sqlite3'
 
-export const CURRENT_MIGRATION_COUNT = 24
+export const CURRENT_MIGRATION_COUNT = 25
 
 function syncDirectory(path: string): void {
   const descriptor = openSync(dirname(path), 'r')

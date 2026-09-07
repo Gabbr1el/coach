@@ -1,4 +1,5 @@
 import type { AcademicOverview, AcademicMutationResult, StudyScheduleItem, WorkspacePriority } from '../../shared/contracts/planning-contract'
+import { academicEventPhase } from './academic-time'
 
 export interface PlanningRepository {
   createDeadline(input: { id: string; workspaceId: string; title: string; dueAt: number; estimatedMinutes: number; masteryPercent: number; createdAt: number }): void
@@ -46,7 +47,7 @@ export class PlanningService {
       const recentCredit = Math.min(20, input.recentFocusSeconds / 180)
       const score = Math.max(0, Math.round(urgency * 0.45 + difficulty * 0.35 + workload * 0.2 - recentCredit))
       const current = priorities.get(input.workspaceId)
-      const phase = rawDays <= 1 ? (new Date(input.dueAt).toDateString() === new Date(now).toDateString() ? 'today' : 'near') : rawDays <= 3 ? 'near' : 'upcoming'
+      const phase = academicEventPhase(input.dueAt, now)
       const deadlineText = phase === 'today' ? 'hoje' : Math.ceil(days) === 1 ? 'amanhã' : `em ${Math.ceil(days)} dias`
       if (!current || score > current.score) priorities.set(input.workspaceId, { workspaceId: input.workspaceId, score, level: score >= 65 ? 'urgent' : score >= 35 ? 'attention' : 'on_track', reason: `${input.title}: ${deadlineText}, domínio ${input.masteryPercent}%`, nextDeadline: input.title, eventPhase: phase, dueAt: input.dueAt })
     }

@@ -7,7 +7,7 @@ export const applyAcademicMessageInputSchema = z.object({ content: z.string().tr
 export type AcademicEventPhase = 'upcoming' | 'near' | 'today' | 'passed'
 export interface WorkspacePriority { readonly workspaceId: string; readonly score: number; readonly level: 'on_track' | 'attention' | 'urgent'; readonly reason: string; readonly nextDeadline: string | null; readonly eventPhase?: AcademicEventPhase; readonly dueAt?: number }
 export interface StudyScheduleItem { readonly workspaceId: string; readonly workspaceName: string; readonly title: string; readonly suggestedMinutes: number; readonly reason: string }
-export interface AcademicEvent { readonly id: string; readonly workspaceId: string; readonly workspaceName: string; readonly type: 'exam' | 'assignment' | 'deadline'; readonly title: string; readonly dueAt: number }
+export interface AcademicEvent { readonly id: string; readonly workspaceId: string; readonly workspaceName: string; readonly type: 'exam' | 'assignment' | 'deadline'; readonly title: string; readonly dueAt: number; readonly phase: AcademicEventPhase }
 export interface AcademicAvailability { readonly weekday: number; readonly minutes: number }
 export interface AcademicWorkspaceContext { readonly workspaceId: string; readonly workspaceName: string; readonly difficulty: string | null; readonly completedTopics: number; readonly totalTopics: number }
 export interface AcademicOverview { readonly events: AcademicEvent[]; readonly availability: AcademicAvailability[]; readonly workspaces: AcademicWorkspaceContext[]; readonly routine: string[] }

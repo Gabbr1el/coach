@@ -33,6 +33,7 @@ export const workspaceStudyStates = sqliteTable('workspace_study_states', {
   documentRevision: integer('document_revision').notNull().default(0),
   notesRevision: integer('notes_revision').notNull().default(0),
   accumulatedFocusSeconds: integer('accumulated_focus_seconds').notNull().default(0),
+  lastPlannedDayKey: text('last_planned_day_key'),
 }, (table) => [
   check('workspace_study_states_filename_check', sql`length(trim(${table.fileName})) between 1 and 120`),
   check('workspace_study_states_timer_check', sql`${table.timerDurationSeconds} between 60 and 10800 and ${table.timerRemainingSeconds} between 0 and ${table.timerDurationSeconds}`),

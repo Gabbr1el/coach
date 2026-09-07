@@ -30,7 +30,7 @@ export function HomeScreen({ section, loading, error, report, schedule, workspac
   const followLatest = useRef(true)
   useEffect(() => { const pane = conversationRef.current; if (pane && followLatest.current) pane.scrollTop = pane.scrollHeight }, [messages, streamedContent, plannerBusy])
   const submit = (event: FormEvent) => { event.preventDefault(); followLatest.current = true; onPlannerSend() }
-  const today = priorities.slice(0, 4)
+  const today = schedule.length ? schedule.slice(0, 4).map((item) => ({ workspaceId: item.workspaceId, level: priorities.find((priority) => priority.workspaceId === item.workspaceId)?.level ?? 'on_track', nextDeadline: item.title, reason: `${item.suggestedMinutes} min · ${item.reason}`, score: priorities.find((priority) => priority.workspaceId === item.workspaceId)?.score ?? 0 })) : priorities.slice(0, 4)
   let content: ReactNode
   if (section === 'workspaces') content = <div className="mx-auto w-full max-w-6xl"><div className="flex items-end justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#626773]">Biblioteca</p><h1 className="mt-2 text-3xl font-semibold text-white">Seus Workspaces</h1></div><button onClick={onCreate} className="flex items-center gap-2 rounded-lg bg-[#8c7cff] px-4 py-2.5 text-xs font-bold text-[#0c0d10]"><Plus size={15} />Novo Workspace</button></div><div className="mt-8 border-t border-[#292c35]">{workspaces.map((workspace) => <WorkspaceRow key={workspace.id} workspace={workspace} priority={priorities.find((item) => item.workspaceId === workspace.id)} onOpen={onOpen} onArchive={onArchive} />)}</div></div>
   else if (section === 'reports') content = <GlobalReport report={report} onOpen={onOpen} />

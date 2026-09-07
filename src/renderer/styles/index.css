@@ -1,20 +1,20 @@
 @import "tailwindcss";
 
 @theme {
-  --color-coach-paper: #f1eee4;
-  --color-coach-ink: #12302d;
-  --color-coach-muted: #687975;
-  --color-coach-line: #d6d8ce;
-  --color-coach-green: #087f6d;
-  --color-coach-orange: #eb6a37;
-  --color-coach-yellow: #f0bc43;
-  --color-coach-mint: #9dd7c6;
-  --font-display: "Trebuchet MS", Avenir, sans-serif;
-  --shadow-soft: 0 24px 70px rgba(22, 54, 49, 0.11);
+  --color-coach-paper: #111217;
+  --color-coach-ink: #f4f5f7;
+  --color-coach-muted: #9297a3;
+  --color-coach-line: #292c35;
+  --color-coach-green: #8c7cff;
+  --color-coach-orange: #aa9cff;
+  --color-coach-yellow: #8c7cff;
+  --color-coach-mint: #72d7aa;
+  --font-display: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --shadow-soft: 0 18px 44px rgba(0, 0, 0, 0.28);
 }
 
 :root {
-  font-family: Avenir, Montserrat, "Trebuchet MS", sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
   color: var(--color-coach-ink);
   background: var(--color-coach-paper);
   font-synthesis: none;
@@ -37,10 +37,7 @@ body {
   margin: 0;
   min-width: 320px;
   height: 100vh;
-  background:
-    radial-gradient(circle at 8% 2%, rgba(240, 188, 67, 0.24), transparent 28rem),
-    radial-gradient(circle at 94% 85%, rgba(157, 215, 198, 0.34), transparent 34rem),
-    var(--color-coach-paper);
+  background: #090a0d;
 }
 
 .coach-app-shell {
@@ -74,6 +71,29 @@ body {
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: pre-wrap;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #343842;
+  background-clip: padding-box;
 }
 
 button:focus-visible {

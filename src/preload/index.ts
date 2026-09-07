@@ -165,6 +165,7 @@ const api: CoachDesktopApi = {
   },
   roadmap: {
     get: (workspaceId) => ipcRenderer.invoke(ROADMAP_CHANNELS.get, { workspaceId }),
+    getLearningPathState: (workspaceId) => ipcRenderer.invoke(ROADMAP_CHANNELS.getLearningPathState, { workspaceId }),
     generate: (workspaceId, instruction) => ipcRenderer.invoke(ROADMAP_CHANNELS.generate, { workspaceId, instruction }),
     accept: (input) => ipcRenderer.invoke(ROADMAP_CHANNELS.accept, input),
   },

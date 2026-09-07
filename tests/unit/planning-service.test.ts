@@ -21,3 +21,5 @@ describe('PlanningService', () => {
     expect(new PlanningService(repository, () => now).listPriorities()[0]?.workspaceId).toBe('c')
   })
 })
+
+it('changes event phase with time and removes passed events from priorities', () => { const dueAt = new Date('2026-09-10T14:00:00').getTime(); const repository = { createDeadline() {}, addRoutineNote() {}, listRoutineNotes: () => [], getWorkspaceName: () => 'C', listPriorityInputs: () => [{ workspaceId: 'c', title: 'Prova de C', dueAt, estimatedMinutes: 240, masteryPercent: 40, recentFocusSeconds: 0 }] }; expect(new PlanningService(repository, () => new Date('2026-09-09T14:00:00').getTime()).listPriorities()[0]?.eventPhase).toBe('near'); expect(new PlanningService(repository, () => new Date('2026-09-10T10:00:00').getTime()).listPriorities()[0]?.eventPhase).toBe('today'); expect(new PlanningService(repository, () => new Date('2026-09-11T10:00:00').getTime()).listPriorities()).toEqual([]) })

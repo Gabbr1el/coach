@@ -412,6 +412,7 @@ export function App() {
     const content = plannerInput.trim()
     if (!content || plannerSending || plannerLoading) return
     setPlannerSending(true)
+    setMessages((current) => [...current, { id: `optimistic-${crypto.randomUUID()}`, role: 'user', content, createdAt: Date.now(), sequence: (current.at(-1)?.sequence ?? 0) + 1, providerId: null, modelId: null }])
     setPlannerInput('')
     void window.coach.plannerAction.proposeFromText(content).then((actions) => setPlannerActions((current) => [...actions, ...current.filter((item) => !actions.some((action) => action.id === item.id))])).catch(() => setPlannerError('O Coach respondeu, mas não conseguiu preparar a ação no sistema.'))
     setStreamedContent('')
@@ -494,12 +495,12 @@ export function App() {
     const roadmapChange = /(?:mude|altere|refaça|refaca|atualize|melhore|detalhe|modifique).{0,40}roadmap|roadmap.{0,40}(?:vago|genérico|generico|detalhado|mude|altere)/i.test(content)
     if (roadmapChange) {
       const workspaceId = selected.id
-      const optimistic: ConversationMessage = { id: `optimistic-${crypto.randomUUID()}`, role: 'user', content, createdAt: Date.now(), sequence: (workspaceMessages.at(-1)?.sequence ?? 0) + 1, providerId: null, modelId: null }
-      setWorkspaceMessages((current) => [...current, optimistic]); setWorkspaceInput(''); setWorkspaceSending(true); setWorkspaceStreamedContent('Atualizando o roadmap no Coach…'); setWorkspaceError(null)
+      setWorkspaceMessages((current) => [...current, { id: `optimistic-${crypto.randomUUID()}`, role: 'user', content, createdAt: Date.now(), sequence: (current.at(-1)?.sequence ?? 0) + 1, providerId: null, modelId: null }]); setWorkspaceInput(''); setWorkspaceSending(true); setWorkspaceStreamedContent('Atualizando o roadmap no Coach…'); setWorkspaceError(null)
       void window.coach.roadmap.generate(workspaceId, content).then((roadmap) => { setStudyRoadmap(roadmap); setWorkspacePage('plan'); setWorkspaceStreamedContent(''); setWorkspaceMessages((current) => [...current, { id: `system-${crypto.randomUUID()}`, role: 'assistant', content: `Roadmap atualizado e salvo como versão ${roadmap.version}. Revise a nova proposta no Plano.`, createdAt: Date.now(), sequence: (current.at(-1)?.sequence ?? 0) + 1, providerId: roadmap.providerId, modelId: roadmap.modelId }]) }).catch(() => { setWorkspaceStreamedContent(''); setWorkspaceError('Não consegui alterar o roadmap agora.') }).finally(() => setWorkspaceSending(false))
       return
     }
     setWorkspaceSending(true)
+    setWorkspaceMessages((current) => [...current, { id: `optimistic-${crypto.randomUUID()}`, role: 'user', content, createdAt: Date.now(), sequence: (current.at(-1)?.sequence ?? 0) + 1, providerId: null, modelId: null }])
     workspaceDrafts.current.set(selected.id, content)
     setWorkspaceInput('')
     setWorkspaceStreamedContent('')

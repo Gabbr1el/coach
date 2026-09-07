@@ -39,6 +39,6 @@ export class ContextRouter {
     if (intervention) return { depth: context ? 'SESSION' : 'MINIMAL', outputBudget: 'HINT', maxOutputTokens: 160, helpLevel: 1, context: context ? { ...context, notes: '' } : undefined, observerSignal: { repeatedErrorCount: observer!.repeatedErrorCount } }
     if (DEEP_REQUEST.test(text)) return { depth: context ? 'DEEP' : 'WORKSPACE', outputBudget: 'DEEP_ANALYSIS', maxOutputTokens: 900, helpLevel: 4, context, observerSignal: null }
     if (HELP_REQUEST.test(text)) return { depth: context ? 'SESSION' : 'MINIMAL', outputBudget: 'SHORT_EXPLANATION', maxOutputTokens: 220, helpLevel: 2, context: context ? { ...context, notes: '' } : undefined, observerSignal: null }
-    return { depth: 'MINIMAL', outputBudget: 'NORMAL_EXPLANATION', maxOutputTokens: 240, helpLevel: 1, context: undefined, observerSignal: null }
+    return { depth: context ? 'SESSION' : 'MINIMAL', outputBudget: 'NORMAL_EXPLANATION', maxOutputTokens: 240, helpLevel: 1, context, observerSignal: null }
   }
 }

@@ -13,4 +13,8 @@ describe('ContextRouter', () => {
   it('prioritizes a short level-one intervention during a loop', () => {
     expect(new ContextRouter().route(base, { active: true, repeatedErrorCount: 3, interventionSuggested: true, focusExitCount: 0, timeAwaySeconds: 0 })).toMatchObject({ outputBudget: 'HINT', helpLevel: 1, maxOutputTokens: 160 })
   })
+  it('routes live practice context even when persisted context sharing is off', () => {
+    const route = new ContextRouter().route({ ...base, content: 'por que não funciona?', activePage: 'practice', practiceContext: { fileName: 'main.py', language: 'python', code: 'print hello word' }, lastExecution: { stdout: '', stderr: 'SyntaxError: Missing parentheses', exitCode: 1, timedOut: false } })
+    expect(route.context).toMatchObject({ activePage: 'practice', practiceContext: { code: 'print hello word' }, lastExecution: { exitCode: 1 } })
+  })
 })

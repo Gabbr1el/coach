@@ -4,6 +4,7 @@ export class AIProviderManager {
   private readonly providers = new Map<string, AIProvider>()
   private activeProviderId: string | null = null
   private readonly purposeRoutes = new Map<'planner' | 'tutor' | 'roadmap' | 'report' | 'lesson', string>()
+  private readonly availabilityListeners = new Set<() => void>()
 
   register(provider: AIProvider): void {
     if (this.providers.has(provider.id)) throw new Error(`AI provider '${provider.id}' is already registered`)
@@ -17,6 +18,7 @@ export class AIProviderManager {
   select(providerId: string): void {
     if (!this.providers.has(providerId)) throw new Error(`AI provider '${providerId}' is not registered`)
     this.activeProviderId = providerId
+    for (const listener of this.availabilityListeners) listener()
   }
 
   getActive(): AIProvider | null {
@@ -36,6 +38,7 @@ export class AIProviderManager {
   getActiveRegistrationId(): string | null {
     return this.activeProviderId
   }
+  onAvailable(listener: () => void): () => void { this.availabilityListeners.add(listener); return () => this.availabilityListeners.delete(listener) }
 
   clearSelection(): void {
     this.activeProviderId = null

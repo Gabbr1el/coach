@@ -10,6 +10,7 @@ import { DrizzleWorkspaceRepository } from '../../src/main/repositories/drizzle-
 import { DrizzleConversationRepository } from '../../src/main/repositories/drizzle-conversation-repository'
 import { DrizzleStudyWorkspaceRepository } from '../../src/main/repositories/drizzle-study-workspace-repository'
 import { DrizzlePlannerActionRepository } from '../../src/main/repositories/drizzle-planner-action-repository'
+import { DrizzleRoadmapRepository } from '../../src/main/repositories/drizzle-roadmap-repository'
 
 const temporaryDirectories: string[] = []
 const migrationsFolder = resolve('drizzle/migrations')
@@ -65,6 +66,7 @@ describe('Coach database migrations', () => {
       { name: 'study_progress_events' },
       { name: 'study_sessions' },
       { name: 'topic_learning_states' },
+      { name: 'workspace_learning_path_state' },
       { name: 'workspace_memories' },
       { name: 'workspace_projects' },
       { name: 'workspace_study_states' },
@@ -202,5 +204,8 @@ describe('Coach database migrations', () => {
     database.sqlite.prepare('INSERT INTO study_deadlines (id, workspace_id, title, due_at, estimated_minutes, mastery_percent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('d', 'c', 'Prova C', 2, 120, null, 1)
     expect(database.sqlite.prepare('SELECT mastery_percent AS masteryPercent FROM study_deadlines WHERE id = ?').get('d')).toEqual({ masteryPercent: null })
     database.close()
+  })
+  it('preserves learning path lifecycle and active roadmap after reopening SQLite', async () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const workspaces = new DrizzleWorkspaceRepository(database); const workspace = await workspaces.create({ id: crypto.randomUUID(), name: 'C', objective: 'Aprender C', createdAt: 1, updatedAt: 1 }); const repository = new DrizzleRoadmapRepository(database); repository.setLearningPathState({ workspaceId: workspace.id, status: 'waiting_for_provider', activeRoadmapId: null, lastAttemptAt: 2, retryAfter: 302000, lastErrorCode: 'PROVIDER_UNAVAILABLE', updatedAt: 2 }); const path = { id: crypto.randomUUID(), workspaceId: workspace.id, title: 'Trilha C', status: 'accepted' as const, generationKind: 'ai_generated' as const, version: 1, providerId: 'test', modelId: 'test', createdAt: 3, updatedAt: 3, modules: [{ id: crypto.randomUUID(), title: 'Tipos e compilação', objective: 'Compilar', estimatedMinutes: 60, position: 1, status: 'active' as const, topics: ['gcc', 'tipos'], outcomes: ['Compilar'], practice: 'Programa C', completionCriteria: ['Sem erros'], resources: [] }, { id: crypto.randomUUID(), title: 'Ponteiros', objective: 'Usar endereços', estimatedMinutes: 90, position: 2, status: 'locked' as const, topics: ['endereços', 'arrays'], outcomes: ['Explicar ponteiros'], practice: 'Vetor', completionCriteria: ['Sem acesso inválido'], resources: [] }] }; repository.activate(path); const databasePath = database.path; database.close(); const reopened = openCoachDatabase({ databasePath, migrationsFolder }); const restored = new DrizzleRoadmapRepository(reopened); expect(restored.getLearningPathState(workspace.id)).toMatchObject({ status: 'ready', activeRoadmapId: path.id, retryAfter: null }); expect(restored.findCurrent(workspace.id)?.id).toBe(path.id); reopened.close()
   })
 })

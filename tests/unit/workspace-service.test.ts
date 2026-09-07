@@ -37,6 +37,7 @@ class MemoryWorkspaceRepository implements WorkspaceRepository {
 }
 
 describe('WorkspaceService', () => {
+  it('returns a created workspace before learning path generation finishes', async () => { const repository = new MemoryWorkspaceRepository(); let release!: () => void; const pending = new Promise<void>((resolve) => { release = resolve }); const service = new WorkspaceService({ repository, ensureLearningPath: async () => pending }); const created = await Promise.race([service.create({ name: 'C', objective: 'Estudar C' }), new Promise((_, reject) => setTimeout(() => reject(new Error('blocked')), 20))]); expect(created).toMatchObject({ name: 'C' }); release() })
   it('uses the default UUID generator without losing its Crypto receiver', async () => {
     const repository = new MemoryWorkspaceRepository()
     const service = new WorkspaceService({ repository, now: () => 42 })

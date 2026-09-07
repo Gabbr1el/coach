@@ -6,37 +6,46 @@ export interface WorkspaceServiceDependencies {
   readonly repository: WorkspaceRepository
   readonly now?: () => number
   readonly createId?: () => string
+  readonly ensureLearningPath?: (workspaceId: string) => Promise<unknown>
 }
 
 export class WorkspaceService {
   private readonly repository: WorkspaceRepository
   private readonly now: () => number
   private readonly createId: () => string
+  private ensureLearningPath: ((workspaceId: string) => Promise<unknown>) | null
 
-  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID() }: WorkspaceServiceDependencies) {
+  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), ensureLearningPath }: WorkspaceServiceDependencies) {
     this.repository = repository
     this.now = now
     this.createId = createId
+    this.ensureLearningPath = ensureLearningPath ?? null
   }
 
   list(): Promise<WorkspaceSummary[]> {
     return this.repository.listActive()
   }
 
-  create(input: CreateWorkspaceInput): Promise<Workspace> {
+  setLearningPathEnsurer(ensureLearningPath: (workspaceId: string) => Promise<unknown>): void { this.ensureLearningPath = ensureLearningPath }
+
+  async create(input: CreateWorkspaceInput): Promise<Workspace> {
     const now = this.now()
     const normalized = normalizeSubject(input.name)
-    return this.repository.create({
+    const workspace = await this.repository.create({
       id: this.createId(),
       name: normalized.subject,
       objective: [input.objective.trim(), normalized.userContext ? `Contexto declarado: ${normalized.userContext}` : ''].filter(Boolean).join('\n'),
       createdAt: now,
       updatedAt: now,
     })
+    void this.ensureLearningPath?.(workspace.id).catch(() => {})
+    return workspace
   }
 
-  open(id: string): Promise<Workspace | null> {
-    return this.repository.markOpened(id, this.now())
+  async open(id: string): Promise<Workspace | null> {
+    const workspace = await this.repository.markOpened(id, this.now())
+    if (workspace) void this.ensureLearningPath?.(workspace.id).catch(() => {})
+    return workspace
   }
 
   async archive(id: string): Promise<void> {

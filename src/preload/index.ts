@@ -133,6 +133,8 @@ const api: CoachDesktopApi = {
     addRoutineNote: (content) => ipcRenderer.invoke(PLANNING_CHANNELS.addRoutineNote, { content }),
     listRoutineNotes: () => ipcRenderer.invoke(PLANNING_CHANNELS.listRoutineNotes),
     getSchedule: () => ipcRenderer.invoke(PLANNING_CHANNELS.getSchedule),
+    applyAcademicMessage: (content) => ipcRenderer.invoke(PLANNING_CHANNELS.applyAcademicMessage, { content }),
+    getAcademicOverview: () => ipcRenderer.invoke(PLANNING_CHANNELS.getAcademicOverview),
   },
   material: {
     importPdf: (workspaceId) => ipcRenderer.invoke(MATERIAL_CHANNELS.importPdf, { workspaceId }),

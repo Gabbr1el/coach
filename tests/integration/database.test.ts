@@ -37,6 +37,8 @@ describe('Coach database migrations', () => {
 
     expect(tables).toEqual([
       { name: '__drizzle_migrations' },
+      { name: 'academic_availability' },
+      { name: 'academic_events' },
       { name: 'conversation_messages' },
       { name: 'conversation_threads' },
       { name: 'learning_events' },

@@ -1,0 +1,4 @@
+CREATE TABLE `academic_events` (`id` text PRIMARY KEY NOT NULL, `workspace_id` text NOT NULL, `type` text NOT NULL, `title` text NOT NULL, `due_at` integer NOT NULL, `created_at` integer NOT NULL, `updated_at` integer NOT NULL, FOREIGN KEY (`workspace_id`) REFERENCES `workspaces`(`id`) ON UPDATE no action ON DELETE cascade);--> statement-breakpoint
+CREATE INDEX `academic_events_due_idx` ON `academic_events` (`due_at`);--> statement-breakpoint
+CREATE INDEX `academic_events_workspace_idx` ON `academic_events` (`workspace_id`);--> statement-breakpoint
+CREATE TABLE `academic_availability` (`weekday` integer PRIMARY KEY NOT NULL, `minutes` integer NOT NULL, `updated_at` integer NOT NULL, CONSTRAINT `academic_availability_weekday_check` CHECK("academic_availability"."weekday" between 0 and 6), CONSTRAINT `academic_availability_minutes_check` CHECK("academic_availability"."minutes" between 0 and 1440));

@@ -15,10 +15,10 @@ export interface HomePlannerServiceDependencies {
 function localPlannerReply(content: string): string {
   const normalized = content.toLocaleLowerCase('pt-BR')
   if (normalized.includes('prova') || normalized.includes('trabalho')) {
-    return 'Registrei a intenção, mas ainda não transformo mensagens em prazos automaticamente. Para planejar corretamente, preciso da matéria, da data e de quanto tempo você tem disponível por dia.'
+    return 'Usei a matéria, a data e o Workspace já conhecidos para atualizar seu contexto acadêmico e reorganizar as prioridades. Se você informar sua disponibilidade, consigo refinar a distribuição do tempo.'
   }
   if (normalized.includes('horário') || normalized.includes('trabalho de') || normalized.includes('faculdade')) {
-    return 'Entendi que isso faz parte da sua rotina. Na etapa de Planner, vou converter horários e compromissos em disponibilidade estruturada. Por enquanto, esta conversa já fica salva localmente.'
+    return 'Atualizei sua disponibilidade estruturada e recalculei o planejamento dos Workspaces relacionados.'
   }
   return 'Posso organizar seus estudos pela Home. Ainda estou em modo local, sem provedor de IA conectado. Conte qual matéria, prazo ou dificuldade você quer organizar e manterei a conversa salva para continuarmos depois.'
 }

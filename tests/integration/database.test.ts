@@ -5,6 +5,7 @@ import { resolve } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openCoachDatabase } from '../../src/main/database/connection'
+import { CURRENT_MIGRATION_COUNT, validateCoachDatabaseSchema } from '../../src/main/database/restore-recovery'
 import { DrizzleWorkspaceRepository } from '../../src/main/repositories/drizzle-workspace-repository'
 import { DrizzleConversationRepository } from '../../src/main/repositories/drizzle-conversation-repository'
 import { DrizzleStudyWorkspaceRepository } from '../../src/main/repositories/drizzle-study-workspace-repository'
@@ -61,7 +62,8 @@ describe('Coach database migrations', () => {
       { name: 'workspace_study_states' },
       { name: 'workspaces' },
     ])
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 19 })
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: CURRENT_MIGRATION_COUNT })
+    expect(() => validateCoachDatabaseSchema(sqlite)).not.toThrow()
     database.close()
   })
 

@@ -520,7 +520,7 @@ export function App() {
     const workspaceId = selected.id
     const epoch = workspaceLoadEpoch.current
     const isCurrentRequest = () => workspaceLoadEpoch.current === epoch
-    workspaceStreamHandle.current = window.coach.conversation.streamWorkspaceMessage({ requestId, workspaceId, content }, (event) => {
+    workspaceStreamHandle.current = window.coach.conversation.streamWorkspaceMessage({ requestId, workspaceId, content, activePage: workspacePage, activeStudy: studyModule ? { module: studyModule.title, topic: studyModule.topics[0] ?? null } : undefined, lastExecution: execution ? { stdout: execution.stdout, stderr: execution.stderr, exitCode: execution.exitCode, timedOut: execution.timedOut } : null }, (event) => {
       if (!isCurrentRequest()) return
       if (event.type === 'text-delta') setWorkspaceStreamedContent((current) => current + event.content)
       if (event.type === 'completed') {

@@ -1,13 +1,14 @@
-import { BarChart3, Brain, FileText, FolderKanban, Home, LayoutDashboard, Library, ListChecks, Send, Settings, Sparkles, TerminalSquare } from 'lucide-react'
+import { BarChart3, BookOpen, Brain, FileText, FolderKanban, Home, LayoutDashboard, Library, ListChecks, Send, Settings, Sparkles, TerminalSquare } from 'lucide-react'
 import type { FormEvent, ReactNode, RefObject } from 'react'
 import type { ConversationMessage } from '../../shared/contracts/conversation-contract'
 import { ChatMessage } from './ChatMessage'
 
-export type WorkspacePage = 'overview' | 'plan' | 'materials' | 'practice' | 'videos' | 'reports'
+export type WorkspacePage = 'overview' | 'plan' | 'studies' | 'materials' | 'practice' | 'videos' | 'reports'
 
 const PAGES = [
   { id: 'overview' as const, label: 'Visão geral', icon: LayoutDashboard },
   { id: 'plan' as const, label: 'Plano', icon: ListChecks },
+  { id: 'studies' as const, label: 'Estudos', icon: BookOpen },
   { id: 'materials' as const, label: 'Materiais', icon: Library },
   { id: 'practice' as const, label: 'Prática', icon: TerminalSquare },
   { id: 'videos' as const, label: 'Vídeos', icon: FileText },

@@ -86,9 +86,9 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
       SUM(CASE WHEN e.type = 'window_blurred' THEN 1 ELSE 0 END) AS focusExits,
       (SELECT COUNT(*) FROM study_plan_items p WHERE p.session_id = s.id AND p.status = 'completed') AS completedPlanItems
       FROM study_sessions s LEFT JOIN learning_events e ON e.session_id = s.id
-      WHERE s.workspace_id = ? AND s.status = 'completed' GROUP BY s.id ORDER BY s.started_at DESC LIMIT ?`).all(workspaceId, limit) as StudySessionSummary[]
+      WHERE s.workspace_id = ? GROUP BY s.id ORDER BY s.started_at DESC LIMIT ?`).all(workspaceId, limit) as StudySessionSummary[]
     const enriched = sessions.map((session) => {
-      const successRate = session.executions ? Math.round(Math.max(0, session.executions - session.errors) / session.executions * 100) : 100
+      const successRate = session.executions ? Math.round(Math.max(0, session.executions - session.errors) / session.executions * 100) : 0
       const elapsed = Math.max(1, Math.floor((session.endedAt - session.startedAt) / 1000))
       const focusRetentionPercent = Math.min(100, Math.round(session.focusSeconds / elapsed * 100))
       const recommendation = successRate < 50 ? 'Revise o conceito ativo antes de avançar e use uma pista curta.' : session.focusExits >= 3 ? 'Faça o próximo sprint em 15 minutos e elimine uma distração.' : 'Avance para prática independente e explique sua solução.'

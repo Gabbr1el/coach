@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BarChart3, BookOpen, Brain, CalendarDays, Clock3, FolderKanban, Home, MoreHorizontal, Plus, Send, Settings, Sparkles, X } from 'lucide-react'
+import { BookOpen, CalendarDays, MoreHorizontal, Plus, Send, Sparkles, X } from 'lucide-react'
 import type { ApplicationInfo } from '../../shared/contracts/application-contract'
 import type { CreateWorkspaceInput, Workspace, WorkspaceSummary } from '../../shared/contracts/workspace-contract'
 import type { ConversationMessage } from '../../shared/contracts/conversation-contract'
@@ -21,16 +21,6 @@ import type { SavedForLaterItem, SessionOutlineItem } from '../../shared/contrac
 function relativeDate(timestamp: number | null): string {
   if (!timestamp) return 'Ainda não aberto'
   return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(timestamp)
-}
-
-function AppRail({ active, onHome, onWorkspaces, onHistory, onReports, onSettings }: { active: 'home' | 'workspaces' | 'history' | 'reports' | 'settings'; onHome(): void; onWorkspaces(): void; onHistory(): void; onReports(): void; onSettings(): void }) {
-  const items = [
-    { id: 'home' as const, label: 'Home', icon: Home, action: onHome },
-    { id: 'workspaces' as const, label: 'Workspaces', icon: FolderKanban, action: onWorkspaces },
-    { id: 'history' as const, label: 'Histórico', icon: Clock3, action: onHistory },
-    { id: 'reports' as const, label: 'Relatórios', icon: BarChart3, action: onReports },
-  ]
-  return <aside className="flex h-full min-h-0 w-[76px] shrink-0 flex-col bg-[#12372f] px-3 py-5 text-white lg:w-[190px]"><button onClick={onHome} className="flex items-center gap-3 px-2 font-display text-xl font-black"><span className="grid size-9 place-items-center rounded-xl bg-coach-yellow text-coach-ink"><Brain size={19} /></span><span className="hidden lg:inline">Coach</span></button><nav className="mt-10 space-y-2">{items.map(({ id, label, icon: Icon, action }) => <button key={id} onClick={action} className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-bold transition ${active === id ? 'bg-[#111217] text-coach-ink shadow-sm' : 'text-white/65 hover:bg-[#111217]/10 hover:text-white'}`}><Icon size={18} /><span className="hidden lg:inline">{label}</span></button>)}</nav><button onClick={onSettings} className={`mt-auto flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-bold ${active === 'settings' ? 'bg-[#111217] text-coach-ink' : 'text-white/65 hover:bg-[#111217]/10 hover:text-white'}`}><Settings size={18} /><span className="hidden lg:inline">Configurações</span></button></aside>
 }
 
 function WorkspaceCard({ workspace, priority, onOpen, onArchive }: {
@@ -259,7 +249,6 @@ export function App() {
   const [sessionCompleting, setSessionCompleting] = useState(false)
   const [timerUpdating, setTimerUpdating] = useState(false)
   const [sessionHistory, setSessionHistory] = useState<DailyStudyReport[]>([])
-  const [historyOpen, setHistoryOpen] = useState(false)
   const [priorities, setPriorities] = useState<WorkspacePriority[]>([])
   const [globalReport, setGlobalReport] = useState<GlobalReportOverview | null>(null)
   const [studyRoadmap, setStudyRoadmap] = useState<Roadmap | null>(null)

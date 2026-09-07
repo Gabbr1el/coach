@@ -30,4 +30,5 @@ export interface CoachDesktopApi {
   report: import('./report-contract').ReportApi
   workspaceOnboarding: import('./workspace-onboarding-contract').WorkspaceOnboardingApi
   studyProgress: import('./study-progress-contract').StudyProgressApi
+  studyLesson: import('./study-lesson-contract').StudyLessonApi
 }

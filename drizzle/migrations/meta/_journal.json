@@ -148,6 +148,13 @@
       "when": 1788789900000,
       "tag": "0020_lesson_positions",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1788790500000,
+      "tag": "0021_study_lessons",
+      "breakpoints": true
     }
   ]
 }

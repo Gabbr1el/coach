@@ -23,7 +23,7 @@ export class AIProviderManager {
     return this.activeProviderId ? this.providers.get(this.activeProviderId) ?? null : null
   }
 
-  route(purpose: 'planner' | 'tutor' | 'roadmap' | 'report'): AIProvider | null {
+  route(purpose: 'planner' | 'tutor' | 'roadmap' | 'report' | 'lesson'): AIProvider | null {
     const providerId = this.purposeRoutes.get(purpose)
     return providerId ? this.providers.get(providerId) ?? this.getActive() : this.getActive()
   }

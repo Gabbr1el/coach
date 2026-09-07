@@ -49,6 +49,9 @@ import { registerReportHandlers } from './ipc/report-handlers'
 import { WorkspaceOnboardingService } from '../application/workspaces/workspace-onboarding-service'
 import { registerWorkspaceOnboardingHandlers } from './ipc/workspace-onboarding-handlers'
 import { registerStudyProgressHandlers } from './ipc/study-progress-handlers'
+import { registerStudyLessonHandlers } from './ipc/study-lesson-handlers'
+import { StudyLessonService } from '../application/study-lessons/study-lesson-service'
+import { SqliteStudyLessonRepository } from './repositories/sqlite-study-lesson-repository'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -101,6 +104,7 @@ void app.whenReady().then(async () => {
     const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory, getCurrentContext: (id) => currentWorkspaceContext.get(id), searchMaterials: (id, query) => materialService.search(id, query) })
     registerApplicationHandlers()
     registerStudyProgressHandlers(database)
+    registerStudyLessonHandlers(new StudyLessonService(new SqliteStudyLessonRepository(database), providerManager, (id) => workspaceRepository.findById(id), (id) => new DrizzleRoadmapRepository(database!).findCurrent(id)))
     registerWorkspaceHandlers(workspaceService)
     registerConversationHandlers(homePlannerService, workspaceCoachService)
     registerStudyWorkspaceHandlers(studyWorkspaceService)

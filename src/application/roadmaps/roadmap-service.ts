@@ -1,45 +1,44 @@
 import type { AIProviderManager } from '../ai/ai-provider-manager'
-import { roadmapProposalSchema, type Roadmap } from '../../shared/contracts/roadmap-contract'
+import { roadmapProposalSchema, type Roadmap, type RoadmapResource } from '../../shared/contracts/roadmap-contract'
 import type { Workspace } from '../../shared/contracts/workspace-contract'
 
 export interface RoadmapRepository { findCurrent(workspaceId: string): Roadmap | null; nextVersion(workspaceId: string): number; create(roadmap: Roadmap): Roadmap; accept(workspaceId: string, roadmapId: string, now: number): Roadmap }
 
+const ROADMAP_ALIASES: Array<[RegExp, string]> = [
+  [/front.?end|html|css|javascript|typescript|react/i, 'frontend'], [/back.?end|api|servidor/i, 'backend'], [/java(?!script)|poo|orienta.+objeto/i, 'java'], [/python/i, 'python'], [/\bc\+\+\b/i, 'cpp'], [/linguagem c|programa.+ em c|ponteiro/i, 'c'], [/dados|estrutura.+dados|algoritmo/i, 'datastructures-and-algorithms'], [/sql|banco.+dados/i, 'sql'], [/devops/i, 'devops'], [/docker/i, 'docker'], [/kubernetes/i, 'kubernetes'], [/machine learning|aprendizado.+máquina/i, 'machine-learning'], [/inteligência artificial|inteligencia artificial|ai engineer/i, 'ai-engineer'],
+]
+
+function sourceFor(workspace: Workspace): RoadmapResource | null { const slug = ROADMAP_ALIASES.find(([pattern]) => pattern.test(`${workspace.name} ${workspace.objective}`))?.[1]; return slug ? { title: `Roadmap oficial de ${workspace.name}`, url: `https://roadmap.sh/${slug}`, type: 'roadmap' } : null }
+function module(title: string, objective: string, topics: string[], outcomes: string[], practice: string, completionCriteria: string[], resource: RoadmapResource | null, estimatedMinutes = 150) { return { title, objective, estimatedMinutes, topics, outcomes, practice, completionCriteria, resources: resource ? [resource] : [] } }
 function fallback(workspace: Workspace) {
-  const java = /java|poo|orienta.+objeto/i.test(`${workspace.name} ${workspace.objective}`)
-  const modules = java ? [
-    ['Classes e objetos', 'Modelar estado e comportamento em classes pequenas', ['Criar classes', 'Instanciar e usar objetos']],
-    ['Encapsulamento', 'Proteger invariantes com campos privados e métodos', ['Aplicar modificadores de acesso', 'Validar estado no construtor']],
-    ['Herança e composição', 'Escolher relações adequadas entre tipos', ['Usar composição', 'Reconhecer quando herança é apropriada']],
-    ['Interfaces e polimorfismo', 'Programar por contratos e substituir implementações', ['Definir interfaces', 'Aplicar polimorfismo']],
-    ['Projeto integrador', 'Combinar os conceitos em um projeto multi-arquivo', ['Organizar pacotes', 'Testar relações entre classes']],
-  ] : [
-    ['Fundamentos', `Construir a base de ${workspace.name}`, ['Explicar conceitos essenciais']],
-    ['Prática guiada', 'Aplicar o conceito com apoio progressivo', ['Resolver exemplos guiados']],
-    ['Prática independente', 'Resolver problemas sem resposta pronta', ['Validar a própria solução']],
-    ['Projeto integrador', 'Consolidar conceitos em uma entrega', ['Explicar decisões e resultados']],
-  ]
-  return { title: `Roadmap: ${workspace.name}`, modules: modules.map(([title, objective, outcomes]) => ({ title: title as string, objective: objective as string, estimatedMinutes: 120, outcomes: outcomes as string[] })) }
+  const source = sourceFor(workspace); const subject = workspace.name
+  if (/java|poo|orienta.+objeto/i.test(`${subject} ${workspace.objective}`)) return { title: `Trilha prática: ${subject}`, modules: [
+    module('Sintaxe, tipos e fluxo de controle', 'Escrever programas Java pequenos e previsíveis', ['JDK, javac e execução', 'variáveis e tipos', 'condicionais', 'laços', 'métodos'], ['Compilar e executar sem ajuda', 'Explicar escopo e fluxo'], 'Criar um programa de console que valida entradas e calcula um resultado usando métodos separados.', ['Compila sem erros', 'Trata entrada inválida', 'Não repete lógica'], source),
+    module('Classes, objetos e encapsulamento', 'Modelar entidades protegendo suas regras', ['classes e instâncias', 'construtores', 'campos privados', 'métodos', 'imutabilidade'], ['Transformar requisitos em classes', 'Manter invariantes'], 'Modelar uma conta bancária que impeça saldo inválido e registre depósitos e saques.', ['Campos privados', 'Construtor valida estado', 'Casos válidos e inválidos demonstrados'], source),
+    module('Coleções, generics e exceções', 'Manipular conjuntos tipados e falhas esperadas', ['List, Set e Map', 'generics', 'equals/hashCode', 'exceções'], ['Escolher coleção adequada', 'Tratar falhas na fronteira'], 'Construir um catálogo pesquisável sem itens duplicados e com erros de domínio explícitos.', ['Usa coleção coerente', 'Sem casts inseguros', 'Falhas possuem mensagem útil'], source),
+    module('Interfaces, composição e polimorfismo', 'Separar contratos de implementações substituíveis', ['interfaces', 'composição', 'polimorfismo', 'injeção de dependência'], ['Trocar implementação sem mudar cliente', 'Evitar herança desnecessária'], 'Criar duas formas de persistir tarefas por uma interface e testar a troca entre elas.', ['Cliente depende da interface', 'Duas implementações funcionam', 'Decisão de composição explicada'], source),
+    module('Projeto integrador testável', 'Consolidar a trilha em uma aplicação multi-arquivo', ['pacotes', 'separação de responsabilidades', 'testes unitários', 'refatoração'], ['Organizar projeto real', 'Validar comportamento automaticamente'], 'Entregar um gerenciador de estudos com domínio, persistência substituível e testes dos casos críticos.', ['Projeto compila do zero', 'Casos críticos têm testes', 'README explica decisões'], source, 240),
+  ] }
+  return { title: `Trilha prática: ${subject}`, modules: [
+    module(`Vocabulário e mapa de ${subject}`, 'Identificar os componentes concretos do assunto e suas relações', [`termos fundamentais de ${subject}`, 'componentes e relações', 'exemplos e contraexemplos'], ['Explicar cada termo com exemplo próprio', 'Distinguir conceitos próximos'], `Construir um mapa de 10 conceitos de ${subject}, conectando cada um a um exemplo e a um contraexemplo.`, ['Mapa contém relações justificadas', 'Explicação não depende de copiar definições'], source),
+    module(`Mecanismos centrais de ${subject}`, 'Compreender como os conceitos produzem resultados', ['processo passo a passo', 'causa e efeito', 'limites e condições'], ['Prever resultados antes de executar', 'Localizar a etapa que causa um erro'], `Resolver três casos crescentes de ${subject}, registrando previsão, execução e correção.`, ['Três casos concluídos', 'Erros possuem causa identificada', 'Correção é explicada'], source),
+    module(`Aplicação guiada de ${subject}`, 'Combinar os mecanismos em uma tarefa observável', ['decomposição do problema', 'seleção de estratégia', 'validação'], ['Escolher estratégia justificadamente', 'Validar sem depender do Coach'], `Produzir uma solução completa para um problema típico de ${subject} e compará-la com uma alternativa.`, ['Entrega reproduzível', 'Critérios de qualidade verificados', 'Alternativa comparada'], source),
+    module(`Projeto independente de ${subject}`, 'Demonstrar domínio em uma entrega autoral', ['planejamento', 'execução', 'teste', 'explicação'], ['Criar sem roteiro passo a passo', 'Defender decisões e limitações'], `Definir e entregar um projeto pequeno de ${subject} que resolva um problema real do usuário.`, ['Escopo e resultado mensurável', 'Evidência de teste', 'Retrospectiva com próximo passo'], source, 240),
+  ] }
 }
 
-function extractJson(content: string): unknown {
-  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(content)?.[1]
-  return JSON.parse(fenced ?? content.slice(content.indexOf('{'), content.lastIndexOf('}') + 1))
-}
+function extractJson(content: string): unknown { const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(content)?.[1]; const candidate = fenced ?? content.slice(content.indexOf('{'), content.lastIndexOf('}') + 1); return JSON.parse(candidate) }
+function hasGenericModules(proposal: ReturnType<typeof roadmapProposalSchema.parse>): boolean { const vague = /^(fundamentos|introdução|introducao|revisar conceitos?|prática guiada|pratica guiada|prática independente|projeto integrador)$/i; return proposal.modules.some((item) => vague.test(item.title.trim()) || item.topics.some((topic) => /^(conceitos? (básicos|essenciais)|revisar conceitos?)$/i.test(topic))) }
 
 export class RoadmapService {
+  private readonly generating = new Map<string, Promise<Roadmap>>()
   constructor(private readonly repository: RoadmapRepository, private readonly providers: AIProviderManager, private readonly getWorkspace: (id: string) => Promise<Workspace | null>, private readonly now = Date.now, private readonly createId = () => crypto.randomUUID()) {}
   async get(workspaceId: string): Promise<Roadmap | null> { await this.requireWorkspace(workspaceId); return this.repository.findCurrent(workspaceId) }
-  async generate(workspaceId: string): Promise<Roadmap> {
-    const workspace = await this.requireWorkspace(workspaceId)
-    let proposal = fallback(workspace)
-    let providerId: string | null = 'coach-local'; let modelId: string | null = 'roadmap-rules-v1'
-    const provider = this.providers.route('roadmap')
-    if (provider) try {
-      const response = await provider.sendMessage({ messages: [{ role: 'system', content: 'Crie um roadmap acadêmico progressivo. Responda somente JSON válido: {"title":string,"modules":[{"title":string,"objective":string,"estimatedMinutes":number,"outcomes":[string]}]}. Use entre 3 e 10 módulos, sem inventar prazos.' }, { role: 'user', content: Buffer.from(JSON.stringify({ subject: workspace.name, objective: workspace.objective }), 'utf8').toString('base64') }], maxOutputTokens: 1200 })
-      proposal = roadmapProposalSchema.parse(extractJson(response.content)); providerId = response.providerId; modelId = response.modelId
-    } catch { /* deterministic proposal remains available offline or after invalid provider output */ }
-    const now = this.now(); const version = this.repository.nextVersion(workspaceId)
-    return this.repository.create({ id: this.createId(), workspaceId, title: proposal.title, status: 'proposed', version, providerId, modelId, modules: proposal.modules.map((module, index) => ({ id: this.createId(), ...module, position: index + 1, status: index === 0 ? 'available' : 'locked' })), createdAt: now, updatedAt: now })
+  generate(workspaceId: string): Promise<Roadmap> { const running = this.generating.get(workspaceId); if (running) return running; const generated = this.generateOnce(workspaceId).finally(() => this.generating.delete(workspaceId)); this.generating.set(workspaceId, generated); return generated }
+  private async generateOnce(workspaceId: string): Promise<Roadmap> {
+    const workspace = await this.requireWorkspace(workspaceId); let proposal = fallback(workspace); let providerId: string | null = 'coach-local'; let modelId: string | null = 'roadmap-detailed-v2'; const provider = this.providers.route('roadmap'); const source = sourceFor(workspace)
+    if (provider) try { const response = await provider.sendMessage({ messages: [{ role: 'system', content: `Você é o arquiteto pedagógico do Coach. Gere uma sequência progressiva e acionável, adaptada ao objetivo. Proibido usar módulos vagos como "Fundamentos", "Revisar conceitos", "Prática guiada" ou "Projeto integrador" sem nomear conteúdos. Cada módulo deve dizer exatamente O QUE estudar, uma prática produzível e critérios verificáveis. Use como referência de ordem a fonte indicada, mas não alegue ter lido páginas que não recebeu. Responda somente JSON válido: {"title":string,"modules":[{"title":string,"objective":string,"estimatedMinutes":number,"topics":[string,string],"outcomes":[string],"practice":string,"completionCriteria":[string],"resources":[{"title":string,"url":string,"type":"roadmap|documentation|course|article|video"}]}]}. Gere 5 a 10 módulos. URLs somente HTTPS de roadmap.sh, documentação oficial ou instituição educacional confiável.` }, { role: 'user', content: JSON.stringify({ subject: workspace.name, objective: workspace.objective || null, reference: source }) }], maxOutputTokens: 3200, signal: AbortSignal.timeout(45_000) }); const parsed = roadmapProposalSchema.parse(extractJson(response.content)); if (!hasGenericModules(parsed)) { proposal = parsed; providerId = response.providerId; modelId = response.modelId } } catch { /* detailed local plan is always available */ }
+    const now = this.now(); return this.repository.create({ id: this.createId(), workspaceId, title: proposal.title, status: 'proposed', version: this.repository.nextVersion(workspaceId), providerId, modelId, modules: proposal.modules.map((item, index) => ({ id: this.createId(), ...item, position: index + 1, status: index === 0 ? 'available' : 'locked' })), createdAt: now, updatedAt: now })
   }
   async accept(workspaceId: string, roadmapId: string): Promise<Roadmap> { await this.requireWorkspace(workspaceId); return this.repository.accept(workspaceId, roadmapId, this.now()) }
   private async requireWorkspace(id: string): Promise<Workspace> { const workspace = await this.getWorkspace(id); if (!workspace || workspace.status !== 'active') throw new Error('Workspace not found'); return workspace }

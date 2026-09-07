@@ -127,6 +127,13 @@
       "when": 1788734273277,
       "tag": "0017_thankful_tempest",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1788746561174,
+      "tag": "0018_demonic_secret_warriors",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import type { StudyPlanItem, StudySessionSummary, StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
+import type { DailyStudyReport, StudyPlanItem, StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
 
 export interface StudyWorkspaceRepository {
   findState(workspaceId: string, now: number): Promise<StudyWorkspaceState | null>
@@ -11,5 +11,5 @@ export interface StudyWorkspaceRepository {
   setTimerDuration(workspaceId: string, sessionId: string, durationSeconds: number, now: number): Promise<void>
   flushDrafts(input: { workspaceId: string; fileName: string; language: string; content: string; notes: string; documentRevision: number; notesRevision: number; now: number }): void
   completeAndCreateSession(workspaceId: string, currentSessionId: string, nextSessionId: string, plan: StudyPlanItem[], focusSeconds: number, timerDurationSeconds: number, now: number): void
-  listSessionHistory(workspaceId: string, limit: number): StudySessionSummary[]
+  listSessionHistory(workspaceId: string, limit: number): DailyStudyReport[]
 }

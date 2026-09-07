@@ -1,6 +1,6 @@
 import { and, asc, eq } from 'drizzle-orm'
 import type { StudyWorkspaceRepository } from '../../application/study-workspaces/study-workspace-repository'
-import type { StudyPlanItem, StudySessionSummary, StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
+import type { DailyStudyReport, StudyPlanItem, StudySessionSummary, StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
 import type { CoachDatabase } from '../database/connection'
 import { studyPlanItems, studySessions, workspaceStudyStates } from '../database/schema/study-workspaces'
 
@@ -78,7 +78,7 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
     })()
   }
 
-  listSessionHistory(workspaceId: string, limit: number): StudySessionSummary[] {
+  listSessionHistory(workspaceId: string, limit: number): DailyStudyReport[] {
     const sessions = this.database.sqlite.prepare(`SELECT s.id, s.started_at AS startedAt, s.ended_at AS endedAt, s.focus_seconds AS focusSeconds,
       SUM(CASE WHEN e.type IN ('code_executed','execution_error') THEN 1 ELSE 0 END) AS executions,
       SUM(CASE WHEN e.type = 'execution_error' THEN 1 ELSE 0 END) AS errors,
@@ -87,12 +87,15 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
       (SELECT COUNT(*) FROM study_plan_items p WHERE p.session_id = s.id AND p.status = 'completed') AS completedPlanItems
       FROM study_sessions s LEFT JOIN learning_events e ON e.session_id = s.id
       WHERE s.workspace_id = ? AND s.status = 'completed' GROUP BY s.id ORDER BY s.started_at DESC LIMIT ?`).all(workspaceId, limit) as StudySessionSummary[]
-    return sessions.map((session) => {
+    const enriched = sessions.map((session) => {
       const successRate = session.executions ? Math.round(Math.max(0, session.executions - session.errors) / session.executions * 100) : 100
       const elapsed = Math.max(1, Math.floor((session.endedAt - session.startedAt) / 1000))
       const focusRetentionPercent = Math.min(100, Math.round(session.focusSeconds / elapsed * 100))
       const recommendation = successRate < 50 ? 'Revise o conceito ativo antes de avançar e use uma pista curta.' : session.focusExits >= 3 ? 'Faça o próximo sprint em 15 minutos e elimine uma distração.' : 'Avance para prática independente e explique sua solução.'
       return { ...session, successRate, focusRetentionPercent, recommendation }
     })
+    const reports = new Map<string, typeof enriched>()
+    for (const session of enriched) { const date = new Date(session.startedAt).toLocaleDateString('en-CA'); reports.set(date, [...(reports.get(date) ?? []), session]) }
+    return [...reports.entries()].map(([date, day]) => { const focusSeconds = day.reduce((sum, item) => sum + item.focusSeconds, 0); const executions = day.reduce((sum, item) => sum + item.executions, 0); const errors = day.reduce((sum, item) => sum + item.errors, 0); const elapsed = day.reduce((sum, item) => sum + Math.max(1, Math.floor((item.endedAt - item.startedAt) / 1000)), 0); const successRate = executions ? Math.round(Math.max(0, executions - errors) / executions * 100) : 100; const focusExits = day.reduce((sum, item) => sum + item.focusExits, 0); return { date, startedAt: Math.min(...day.map((item) => item.startedAt)), endedAt: Math.max(...day.map((item) => item.endedAt)), focusSeconds, executions, errors, interventions: day.reduce((sum, item) => sum + item.interventions, 0), focusExits, completedPlanItems: day.reduce((sum, item) => sum + item.completedPlanItems, 0), successRate, focusRetentionPercent: Math.min(100, Math.round(focusSeconds / elapsed * 100)), sessionCount: day.length, recommendation: successRate < 50 ? 'Revise o conceito ativo antes de avançar e use uma pista curta.' : focusExits >= 3 ? 'Faça o próximo sprint em 15 minutos e elimine uma distração.' : 'Avance para prática independente e explique sua solução.' } })
   }
 }

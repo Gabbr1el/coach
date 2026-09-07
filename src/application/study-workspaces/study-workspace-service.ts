@@ -1,6 +1,6 @@
 import type { Workspace } from '../../shared/contracts/workspace-contract'
 import type { StudyPlanItem, StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
-import type { StudySessionSummary } from '../../shared/contracts/study-workspace-contract'
+import type { DailyStudyReport } from '../../shared/contracts/study-workspace-contract'
 import type { StudyWorkspaceRepository } from './study-workspace-repository'
 import { createWorkspaceEvent, type WorkspaceEventBus } from '../events/workspace-event-bus'
 
@@ -171,7 +171,7 @@ export class StudyWorkspaceService {
     return next
   }
 
-  async listSessionHistory(workspaceId: string): Promise<StudySessionSummary[]> {
+  async listSessionHistory(workspaceId: string): Promise<DailyStudyReport[]> {
     await this.requireWorkspace(workspaceId)
     return this.dependencies.repository.listSessionHistory(workspaceId, 100)
   }

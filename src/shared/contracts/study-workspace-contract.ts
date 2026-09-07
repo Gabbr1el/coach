@@ -46,6 +46,7 @@ export interface StudySessionSummary {
   readonly focusRetentionPercent?: number
   readonly recommendation?: string
 }
+export interface DailyStudyReport { readonly date: string; readonly startedAt: number; readonly endedAt: number; readonly focusSeconds: number; readonly executions: number; readonly errors: number; readonly interventions: number; readonly focusExits: number; readonly completedPlanItems: number; readonly successRate: number; readonly focusRetentionPercent: number; readonly sessionCount: number; readonly recommendation: string }
 
 export interface StudyPlanItem {
   readonly id: string
@@ -85,5 +86,5 @@ export interface StudyWorkspaceApi {
   setTimerDuration(input: z.infer<typeof setStudyTimerDurationInputSchema>): Promise<StudyWorkspaceState>
   flushDrafts(input: z.infer<typeof flushWorkspaceDraftsInputSchema>): boolean
   completeSession(workspaceId: string): Promise<StudyWorkspaceState>
-  listSessionHistory(workspaceId: string): Promise<StudySessionSummary[]>
+  listSessionHistory(workspaceId: string): Promise<DailyStudyReport[]>
 }

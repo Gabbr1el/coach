@@ -3,7 +3,7 @@ import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-o
 import { workspaces } from './workspaces'
 
 export const roadmaps = sqliteTable('roadmaps', {
-  id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }), title: text('title').notNull(), status: text('status', { enum: ['proposed', 'accepted', 'archived'] }).notNull().default('proposed'), version: integer('version').notNull(), providerId: text('provider_id'), modelId: text('model_id'), createdAt: integer('created_at').notNull(), updatedAt: integer('updated_at').notNull(),
+  id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }), title: text('title').notNull(), status: text('status', { enum: ['proposed', 'accepted', 'archived'] }).notNull().default('proposed'), generationKind: text('generation_kind', { enum: ['ai_generated', 'provisional_fallback'] }).notNull().default('ai_generated'), version: integer('version').notNull(), providerId: text('provider_id'), modelId: text('model_id'), createdAt: integer('created_at').notNull(), updatedAt: integer('updated_at').notNull(),
 }, (table) => [check('roadmaps_status_check', sql`${table.status} in ('proposed','accepted','archived')`), uniqueIndex('roadmaps_workspace_version_idx').on(table.workspaceId, table.version), index('roadmaps_workspace_status_idx').on(table.workspaceId, table.status)])
 
 export const roadmapModules = sqliteTable('roadmap_modules', {

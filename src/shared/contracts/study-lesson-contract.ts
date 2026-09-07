@@ -11,6 +11,6 @@ export const getStudyLessonSchema = z.object({ workspaceId: workspaceIdSchema, r
 export const evaluateStudyCheckpointSchema = getStudyLessonSchema.extend({ lessonId: z.string().min(1).max(360), checkpointId: z.string().min(1).max(420), selectedIndex: z.number().int().min(0).max(5), attempt: z.number().int().min(1).max(1000) }).strict()
 
 export type StudyLessonBlock = z.infer<typeof studyLessonBlockSchema>
-export interface PersistedStudyLesson extends z.infer<typeof studyLessonContentSchema> { readonly id: string; readonly workspaceId: string; readonly roadmapId: string; readonly moduleId: string; readonly topicId: string; readonly providerId: string | null; readonly modelId: string | null; readonly createdAt: number }
+export interface PersistedStudyLesson extends z.infer<typeof studyLessonContentSchema> { readonly id: string; readonly generationKind: 'ai_generated' | 'provisional_fallback'; readonly workspaceId: string; readonly roadmapId: string; readonly moduleId: string; readonly topicId: string; readonly providerId: string | null; readonly modelId: string | null; readonly createdAt: number }
 export interface StudyCheckpointEvaluation { readonly correct: boolean; readonly difficulty: string | null; readonly feedback: string; readonly hint: string | null; readonly reinforcement: string | null }
 export interface StudyLessonApi { getOrCreate(input: z.infer<typeof getStudyLessonSchema>): Promise<PersistedStudyLesson>; evaluate(input: z.infer<typeof evaluateStudyCheckpointSchema>): Promise<StudyCheckpointEvaluation> }

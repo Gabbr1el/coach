@@ -4,7 +4,7 @@ import type { Roadmap } from '../../src/shared/contracts/roadmap-contract'
 import type { StudyProgressState } from '../../src/shared/contracts/study-progress-contract'
 
 const moduleId = '00000000-0000-4000-8000-000000000003'
-const roadmap: Roadmap = { id: '00000000-0000-4000-8000-000000000002', workspaceId: '00000000-0000-4000-8000-000000000001', title: 'C', status: 'accepted', version: 1, providerId: null, modelId: null, createdAt: 1, updatedAt: 1, modules: [{ id: moduleId, title: 'Memória e dados', objective: 'Aplicar recursos de C', estimatedMinutes: 120, position: 1, status: 'active', topics: ['Ponteiros', 'Structs', 'Arquivos'], outcomes: [], practice: 'Programa C', completionCriteria: ['Executar'], resources: [] }] }
+const roadmap: Roadmap = { id: '00000000-0000-4000-8000-000000000002', workspaceId: '00000000-0000-4000-8000-000000000001', title: 'C', status: 'accepted', generationKind: 'ai_generated', version: 1, providerId: null, modelId: null, createdAt: 1, updatedAt: 1, modules: [{ id: moduleId, title: 'Memória e dados', objective: 'Aplicar recursos de C', estimatedMinutes: 120, position: 1, status: 'active', topics: ['Ponteiros', 'Structs', 'Arquivos'], outcomes: [], practice: 'Programa C', completionCriteria: ['Executar'], resources: [] }] }
 const progress: StudyProgressState = { workspaceId: roadmap.workspaceId, roadmapId: roadmap.id, moduleId, topicId: `${moduleId}:Ponteiros`, lessonId: 'lesson', checkpointId: null, topicStatuses: { [`${moduleId}:Ponteiros`]: 'IN_PROGRESS' }, lessonPositions: {}, currentPosition: null, updatedAt: 1 }
 
 describe('daily Roadmap plan', () => {

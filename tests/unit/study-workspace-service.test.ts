@@ -26,7 +26,7 @@ describe('StudyWorkspaceService', () => {
   it('creates one durable initial study state with a guided plan', async () => {
     const repository = new MemoryStudyWorkspaceRepository()
     let id = 0
-    const roadmap = { id: crypto.randomUUID(), workspaceId: workspace.id, title: 'Algoritmos', status: 'accepted' as const, version: 1, providerId: null, modelId: null, createdAt: 1, updatedAt: 1, modules: [{ id: crypto.randomUUID(), title: 'Listas', objective: 'Aprender listas', estimatedMinutes: 120, position: 1, status: 'active' as const, topics: ['Listas encadeadas', 'Inserção', 'Remoção'], outcomes: [], practice: 'Implementar lista', completionCriteria: [], resources: [] }] }
+    const roadmap = { id: crypto.randomUUID(), workspaceId: workspace.id, title: 'Algoritmos', status: 'accepted' as const, generationKind: 'ai_generated' as const, version: 1, providerId: null, modelId: null, createdAt: 1, updatedAt: 1, modules: [{ id: crypto.randomUUID(), title: 'Listas', objective: 'Aprender listas', estimatedMinutes: 120, position: 1, status: 'active' as const, topics: ['Listas encadeadas', 'Inserção', 'Remoção'], outcomes: [], practice: 'Implementar lista', completionCriteria: [], resources: [] }] }
     const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, getRoadmap: () => roadmap, now: () => 100, createId: () => `00000000-0000-4000-8000-${String(++id).padStart(12, '0')}` })
     const state = await service.getState(workspace.id)
     expect(state.plan).toHaveLength(4)
@@ -46,7 +46,7 @@ describe('StudyWorkspaceService', () => {
 
   it('activates an item without completing it and applies its timer duration', async () => {
     const repository = new MemoryStudyWorkspaceRepository()
-    const roadmap = { id: crypto.randomUUID(), workspaceId: workspace.id, title: 'Algoritmos', status: 'accepted' as const, version: 1, providerId: null, modelId: null, createdAt: 1, updatedAt: 1, modules: [{ id: crypto.randomUUID(), title: 'Listas', objective: 'Aprender listas', estimatedMinutes: 120, position: 1, status: 'active' as const, topics: ['Listas', 'Filas'], outcomes: [], practice: 'Implementar', completionCriteria: [], resources: [] }] }
+    const roadmap = { id: crypto.randomUUID(), workspaceId: workspace.id, title: 'Algoritmos', status: 'accepted' as const, generationKind: 'ai_generated' as const, version: 1, providerId: null, modelId: null, createdAt: 1, updatedAt: 1, modules: [{ id: crypto.randomUUID(), title: 'Listas', objective: 'Aprender listas', estimatedMinutes: 120, position: 1, status: 'active' as const, topics: ['Listas', 'Filas'], outcomes: [], practice: 'Implementar', completionCriteria: [], resources: [] }] }
     const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, getRoadmap: () => roadmap, now: () => 300, createId: () => crypto.randomUUID() })
     const initial = await service.getState(workspace.id)
     const target = initial.plan[1]!

@@ -183,6 +183,13 @@
       "when": 1788799500000,
       "tag": "0025_topic_learning_state",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1788807600000,
+      "tag": "0026_content_generation_kind",
+      "breakpoints": true
     }
   ]
 }

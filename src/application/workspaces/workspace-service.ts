@@ -1,5 +1,6 @@
 import type { CreateWorkspaceInput, Workspace, WorkspaceSummary } from '../../shared/contracts/workspace-contract'
 import type { WorkspaceRepository } from './workspace-repository'
+import { normalizeSubject } from './subject-normalizer'
 
 export interface WorkspaceServiceDependencies {
   readonly repository: WorkspaceRepository
@@ -24,10 +25,11 @@ export class WorkspaceService {
 
   create(input: CreateWorkspaceInput): Promise<Workspace> {
     const now = this.now()
+    const normalized = normalizeSubject(input.name)
     return this.repository.create({
       id: this.createId(),
-      name: input.name.trim(),
-      objective: input.objective.trim(),
+      name: normalized.subject,
+      objective: [input.objective.trim(), normalized.userContext ? `Contexto declarado: ${normalized.userContext}` : ''].filter(Boolean).join('\n'),
       createdAt: now,
       updatedAt: now,
     })

@@ -17,6 +17,7 @@ import { PROJECT_CHANNELS } from '../shared/contracts/project-channels'
 import { ROADMAP_CHANNELS } from '../shared/contracts/roadmap-channels'
 import { PLANNER_ACTION_CHANNELS } from '../shared/contracts/planner-action-channels'
 import { REPORT_CHANNELS } from '../shared/contracts/report-channels'
+import { WORKSPACE_ONBOARDING_CHANNELS } from '../shared/contracts/workspace-onboarding-channels'
 
 const api: CoachDesktopApi = {
   application: {
@@ -154,6 +155,7 @@ const api: CoachDesktopApi = {
     resolve: (input) => ipcRenderer.invoke(PLANNER_ACTION_CHANNELS.resolve, input),
   },
   report: { getGlobalOverview: () => ipcRenderer.invoke(REPORT_CHANNELS.getGlobalOverview) },
+  workspaceOnboarding: { analyze: (input) => ipcRenderer.invoke(WORKSPACE_ONBOARDING_CHANNELS.analyze, input) },
 }
 
 contextBridge.exposeInMainWorld('coach', Object.freeze(api))

@@ -80,6 +80,19 @@ function CreateWorkspaceDialog({ open, submitting, onClose, onSubmit }: {
 }) {
   const [name, setName] = useState('')
   const [objective, setObjective] = useState('')
+  const [diagnosticAnswer, setDiagnosticAnswer] = useState('')
+  const [question, setQuestion] = useState<string | null>(null)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [analyzed, setAnalyzed] = useState(false)
+  const [analysisError, setAnalysisError] = useState<string | null>(null)
+
+  async function analyze() {
+    if (name.trim().length < 2 || analyzing) return
+    setAnalyzing(true); setAnalysisError(null)
+    try { const result = await window.coach.workspaceOnboarding.analyze({ topic: name, diagnosticAnswer: diagnosticAnswer.trim() || undefined }); setName(result.topic); setObjective(result.objective); setQuestion(result.question); setAnalyzed(!result.needsDiagnostic) }
+    catch { setAnalysisError('Não consegui avaliar o tema agora. Tente novamente.') }
+    finally { setAnalyzing(false) }
+  }
 
   if (!open) return null
 
@@ -89,22 +102,23 @@ function CreateWorkspaceDialog({ open, submitting, onClose, onSubmit }: {
         className="w-full max-w-lg rounded-[2rem] bg-coach-paper p-7 shadow-2xl"
         onSubmit={(event) => {
           event.preventDefault()
-          void onSubmit({ name, objective })
+           if (!analyzed) { void analyze(); return }
+           void onSubmit({ name, objective })
         }}
       >
         <div className="flex items-start justify-between">
           <div><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Novo ambiente</p><h2 id="create-workspace-title" className="mt-2 font-display text-3xl font-black">Criar Workspace</h2></div>
           <button type="button" aria-label="Fechar" disabled={submitting} onClick={onClose} className="rounded-full p-2 hover:bg-black/5 disabled:opacity-50"><X /></button>
         </div>
-        <label className="mt-7 block text-sm font-bold">Nome
-          <input autoFocus required minLength={1} maxLength={80} value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex.: Estrutura de Dados" className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none focus:border-coach-green" />
-        </label>
-        <label className="mt-5 block text-sm font-bold">Objetivo
-          <textarea maxLength={500} value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="Ex.: Preparar a prova do dia 16" className="mt-2 min-h-28 w-full resize-none rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none focus:border-coach-green" />
-        </label>
+         <label className="mt-7 block text-sm font-bold">Tema que você quer aprender
+           <input autoFocus required minLength={2} maxLength={80} value={name} onChange={(event) => { setName(event.target.value); setAnalyzed(false); setQuestion(null) }} placeholder="Ex.: Estrutura de Dados" className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none focus:border-coach-green" />
+         </label>
+         {question && <label className="mt-5 block rounded-xl border border-[#39334f] bg-[#181622] p-4 text-sm font-bold"><span className="text-[#aa9cff]">Coach quer entender você</span><span className="mt-2 block font-normal leading-6 text-[#c8cad0]">{question}</span><textarea autoFocus maxLength={1000} value={diagnosticAnswer} onChange={(event) => setDiagnosticAnswer(event.target.value)} placeholder="Conte o que já estudou, praticou e onde trava…" className="mt-3 min-h-24 w-full resize-none rounded-lg border border-[#39334f] bg-[#111217] px-4 py-3 outline-none" /></label>}
+         {analyzed && <label className="mt-5 block text-sm font-bold">Objetivo sugerido pelo Coach<textarea maxLength={500} value={objective} onChange={(event) => setObjective(event.target.value)} className="mt-2 min-h-24 w-full resize-none rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none focus:border-coach-green" /></label>}
+         {analysisError && <p className="mt-4 text-xs text-red-400">{analysisError}</p>}
         <div className="mt-7 flex justify-end gap-3">
           <button type="button" disabled={submitting} onClick={onClose} className="rounded-xl border border-coach-line px-5 py-3 font-bold disabled:opacity-50">Cancelar</button>
-          <button disabled={submitting} className="rounded-xl bg-coach-orange px-5 py-3 font-extrabold text-white disabled:opacity-50">{submitting ? 'Criando…' : 'Criar Workspace'}</button>
+           <button type="submit" disabled={submitting || analyzing || name.trim().length < 2 || Boolean(question && !diagnosticAnswer.trim())} className="rounded-xl bg-coach-orange px-5 py-3 font-extrabold text-white disabled:opacity-50">{submitting ? 'Criando…' : analyzing ? 'Coach analisando…' : analyzed ? 'Criar Workspace' : question ? 'Continuar com o Coach' : 'Analisar tema'}</button>
         </div>
       </form>
     </div>

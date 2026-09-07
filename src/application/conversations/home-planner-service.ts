@@ -59,7 +59,7 @@ export class HomePlannerService {
     let modelId = 'planner-rules-v1'
 
     if (provider) {
-      const recentMessages = await this.repository.listMessages(HOME_THREAD_ID, 20)
+      const recentMessages = await this.repository.listMessages(HOME_THREAD_ID, 10)
       try {
         const response = await provider.sendMessage({
           messages: [
@@ -67,7 +67,7 @@ export class HomePlannerService {
             ...recentMessages.map((message) => ({ role: message.role, content: message.content })),
             { role: 'user', content: userMessage.content },
           ],
-          maxOutputTokens: 300,
+          maxOutputTokens: 180,
         })
         assistantContent = response.content
         providerId = response.providerId
@@ -102,7 +102,7 @@ export class HomePlannerService {
     }
     if (!provider.streamMessage) throw new Error('Active provider does not support streaming')
 
-    const recentMessages = await this.repository.listMessages(HOME_THREAD_ID, 20)
+    const recentMessages = await this.repository.listMessages(HOME_THREAD_ID, 10)
     let content = ''
     let providerId = provider.id
     let modelId = 'unknown'
@@ -114,7 +114,7 @@ export class HomePlannerService {
           ...recentMessages.map((message) => ({ role: message.role, content: message.content })),
           { role: 'user', content: input.content.trim() },
         ],
-        maxOutputTokens: 300,
+        maxOutputTokens: 180,
         signal,
       })) {
         if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')

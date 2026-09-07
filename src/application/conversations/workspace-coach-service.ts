@@ -66,7 +66,7 @@ export class WorkspaceCoachService {
     const routed = (this.dependencies.contextRouter ?? new ContextRouter()).route(input, observer, authorizedContext)
     const workspaceMemory = routed.depth === 'WORKSPACE' || routed.depth === 'DEEP' ? current?.memory ?? this.dependencies.getWorkspaceMemory?.(workspaceId) ?? null : null
     const materialSnippets = routed.depth !== 'MINIMAL' ? this.dependencies.searchMaterials?.(workspaceId, input.content).slice(0, 3) ?? [] : []
-    const recentMessages = await this.dependencies.repository.listMessages(threadId, routed.depth === 'MINIMAL' ? 6 : routed.depth === 'SESSION' ? 16 : 30)
+    const recentMessages = await this.dependencies.repository.listMessages(threadId, routed.depth === 'MINIMAL' ? 4 : routed.depth === 'SESSION' ? 10 : 18)
     const userContent = input.content.trim()
     let content = ''
     let providerId = provider.id

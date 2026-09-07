@@ -28,9 +28,9 @@ export class ContextRouter {
     const text = input.content.trim()
     const intervention = Boolean(observer?.interventionSuggested)
     const context = authorizedContext
-    if (intervention) return { depth: context ? 'SESSION' : 'MINIMAL', outputBudget: 'HINT', maxOutputTokens: 260, helpLevel: 1, context: context ? { ...context, notes: '' } : undefined, observerSignal: { repeatedErrorCount: observer!.repeatedErrorCount } }
+    if (intervention) return { depth: context ? 'SESSION' : 'MINIMAL', outputBudget: 'HINT', maxOutputTokens: 160, helpLevel: 1, context: context ? { ...context, notes: '' } : undefined, observerSignal: { repeatedErrorCount: observer!.repeatedErrorCount } }
     if (DEEP_REQUEST.test(text)) return { depth: context ? 'DEEP' : 'WORKSPACE', outputBudget: 'DEEP_ANALYSIS', maxOutputTokens: 900, helpLevel: 4, context, observerSignal: null }
-    if (HELP_REQUEST.test(text)) return { depth: context ? 'SESSION' : 'MINIMAL', outputBudget: 'SHORT_EXPLANATION', maxOutputTokens: 320, helpLevel: 2, context: context ? { ...context, notes: '' } : undefined, observerSignal: null }
-    return { depth: 'MINIMAL', outputBudget: 'NORMAL_EXPLANATION', maxOutputTokens: 520, helpLevel: 1, context: undefined, observerSignal: null }
+    if (HELP_REQUEST.test(text)) return { depth: context ? 'SESSION' : 'MINIMAL', outputBudget: 'SHORT_EXPLANATION', maxOutputTokens: 220, helpLevel: 2, context: context ? { ...context, notes: '' } : undefined, observerSignal: null }
+    return { depth: 'MINIMAL', outputBudget: 'NORMAL_EXPLANATION', maxOutputTokens: 240, helpLevel: 1, context: undefined, observerSignal: null }
   }
 }

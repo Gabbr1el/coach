@@ -491,6 +491,14 @@ export function App() {
       setWorkspaceError('Conecte um provedor de IA na Home antes de conversar neste Workspace.')
       return
     }
+    const roadmapChange = /(?:mude|altere|refaça|refaca|atualize|melhore|detalhe|modifique).{0,40}roadmap|roadmap.{0,40}(?:vago|genérico|generico|detalhado|mude|altere)/i.test(content)
+    if (roadmapChange) {
+      const workspaceId = selected.id
+      const optimistic: ConversationMessage = { id: `optimistic-${crypto.randomUUID()}`, role: 'user', content, createdAt: Date.now(), sequence: (workspaceMessages.at(-1)?.sequence ?? 0) + 1, providerId: null, modelId: null }
+      setWorkspaceMessages((current) => [...current, optimistic]); setWorkspaceInput(''); setWorkspaceSending(true); setWorkspaceStreamedContent('Atualizando o roadmap no Coach…'); setWorkspaceError(null)
+      void window.coach.roadmap.generate(workspaceId, content).then((roadmap) => { setStudyRoadmap(roadmap); setWorkspacePage('plan'); setWorkspaceStreamedContent(''); setWorkspaceMessages((current) => [...current, { id: `system-${crypto.randomUUID()}`, role: 'assistant', content: `Roadmap atualizado e salvo como versão ${roadmap.version}. Revise a nova proposta no Plano.`, createdAt: Date.now(), sequence: (current.at(-1)?.sequence ?? 0) + 1, providerId: roadmap.providerId, modelId: roadmap.modelId }]) }).catch(() => { setWorkspaceStreamedContent(''); setWorkspaceError('Não consegui alterar o roadmap agora.') }).finally(() => setWorkspaceSending(false))
+      return
+    }
     setWorkspaceSending(true)
     workspaceDrafts.current.set(selected.id, content)
     setWorkspaceInput('')

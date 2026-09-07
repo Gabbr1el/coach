@@ -20,7 +20,7 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
     this.database.sqlite.transaction(() => {
       this.database.orm.insert(studySessions).values({ id: input.sessionId, workspaceId: input.workspaceId, status: 'active', startedAt: input.sessionStartedAt, focusSeconds: 0 }).run()
       this.database.orm.insert(workspaceStudyStates).values({ workspaceId: input.workspaceId, activeSessionId: input.sessionId, fileName: input.fileName, language: input.language, editorContent: input.editorContent, notes: input.notes, shareContextWithAi: input.shareContextWithAi, timerDurationSeconds: input.timerDurationSeconds, timerRemainingSeconds: input.timerRemainingSeconds, timerStatus: input.timerStatus, timerStartedAt: input.timerStartedAt, updatedAt: input.updatedAt, documentRevision: input.documentRevision, notesRevision: input.notesRevision, accumulatedFocusSeconds: input.accumulatedFocusSeconds }).run()
-      this.database.orm.insert(studyPlanItems).values(input.plan.map((item) => ({ ...item, workspaceId: input.workspaceId, sessionId: input.sessionId, createdAt: input.updatedAt, updatedAt: input.updatedAt }))).run()
+      if (input.plan.length > 0) this.database.orm.insert(studyPlanItems).values(input.plan.map((item) => ({ ...item, workspaceId: input.workspaceId, sessionId: input.sessionId, createdAt: input.updatedAt, updatedAt: input.updatedAt }))).run()
     })()
     return input
   }
@@ -69,7 +69,7 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
       const completed = this.database.sqlite.prepare("UPDATE study_sessions SET status = 'completed', ended_at = ?, focus_seconds = ? WHERE id = ? AND workspace_id = ? AND status = 'active'").run(now, focusSeconds, currentSessionId, workspaceId)
       if (completed.changes !== 1) throw new Error('Study session was already completed')
       this.database.orm.insert(studySessions).values({ id: nextSessionId, workspaceId, status: 'active', startedAt: now, focusSeconds: 0 }).run()
-      this.database.orm.insert(studyPlanItems).values(plan.map((item) => ({ ...item, workspaceId, sessionId: nextSessionId, createdAt: now, updatedAt: now }))).run()
+      if (plan.length > 0) this.database.orm.insert(studyPlanItems).values(plan.map((item) => ({ ...item, workspaceId, sessionId: nextSessionId, createdAt: now, updatedAt: now }))).run()
       const changed = this.database.orm.update(workspaceStudyStates).set({ activeSessionId: nextSessionId, timerStatus: 'idle', timerStartedAt: null, timerRemainingSeconds: timerDurationSeconds, accumulatedFocusSeconds: 0, updatedAt: now }).where(and(eq(workspaceStudyStates.workspaceId, workspaceId), eq(workspaceStudyStates.activeSessionId, currentSessionId))).run()
       if (changed.changes !== 1) throw new Error('Study session changed while completing')
       const metrics = this.database.sqlite.prepare("SELECT SUM(type = 'execution_error') AS errors, SUM(type = 'code_executed') AS successes, SUM(type = 'possible_learning_loop') AS loops, SUM(type = 'window_blurred') AS exits FROM learning_events WHERE session_id = ?").get(currentSessionId) as { errors: number | null; successes: number | null; loops: number | null; exits: number | null }

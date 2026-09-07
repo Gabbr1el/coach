@@ -22,6 +22,7 @@ class MemoryStudyWorkspaceRepository implements StudyWorkspaceRepository {
 const workspace = { id: '00000000-0000-4000-8000-000000000321', name: 'Algoritmos', objective: 'Aprender listas', status: 'active' as const, createdAt: 1, updatedAt: 1, lastOpenedAt: null, archivedAt: null }
 
 describe('StudyWorkspaceService', () => {
+  it('creates and updates a valid state without roadmap or plan', async () => { const repository = new MemoryStudyWorkspaceRepository(); const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, getRoadmap: () => null, now: () => 100, createId: () => crypto.randomUUID() }); const initial = await service.getState(workspace.id); expect(initial.plan).toEqual([]); expect((await service.updateContextSharing(workspace.id, true)).shareContextWithAi).toBe(true); expect((await service.recalculatePlan(workspace.id)).plan).toEqual([]) })
   it('creates one durable initial study state with a guided plan', async () => {
     const repository = new MemoryStudyWorkspaceRepository()
     let id = 0

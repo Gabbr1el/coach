@@ -25,7 +25,9 @@ export function createMainWindow(): BrowserWindow {
 
   window.once('ready-to-show', () => {
     window.show()
+    window.focus()
   })
+  window.on('show', () => { window.webContents.focus() })
 
   const rendererUrl = process.env['ELECTRON_RENDERER_URL']
   const loadRenderer = rendererUrl

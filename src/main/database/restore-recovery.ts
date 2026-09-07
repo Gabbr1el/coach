@@ -2,7 +2,7 @@ import { closeSync, existsSync, fsyncSync, openSync, renameSync, rmSync } from '
 import { dirname } from 'node:path'
 import type Database from 'better-sqlite3'
 
-export const CURRENT_MIGRATION_COUNT = 25
+export const CURRENT_MIGRATION_COUNT = 26
 
 function syncDirectory(path: string): void {
   const descriptor = openSync(dirname(path), 'r')
@@ -53,6 +53,8 @@ export function validateCoachDatabaseSchema(sqlite: Database.Database): void {
     study_deadlines: ['id', 'workspace_id', 'due_at'], study_plan_items: ['id', 'session_id', 'status'], session_memories: ['id', 'session_id'], workspace_memories: ['id', 'workspace_id'], student_memory: ['id', 'summary'], saved_for_later: ['id', 'workspace_id'], session_topics: ['id', 'session_id'], routine_notes: ['id', 'content'],
     workspace_projects: ['id', 'workspace_id', 'language'], project_files: ['id', 'project_id', 'path', 'revision'], project_ui_states: ['project_id', 'active_file_id'], project_builds: ['id', 'project_id', 'diagnostics_json'],
     roadmaps: ['id', 'workspace_id', 'status', 'version'], roadmap_modules: ['id', 'roadmap_id', 'position', 'status', 'topics_json', 'practice', 'completion_criteria_json', 'resources_json'],
+    topic_learning_states: ['workspace_id', 'topic_id', 'evidence_count', 'difficulty_level', 'mastery_estimate', 'confidence', 'needs_review', 'reasons_json'],
+    roadmap_adaptations: ['id', 'roadmap_id', 'module_id', 'topic_id', 'kind', 'source', 'reason_json'],
     planner_actions: ['id', 'idempotency_key', 'type', 'status', 'payload_json'],
   }
   for (const [table, requiredColumns] of Object.entries(requirements)) {

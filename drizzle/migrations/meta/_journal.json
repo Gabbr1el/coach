@@ -176,6 +176,13 @@
       "when": 1788792300000,
       "tag": "0024_live_plan_day",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1788799500000,
+      "tag": "0025_topic_learning_state",
+      "breakpoints": true
     }
   ]
 }

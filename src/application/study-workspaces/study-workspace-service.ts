@@ -15,7 +15,7 @@ export interface StudyWorkspaceServiceDependencies {
   readonly eventBus?: WorkspaceEventBus
   readonly getRoadmap?: (workspaceId: string) => Roadmap | null
   readonly getStudyProgress?: (workspaceId: string) => StudyProgressState | null
-  readonly getPlanContext?: (workspaceId: string) => { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; difficultyTopicIds: Set<string>; startMinutes: number; dayKey: string; lastPlannedDayKey: string | null }
+  readonly getPlanContext?: (workspaceId: string) => { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; learningStates: Map<string, import('../study-progress/topic-learning').TopicLearningState>; startMinutes: number; dayKey: string; lastPlannedDayKey: string | null }
 }
 
 const DEFAULT_CODE = `class Node:
@@ -40,7 +40,7 @@ class LinkedList:
         current.next = new_node
 `
 
-function createRoadmapPlan(workspaceId: string, roadmap: Roadmap | null, progress: StudyProgressState | null, existing: StudyPlanItem[], createId: () => string, context?: { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; difficultyTopicIds: Set<string>; startMinutes: number }): StudyPlanItem[] { return roadmap ? deriveDailyPlan({ workspaceId, roadmap, progress, availableMinutes: context?.availableMinutes ?? 120, phase: context?.phase ?? null, difficultyTopicIds: context?.difficultyTopicIds ?? new Set(), startMinutes: context?.startMinutes ?? 18 * 60 }, existing, createId) : [] }
+function createRoadmapPlan(workspaceId: string, roadmap: Roadmap | null, progress: StudyProgressState | null, existing: StudyPlanItem[], createId: () => string, context?: { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; learningStates: Map<string, import('../study-progress/topic-learning').TopicLearningState>; startMinutes: number }): StudyPlanItem[] { return roadmap ? deriveDailyPlan({ workspaceId, roadmap, progress, availableMinutes: context?.availableMinutes ?? 120, phase: context?.phase ?? null, learningStates: context?.learningStates ?? new Map(), startMinutes: context?.startMinutes ?? 18 * 60 }, existing, createId) : [] }
 
 export class StudyWorkspaceService {
   private readonly now: () => number

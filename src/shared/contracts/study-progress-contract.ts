@@ -32,6 +32,10 @@ export const recordStudyEventSchema = z.object({
   lessonId: z.string().min(1).max(360),
   checkpointId: z.string().min(1).max(420).nullable(),
   correct: z.boolean().optional(),
+  attempt: z.number().int().min(1).max(1000).optional(),
+  hintUsed: z.boolean().optional(),
+  reinforcementUsed: z.boolean().optional(),
+  exerciseCompleted: z.boolean().optional(),
 }).strict()
 export const updateStudyPositionSchema = z.object({ workspaceId: workspaceIdSchema, position: studyLessonPositionSchema }).strict()
 
@@ -40,7 +44,7 @@ export type StudySelection = z.infer<typeof studySelectionSchema>
 export type StudyEventType = z.infer<typeof studyEventTypeSchema>
 export type StudyLessonPosition = z.infer<typeof studyLessonPositionSchema>
 export interface StudyProgressState extends StudySelection { readonly topicStatuses: Record<string, StudyItemStatus>; readonly lessonPositions: Record<string, StudyLessonPosition>; readonly currentPosition: StudyLessonPosition | null; readonly updatedAt: number }
-export interface StudyProgressEvent { readonly id: string; readonly type: StudyEventType; readonly topicId: string; readonly checkpointId: string | null; readonly correct: boolean | null; readonly createdAt: number }
+export interface StudyProgressEvent { readonly id: string; readonly type: StudyEventType; readonly topicId: string; readonly checkpointId: string | null; readonly correct: boolean | null; readonly shouldReplan?: boolean; readonly createdAt: number }
 export interface StudyProgressApi {
   get(workspaceId: string): Promise<StudyProgressState | null>
   select(input: StudySelection): Promise<StudyProgressState>

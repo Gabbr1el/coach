@@ -404,7 +404,7 @@ export function App() {
     if (!content || plannerSending || plannerLoading) return
     setPlannerSending(true)
     setPlannerInput('')
-    void window.coach.plannerAction.proposeFromText(content).then((actions) => setPlannerActions((current) => [...actions, ...current.filter((item) => !actions.some((action) => action.id === item.id))]))
+    void window.coach.plannerAction.proposeFromText(content).then((actions) => setPlannerActions((current) => [...actions, ...current.filter((item) => !actions.some((action) => action.id === item.id))])).catch(() => setPlannerError('O Coach respondeu, mas não conseguiu preparar a ação no sistema.'))
     setStreamedContent('')
     try {
       const requestId = crypto.randomUUID()

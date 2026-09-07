@@ -11,6 +11,7 @@ class MemoryStudyWorkspaceRepository implements StudyWorkspaceRepository {
   async saveNotes(_workspaceId: string, notes: string, revision: number, now: number): Promise<void> { this.state = { ...this.state!, notes, notesRevision: revision, updatedAt: now } }
   async updateContextSharing(_workspaceId: string, enabled: boolean, now: number): Promise<void> { this.state = { ...this.state!, shareContextWithAi: enabled, updatedAt: now } }
   async replacePlanStatuses(_workspaceId: string, _sessionId: string, statuses: ReadonlyArray<{ id: string; status: StudyPlanItem['status'] }>, now: number): Promise<void> { this.state = { ...this.state!, plan: this.state!.plan.map((item) => ({ ...item, status: statuses.find((status) => status.id === item.id)?.status ?? item.status })), updatedAt: now } }
+  async replacePlan(_workspaceId: string, _sessionId: string, plan: StudyPlanItem[], now: number): Promise<void> { this.state = { ...this.state!, plan, updatedAt: now } }
   async updateTimer(_workspaceId: string, _sessionId: string, timer: Pick<StudyWorkspaceState, 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'accumulatedFocusSeconds'>, now: number): Promise<void> { this.state = { ...this.state!, ...timer, updatedAt: now } }
   async setTimerDuration(_workspaceId: string, _sessionId: string, durationSeconds: number, now: number): Promise<void> { this.state = { ...this.state!, timerDurationSeconds: durationSeconds, timerRemainingSeconds: durationSeconds, timerStatus: 'idle', timerStartedAt: null, updatedAt: now } }
   flushDrafts(): void {}
@@ -24,11 +25,12 @@ describe('StudyWorkspaceService', () => {
   it('creates one durable initial study state with a guided plan', async () => {
     const repository = new MemoryStudyWorkspaceRepository()
     let id = 0
-    const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, now: () => 100, createId: () => `00000000-0000-4000-8000-${String(++id).padStart(12, '0')}` })
+    const roadmap = { id: crypto.randomUUID(), workspaceId: workspace.id, title: 'Algoritmos', status: 'accepted' as const, version: 1, providerId: null, modelId: null, createdAt: 1, updatedAt: 1, modules: [{ id: crypto.randomUUID(), title: 'Listas', objective: 'Aprender listas', estimatedMinutes: 120, position: 1, status: 'active' as const, topics: ['Listas encadeadas', 'Inserção', 'Remoção'], outcomes: [], practice: 'Implementar lista', completionCriteria: [], resources: [] }] }
+    const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, getRoadmap: () => roadmap, now: () => 100, createId: () => `00000000-0000-4000-8000-${String(++id).padStart(12, '0')}` })
     const state = await service.getState(workspace.id)
-    expect(state.plan).toHaveLength(5)
+    expect(state.plan).toHaveLength(4)
     expect(state.shareContextWithAi).toBe(false)
-    expect(state.plan[0]).toMatchObject({ status: 'active', durationMinutes: 20 })
+    expect(state.plan[0]).toMatchObject({ status: 'active', durationMinutes: 30, title: 'Listas encadeadas / introdução' })
     expect((await service.getState(workspace.id)).sessionId).toBe(state.sessionId)
   })
 
@@ -39,6 +41,18 @@ describe('StudyWorkspaceService', () => {
     expect((await service.saveDocument(workspace.id, 'lista.py', 'python', 'print(1)', 1)).editorContent).toBe('print(1)')
     expect((await service.saveNotes(workspace.id, 'Revisar ponteiros', 1)).notes).toBe('Revisar ponteiros')
     expect((await service.updateContextSharing(workspace.id, true)).shareContextWithAi).toBe(true)
+  })
+
+  it('activates an item without completing it and applies its timer duration', async () => {
+    const repository = new MemoryStudyWorkspaceRepository()
+    const roadmap = { id: crypto.randomUUID(), workspaceId: workspace.id, title: 'Algoritmos', status: 'accepted' as const, version: 1, providerId: null, modelId: null, createdAt: 1, updatedAt: 1, modules: [{ id: crypto.randomUUID(), title: 'Listas', objective: 'Aprender listas', estimatedMinutes: 120, position: 1, status: 'active' as const, topics: ['Listas', 'Filas'], outcomes: [], practice: 'Implementar', completionCriteria: [], resources: [] }] }
+    const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, getRoadmap: () => roadmap, now: () => 300, createId: () => crypto.randomUUID() })
+    const initial = await service.getState(workspace.id)
+    const target = initial.plan[1]!
+    const activated = await service.activatePlanItem(workspace.id, target.id)
+    expect(activated.plan.find((item) => item.id === target.id)?.status).toBe('active')
+    expect(activated.plan.every((item) => item.status !== 'completed')).toBe(true)
+    expect(activated.timerDurationSeconds).toBe(target.durationMinutes * 60)
   })
 
   it('accounts for elapsed running timer time before pausing', async () => {

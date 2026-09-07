@@ -4,6 +4,8 @@ export const STUDY_WORKSPACE_CHANNELS = {
   saveNotes: 'study-workspace:save-notes',
   updateContextSharing: 'study-workspace:update-context-sharing',
   togglePlanItem: 'study-workspace:toggle-plan-item',
+  recalculatePlan: 'study-workspace:recalculate-plan',
+  activatePlanItem: 'study-workspace:activate-plan-item',
   updateTimer: 'study-workspace:update-timer',
   setTimerDuration: 'study-workspace:set-timer-duration',
   flushDrafts: 'study-workspace:flush-drafts',

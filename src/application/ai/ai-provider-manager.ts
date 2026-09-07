@@ -3,7 +3,7 @@ import type { AIProvider } from './ai-provider'
 export class AIProviderManager {
   private readonly providers = new Map<string, AIProvider>()
   private activeProviderId: string | null = null
-  private readonly purposeRoutes = new Map<'planner' | 'tutor' | 'roadmap' | 'report', string>()
+  private readonly purposeRoutes = new Map<'planner' | 'tutor' | 'roadmap' | 'report' | 'lesson', string>()
 
   register(provider: AIProvider): void {
     if (this.providers.has(provider.id)) throw new Error(`AI provider '${provider.id}' is already registered`)
@@ -28,7 +28,7 @@ export class AIProviderManager {
     return providerId ? this.providers.get(providerId) ?? this.getActive() : this.getActive()
   }
 
-  setRoute(purpose: 'planner' | 'tutor' | 'roadmap' | 'report', providerId: string): void {
+  setRoute(purpose: 'planner' | 'tutor' | 'roadmap' | 'report' | 'lesson', providerId: string): void {
     if (!this.providers.has(providerId)) throw new Error(`AI provider '${providerId}' is not registered`)
     this.purposeRoutes.set(purpose, providerId)
   }

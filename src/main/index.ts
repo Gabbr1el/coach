@@ -49,6 +49,7 @@ import { registerReportHandlers } from './ipc/report-handlers'
 import { WorkspaceOnboardingService } from '../application/workspaces/workspace-onboarding-service'
 import { registerWorkspaceOnboardingHandlers } from './ipc/workspace-onboarding-handlers'
 import { registerStudyProgressHandlers } from './ipc/study-progress-handlers'
+import { mapStudyProgressState } from './ipc/study-progress-handlers'
 import { registerStudyLessonHandlers } from './ipc/study-lesson-handlers'
 import { StudyLessonService } from '../application/study-lessons/study-lesson-service'
 import { SqliteStudyLessonRepository } from './repositories/sqlite-study-lesson-repository'
@@ -96,7 +97,8 @@ void app.whenReady().then(async () => {
       providerManager,
     })
     const workspaceEventBus = new WorkspaceEventBus()
-    const studyWorkspaceService = new StudyWorkspaceService({ repository: new DrizzleStudyWorkspaceRepository(database), getWorkspace: (id) => workspaceRepository.findById(id), eventBus: workspaceEventBus })
+    const roadmapRepository = new DrizzleRoadmapRepository(database)
+    const studyWorkspaceService = new StudyWorkspaceService({ repository: new DrizzleStudyWorkspaceRepository(database), getWorkspace: (id) => workspaceRepository.findById(id), eventBus: workspaceEventBus, getRoadmap: (id) => roadmapRepository.findCurrent(id), getStudyProgress: (id) => { const row = database!.sqlite.prepare('SELECT workspace_id AS workspaceId, roadmap_id AS roadmapId, current_module_id AS currentModuleId, current_topic_id AS currentTopicId, current_lesson_id AS currentLessonId, current_checkpoint_id AS currentCheckpointId, topic_statuses_json AS topicStatusesJson, lesson_positions_json AS lessonPositionsJson, updated_at AS updatedAt FROM study_progress WHERE workspace_id = ?').get(id) as Parameters<typeof mapStudyProgressState>[0] | undefined; return row ? mapStudyProgressState(row) : null } })
     const observerService = new ObserverService(new DrizzleObserverRepository(database))
     const getWorkspaceMemory = (id: string) => (database!.sqlite.prepare('SELECT summary FROM workspace_memories WHERE workspace_id = ?').get(id) as { summary: string } | undefined)?.summary ?? null
     const currentWorkspaceContext = new CurrentWorkspaceContextService({ getWorkspace: (id) => workspaceRepository.findById(id), getStudyState: (id) => studyWorkspaceService.getState(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory })
@@ -104,7 +106,7 @@ void app.whenReady().then(async () => {
     const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory, getCurrentContext: (id) => currentWorkspaceContext.get(id), searchMaterials: (id, query) => materialService.search(id, query) })
     registerApplicationHandlers()
     registerStudyProgressHandlers(database)
-    registerStudyLessonHandlers(new StudyLessonService(new SqliteStudyLessonRepository(database), providerManager, (id) => workspaceRepository.findById(id), (id) => new DrizzleRoadmapRepository(database!).findCurrent(id)))
+    registerStudyLessonHandlers(new StudyLessonService(new SqliteStudyLessonRepository(database), providerManager, (id) => workspaceRepository.findById(id), (id) => roadmapRepository.findCurrent(id)))
     registerWorkspaceHandlers(workspaceService)
     registerConversationHandlers(homePlannerService, workspaceCoachService)
     registerStudyWorkspaceHandlers(studyWorkspaceService)

@@ -25,6 +25,8 @@ export const flushWorkspaceDraftsInputSchema = studyWorkspaceIdInputSchema.exten
 }).strict()
 
 export const toggleStudyPlanItemInputSchema = studyWorkspaceIdInputSchema.extend({ itemId: z.uuid() }).strict()
+export const recalculateStudyPlanInputSchema = studyWorkspaceIdInputSchema
+export const activateStudyPlanItemInputSchema = studyWorkspaceIdInputSchema.extend({ itemId: z.uuid() }).strict()
 
 export const updateStudyTimerInputSchema = studyWorkspaceIdInputSchema.extend({
   action: z.enum(['start', 'pause', 'reset']),
@@ -54,6 +56,10 @@ export interface StudyPlanItem {
   readonly durationMinutes: number
   readonly position: number
   readonly status: 'pending' | 'active' | 'completed'
+  readonly moduleId?: string
+  readonly topicId?: string
+  readonly activityType?: 'introduction' | 'review' | 'exercise' | 'practice' | 'video'
+  readonly scheduledStartMinutes?: number
 }
 
 export interface StudyWorkspaceState {
@@ -82,6 +88,8 @@ export interface StudyWorkspaceApi {
   saveNotes(input: z.infer<typeof saveWorkspaceNotesInputSchema>): Promise<StudyWorkspaceState>
   updateContextSharing(input: z.infer<typeof updateContextSharingInputSchema>): Promise<StudyWorkspaceState>
   togglePlanItem(input: z.infer<typeof toggleStudyPlanItemInputSchema>): Promise<StudyWorkspaceState>
+  recalculatePlan(input: z.infer<typeof recalculateStudyPlanInputSchema>): Promise<StudyWorkspaceState>
+  activatePlanItem(input: z.infer<typeof activateStudyPlanItemInputSchema>): Promise<StudyWorkspaceState>
   updateTimer(input: z.infer<typeof updateStudyTimerInputSchema>): Promise<StudyWorkspaceState>
   setTimerDuration(input: z.infer<typeof setStudyTimerDurationInputSchema>): Promise<StudyWorkspaceState>
   flushDrafts(input: z.infer<typeof flushWorkspaceDraftsInputSchema>): boolean

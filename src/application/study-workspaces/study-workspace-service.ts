@@ -3,6 +3,9 @@ import type { StudyPlanItem, StudyWorkspaceState } from '../../shared/contracts/
 import type { DailyStudyReport } from '../../shared/contracts/study-workspace-contract'
 import type { StudyWorkspaceRepository } from './study-workspace-repository'
 import { createWorkspaceEvent, type WorkspaceEventBus } from '../events/workspace-event-bus'
+import type { Roadmap } from '../../shared/contracts/roadmap-contract'
+import type { StudyProgressState } from '../../shared/contracts/study-progress-contract'
+import { deriveDailyPlan } from './daily-plan'
 
 export interface StudyWorkspaceServiceDependencies {
   readonly repository: StudyWorkspaceRepository
@@ -10,6 +13,9 @@ export interface StudyWorkspaceServiceDependencies {
   readonly now?: () => number
   readonly createId?: () => string
   readonly eventBus?: WorkspaceEventBus
+  readonly getRoadmap?: (workspaceId: string) => Roadmap | null
+  readonly getStudyProgress?: (workspaceId: string) => StudyProgressState | null
+  readonly getPlanContext?: (workspaceId: string) => { availableMinutes: number; urgency: 'stable' | 'attention' | 'urgent'; difficultyTopicIds: Set<string>; startMinutes: number }
 }
 
 const DEFAULT_CODE = `class Node:
@@ -34,15 +40,7 @@ class LinkedList:
         current.next = new_node
 `
 
-function createDefaultPlan(workspace: Workspace, createId: () => string): StudyPlanItem[] {
-  return [
-    { id: createId(), title: `Revisar fundamentos de ${workspace.name}`, durationMinutes: 20, position: 1, status: 'active' },
-    { id: createId(), title: 'Praticar o conceito principal', durationMinutes: 35, position: 2, status: 'pending' },
-    { id: createId(), title: 'Resolver exercícios sem ajuda', durationMinutes: 30, position: 3, status: 'pending' },
-    { id: createId(), title: 'Explicar o conteúdo com suas palavras', durationMinutes: 15, position: 4, status: 'pending' },
-    { id: createId(), title: 'Registrar dúvidas e aprendizados', durationMinutes: 10, position: 5, status: 'pending' },
-  ]
-}
+function createRoadmapPlan(workspaceId: string, roadmap: Roadmap | null, progress: StudyProgressState | null, existing: StudyPlanItem[], createId: () => string, context?: { availableMinutes: number; urgency: 'stable' | 'attention' | 'urgent'; difficultyTopicIds: Set<string>; startMinutes: number }): StudyPlanItem[] { return roadmap ? deriveDailyPlan({ workspaceId, roadmap, progress, availableMinutes: context?.availableMinutes ?? 120, urgency: context?.urgency ?? 'stable', difficultyTopicIds: context?.difficultyTopicIds ?? new Set(), startMinutes: context?.startMinutes ?? 18 * 60 }, existing, createId) : [] }
 
 export class StudyWorkspaceService {
   private readonly now: () => number
@@ -71,7 +69,7 @@ export class StudyWorkspaceService {
       timerRemainingSeconds: 1500,
       timerStatus: 'idle',
       timerStartedAt: null,
-      plan: createDefaultPlan(workspace, this.createId),
+       plan: createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, [], this.createId, this.dependencies.getPlanContext?.(workspaceId)),
       updatedAt: now,
       documentRevision: 0,
       notesRevision: 0,
@@ -134,6 +132,23 @@ export class StudyWorkspaceService {
     return next
   }
 
+  async recalculatePlan(workspaceId: string): Promise<StudyWorkspaceState> {
+    const state = await this.getState(workspaceId)
+    const plan = createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, state.plan, this.createId, this.dependencies.getPlanContext?.(workspaceId))
+    await this.dependencies.repository.replacePlan(workspaceId, state.sessionId, plan, this.now())
+    return this.getState(workspaceId)
+  }
+
+  async activatePlanItem(workspaceId: string, itemId: string): Promise<StudyWorkspaceState> {
+    const state = await this.getState(workspaceId)
+    const item = state.plan.find((candidate) => candidate.id === itemId)
+    if (!item) throw new Error('Study plan item not found')
+    const statuses = state.plan.map((candidate) => ({ id: candidate.id, status: candidate.id === itemId ? 'active' as const : candidate.status === 'active' ? 'pending' as const : candidate.status }))
+    await this.dependencies.repository.replacePlanStatuses(workspaceId, state.sessionId, statuses, this.now())
+    await this.dependencies.repository.setTimerDuration(workspaceId, state.sessionId, item.durationMinutes * 60, this.now())
+    return this.getState(workspaceId)
+  }
+
   async updateTimer(workspaceId: string, action: 'start' | 'pause' | 'reset'): Promise<StudyWorkspaceState> {
     const state = await this.getState(workspaceId)
     const now = this.now()
@@ -164,7 +179,7 @@ export class StudyWorkspaceService {
     const workspace = await this.requireWorkspace(workspaceId)
     const now = this.now()
     const focusSeconds = state.accumulatedFocusSeconds + state.timerDurationSeconds - this.effectiveRemaining(state, now)
-    this.dependencies.repository.completeAndCreateSession(workspaceId, state.sessionId, this.createId(), createDefaultPlan(workspace, this.createId), focusSeconds, state.timerDurationSeconds, now)
+    this.dependencies.repository.completeAndCreateSession(workspaceId, state.sessionId, this.createId(), createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, state.plan, this.createId, this.dependencies.getPlanContext?.(workspaceId)), focusSeconds, state.timerDurationSeconds, now)
     const next = await this.getState(workspaceId)
     this.dependencies.eventBus?.publish(createWorkspaceEvent(workspaceId, state.sessionId, 'session.completed', { focusSeconds }, now))
     this.publish(next, 'session.started', { source: 'previous-session-completed' })

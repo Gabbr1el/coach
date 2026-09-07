@@ -110,6 +110,8 @@ const api: CoachDesktopApi = {
     saveNotes: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.saveNotes, input),
     updateContextSharing: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.updateContextSharing, input),
     togglePlanItem: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.togglePlanItem, input),
+    recalculatePlan: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.recalculatePlan, input),
+    activatePlanItem: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.activatePlanItem, input),
     updateTimer: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.updateTimer, input),
     setTimerDuration: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.setTimerDuration, input),
     flushDrafts: (input) => ipcRenderer.sendSync(STUDY_WORKSPACE_CHANNELS.flushDrafts, input) === true,

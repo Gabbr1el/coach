@@ -18,10 +18,16 @@ import { ROADMAP_CHANNELS } from '../shared/contracts/roadmap-channels'
 import { PLANNER_ACTION_CHANNELS } from '../shared/contracts/planner-action-channels'
 import { REPORT_CHANNELS } from '../shared/contracts/report-channels'
 import { WORKSPACE_ONBOARDING_CHANNELS } from '../shared/contracts/workspace-onboarding-channels'
+import { STUDY_PROGRESS_CHANNELS } from '../shared/contracts/study-progress-channels'
 
 const api: CoachDesktopApi = {
   application: {
     getInfo: () => ipcRenderer.invoke(APPLICATION_GET_INFO_CHANNEL),
+  },
+  studyProgress: {
+    get: (workspaceId) => ipcRenderer.invoke(STUDY_PROGRESS_CHANNELS.get, { workspaceId }),
+    select: (input) => ipcRenderer.invoke(STUDY_PROGRESS_CHANNELS.select, input),
+    record: (input) => ipcRenderer.invoke(STUDY_PROGRESS_CHANNELS.record, input),
   },
   workspace: {
     list: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.list),

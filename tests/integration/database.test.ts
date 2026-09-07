@@ -56,6 +56,8 @@ describe('Coach database migrations', () => {
       { name: 'student_memory' },
       { name: 'study_deadlines' },
       { name: 'study_plan_items' },
+      { name: 'study_progress' },
+      { name: 'study_progress_events' },
       { name: 'study_sessions' },
       { name: 'workspace_memories' },
       { name: 'workspace_projects' },

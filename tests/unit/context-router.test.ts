@@ -17,4 +17,9 @@ describe('ContextRouter', () => {
     const route = new ContextRouter().route({ ...base, content: 'por que não funciona?', activePage: 'practice', practiceContext: { fileName: 'main.py', language: 'python', code: 'print hello word' }, lastExecution: { stdout: '', stderr: 'SyntaxError: Missing parentheses', exitCode: 1, timedOut: false } })
     expect(route.context).toMatchObject({ activePage: 'practice', practiceContext: { code: 'print hello word' }, lastExecution: { exitCode: 1 } })
   })
+  it('keeps the exact selected study topic as authorized context', () => {
+    const activeStudy = { moduleId: 'module-b', module: 'Saida', topicId: 'module-b:print', topic: 'print', lessonId: 'module-b:print:lesson', checkpointId: 'module-b:print:lesson:checkpoint', currentExcerpt: 'print envia texto para a saida' }
+    const route = new ContextRouter().route({ ...base, content: 'não entendi essa parte', activePage: 'studies', activeStudy })
+    expect(route.context?.activeStudy).toEqual(activeStudy)
+  })
 })

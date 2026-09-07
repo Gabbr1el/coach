@@ -7,7 +7,7 @@ export interface AuthorizedStudyContext {
   readonly notes: string
   readonly activePlanItem: string | null
   readonly activePage?: string
-  readonly activeStudy?: { module: string; topic: string | null }
+  readonly activeStudy?: { moduleId: string; module: string; topicId: string; topic: string; lessonId: string; checkpointId: string | null; currentExcerpt: string | null }
   readonly lastExecution?: { stdout: string; stderr: string; exitCode: number | null; timedOut: boolean } | null
   readonly practiceContext?: { fileName: string; language: string; code: string }
 }

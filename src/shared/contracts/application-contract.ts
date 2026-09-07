@@ -29,4 +29,5 @@ export interface CoachDesktopApi {
   plannerAction: import('./planner-action-contract').PlannerActionApi
   report: import('./report-contract').ReportApi
   workspaceOnboarding: import('./workspace-onboarding-contract').WorkspaceOnboardingApi
+  studyProgress: import('./study-progress-contract').StudyProgressApi
 }

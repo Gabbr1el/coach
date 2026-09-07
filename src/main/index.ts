@@ -48,6 +48,7 @@ import { DrizzleReportRepository } from './repositories/drizzle-report-repositor
 import { registerReportHandlers } from './ipc/report-handlers'
 import { WorkspaceOnboardingService } from '../application/workspaces/workspace-onboarding-service'
 import { registerWorkspaceOnboardingHandlers } from './ipc/workspace-onboarding-handlers'
+import { registerStudyProgressHandlers } from './ipc/study-progress-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -99,6 +100,7 @@ void app.whenReady().then(async () => {
     const materialService = new PdfMaterialService(database)
     const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory, getCurrentContext: (id) => currentWorkspaceContext.get(id), searchMaterials: (id, query) => materialService.search(id, query) })
     registerApplicationHandlers()
+    registerStudyProgressHandlers(database)
     registerWorkspaceHandlers(workspaceService)
     registerConversationHandlers(homePlannerService, workspaceCoachService)
     registerStudyWorkspaceHandlers(studyWorkspaceService)

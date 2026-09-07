@@ -16,8 +16,9 @@ import * as navigationSchema from './schema/session-navigation'
 import * as projectSchema from './schema/projects'
 import * as roadmapSchema from './schema/roadmaps'
 import * as plannerActionSchema from './schema/planner-actions'
+import * as studyProgressSchema from './schema/study-progress'
 
-const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema, ...studyWorkspaceSchema, ...learningEventSchema, ...planningSchema, ...materialSchema, ...memorySchema, ...navigationSchema, ...projectSchema, ...roadmapSchema, ...plannerActionSchema }
+const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema, ...studyWorkspaceSchema, ...learningEventSchema, ...planningSchema, ...materialSchema, ...memorySchema, ...navigationSchema, ...projectSchema, ...roadmapSchema, ...plannerActionSchema, ...studyProgressSchema }
 
 export interface CoachDatabase {
   readonly sqlite: Database.Database

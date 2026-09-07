@@ -9,6 +9,7 @@ export interface AuthorizedStudyContext {
   readonly activePage?: string
   readonly activeStudy?: { module: string; topic: string | null }
   readonly lastExecution?: { stdout: string; stderr: string; exitCode: number | null; timedOut: boolean } | null
+  readonly practiceContext?: { fileName: string; language: string; code: string }
 }
 
 export type ContextDepth = 'MINIMAL' | 'SESSION' | 'WORKSPACE' | 'DEEP'
@@ -30,7 +31,11 @@ export class ContextRouter {
   route(input: StreamWorkspaceMessageInput, observer?: ObserverState | null, authorizedContext?: AuthorizedStudyContext): RoutedContext {
     const text = input.content.trim()
     const intervention = Boolean(observer?.interventionSuggested)
-    const context = authorizedContext ? { ...authorizedContext, activePage: input.activePage, activeStudy: input.activeStudy, lastExecution: input.lastExecution } : undefined
+    const context = authorizedContext
+      ? { ...authorizedContext, activePage: input.activePage, activeStudy: input.activeStudy, practiceContext: input.practiceContext, lastExecution: input.lastExecution }
+      : input.practiceContext || input.activeStudy || input.lastExecution
+        ? { fileName: input.practiceContext?.fileName ?? '', editorContent: input.practiceContext?.code ?? '', notes: '', activePlanItem: input.activeStudy?.topic ?? null, activePage: input.activePage, activeStudy: input.activeStudy, practiceContext: input.practiceContext, lastExecution: input.lastExecution }
+        : undefined
     if (intervention) return { depth: context ? 'SESSION' : 'MINIMAL', outputBudget: 'HINT', maxOutputTokens: 160, helpLevel: 1, context: context ? { ...context, notes: '' } : undefined, observerSignal: { repeatedErrorCount: observer!.repeatedErrorCount } }
     if (DEEP_REQUEST.test(text)) return { depth: context ? 'DEEP' : 'WORKSPACE', outputBudget: 'DEEP_ANALYSIS', maxOutputTokens: 900, helpLevel: 4, context, observerSignal: null }
     if (HELP_REQUEST.test(text)) return { depth: context ? 'SESSION' : 'MINIMAL', outputBudget: 'SHORT_EXPLANATION', maxOutputTokens: 220, helpLevel: 2, context: context ? { ...context, notes: '' } : undefined, observerSignal: null }

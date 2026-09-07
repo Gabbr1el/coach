@@ -10,7 +10,7 @@ function editorLanguage(path: string): string {
   return 'python'
 }
 
-export function ProjectWorkspace({ workspaceId, workspaceName, onError }: { workspaceId: string; workspaceName: string; onError(message: string): void }) {
+export function ProjectWorkspace({ workspaceId, workspaceName, onError, onContextChange }: { workspaceId: string; workspaceName: string; onError(message: string): void; onContextChange?(context: { fileName: string; language: string; code: string; execution: CodeExecutionResult | null }): void }) {
   const [project, setProject] = useState<WorkspaceProject | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -18,6 +18,7 @@ export function ProjectWorkspace({ workspaceId, workspaceName, onError }: { work
   const [draft, setDraft] = useState('')
   const saveTimer = useRef<number | null>(null)
   const active = project?.files.find((file) => file.id === project.activeFileId) ?? null
+  useEffect(() => { if (active) onContextChange?.({ fileName: active.path, language: editorLanguage(active.path), code: draft, execution }) }, [active?.id, active?.path, draft, execution])
 
   useEffect(() => {
     setLoading(true)

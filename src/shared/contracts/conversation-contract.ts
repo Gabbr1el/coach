@@ -18,6 +18,7 @@ export const streamWorkspaceMessageInputSchema = sendHomeMessageInputSchema.exte
   workspaceId: workspaceIdSchema,
   activePage: z.enum(['overview', 'plan', 'studies', 'materials', 'practice', 'videos', 'reports']).optional(),
   activeStudy: z.object({ module: z.string().max(160), topic: z.string().max(240).nullable() }).optional(),
+  practiceContext: z.object({ fileName: z.string().max(500), language: z.string().max(40), code: z.string().max(200_000) }).optional(),
   lastExecution: z.object({ stdout: z.string().max(8000), stderr: z.string().max(8000), exitCode: z.number().int().nullable(), timedOut: z.boolean() }).nullable().optional(),
 }).strict()
 

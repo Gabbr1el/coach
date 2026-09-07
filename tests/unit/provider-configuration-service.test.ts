@@ -34,6 +34,12 @@ function provider(): AIProvider {
 const compatibleProvider = () => provider()
 
 describe('ProviderConfigurationService', () => {
+  it('activates local OmniRoute on startup without secure storage', async () => {
+    const manager = new AIProviderManager()
+    const service = new ProviderConfigurationService(new MemoryConfigurationRepository(), new MemoryVault(false), manager, () => provider(), () => provider())
+    await service.initialize()
+    expect(await service.getStatus()).toMatchObject({ configured: true, providerName: 'OmniRoute local', model: 'codex/gpt-5.6-sol', sessionOnly: true })
+  })
   it('tests, stores and selects a provider without putting the key in metadata', async () => {
     const repository = new MemoryConfigurationRepository()
     const vault = new MemoryVault()

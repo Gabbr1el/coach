@@ -5,6 +5,7 @@ import type { ProviderAccountSummary, ProviderStatus } from '../../shared/contra
 import type { AIProvider } from './ai-provider'
 
 const OPENAI_SECRET_REFERENCE = 'provider-openai-api-key'
+function isLocalOmniRoute(baseUrl: string | null): boolean { try { const url = new URL(baseUrl ?? ''); return (url.hostname === '127.0.0.1' || url.hostname === 'localhost') && url.port === '20128' } catch { return false } }
 
 export class ProviderConfigurationService {
   private operationQueue: Promise<void> = Promise.resolve()
@@ -21,11 +22,16 @@ export class ProviderConfigurationService {
 
   async initialize(): Promise<void> {
     await this.exclusive(async () => {
-      if (!this.vault.isAvailable()) return
+      if (!this.vault.isAvailable()) {
+        const configurations = await this.repository.list()
+        const local = [configurations.find((item) => item.isActive), ...configurations].find((item) => item?.providerId === 'openai-compatible' && isLocalOmniRoute(item.baseUrl))
+        this.activateLocalOmniRoute(local?.id ?? 'omniroute-local-default', local?.displayName ?? 'OmniRoute local', local?.baseUrl ?? 'http://127.0.0.1:20128/v1', local?.model ?? 'codex/gpt-5.6-sol')
+        return
+      }
       const configurations = await this.repository.list()
       await this.vault.removeOrphans(new Set(configurations.map((item) => item.secretReference)))
       const ordered = [configurations.find((item) => item.isActive), ...configurations.filter((item) => !item.isActive)].filter((item): item is NonNullable<typeof item> => Boolean(item))
-      await this.activateFirstUsable(ordered, false)
+      if (!await this.activateFirstUsable(ordered, false)) this.activateLocalOmniRoute('omniroute-local-default', 'OmniRoute local', 'http://127.0.0.1:20128/v1', 'codex/gpt-5.6-sol')
     })
   }
 
@@ -174,7 +180,7 @@ export class ProviderConfigurationService {
     return this.getStatus()
   }
 
-  private async activateFirstUsable(configurations: readonly import('./provider-configuration-repository').ProviderConfiguration[], testConnection: boolean): Promise<void> {
+  private async activateFirstUsable(configurations: readonly import('./provider-configuration-repository').ProviderConfiguration[], testConnection: boolean): Promise<boolean> {
     this.manager.clear()
     for (const configuration of configurations) {
       try {
@@ -186,12 +192,15 @@ export class ProviderConfigurationService {
         if (testConnection) await provider.testConnection()
         await this.repository.activate(configuration.id, this.now())
         this.registerAndSelect(configuration.id, provider)
-        return
+        return true
       } catch {
         continue
       }
     }
+    return false
   }
+
+  private activateLocalOmniRoute(id: string, label: string, baseUrl: string, model: string): void { this.sessionAccount = { id, providerId: 'openai-compatible', providerName: label, label, model, isActive: true, sessionOnly: true, baseUrl }; this.registerAndSelect(id, this.createCompatibleProvider(label, baseUrl, 'omniroute', model)) }
 
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.operationQueue

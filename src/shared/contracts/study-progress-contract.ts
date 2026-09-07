@@ -2,6 +2,19 @@ import { z } from 'zod'
 import { workspaceIdSchema } from './workspace-contract'
 
 export const studyItemStatusSchema = z.enum(['NOT_STARTED', 'IN_PROGRESS', 'COMPLETED'])
+export const studyStageSchema = z.enum(['explanation', 'example', 'verification', 'feedback', 'exercise'])
+export const studyLessonPositionSchema = z.object({
+  lessonId: z.string().min(1).max(360),
+  currentBlockId: z.string().min(1).max(420),
+  currentStage: studyStageSchema,
+  currentCheckpointId: z.string().min(1).max(420).nullable(),
+  currentExerciseId: z.string().min(1).max(420).nullable(),
+  completedBlockIds: z.array(z.string().min(1).max(420)).max(100),
+  selectedAnswer: z.number().int().min(0).max(100).nullable(),
+  attempt: z.number().int().min(0).max(1000),
+  feedback: z.string().max(4000).nullable(),
+  reinforcementBlocks: z.array(z.string().max(4000)).max(20),
+}).strict()
 export const studySelectionSchema = z.object({
   workspaceId: workspaceIdSchema,
   roadmapId: z.uuid(),
@@ -20,14 +33,17 @@ export const recordStudyEventSchema = z.object({
   checkpointId: z.string().min(1).max(420).nullable(),
   correct: z.boolean().optional(),
 }).strict()
+export const updateStudyPositionSchema = z.object({ workspaceId: workspaceIdSchema, position: studyLessonPositionSchema }).strict()
 
 export type StudyItemStatus = z.infer<typeof studyItemStatusSchema>
 export type StudySelection = z.infer<typeof studySelectionSchema>
 export type StudyEventType = z.infer<typeof studyEventTypeSchema>
-export interface StudyProgressState extends StudySelection { readonly topicStatuses: Record<string, StudyItemStatus>; readonly updatedAt: number }
+export type StudyLessonPosition = z.infer<typeof studyLessonPositionSchema>
+export interface StudyProgressState extends StudySelection { readonly topicStatuses: Record<string, StudyItemStatus>; readonly lessonPositions: Record<string, StudyLessonPosition>; readonly currentPosition: StudyLessonPosition | null; readonly updatedAt: number }
 export interface StudyProgressEvent { readonly id: string; readonly type: StudyEventType; readonly topicId: string; readonly checkpointId: string | null; readonly correct: boolean | null; readonly createdAt: number }
 export interface StudyProgressApi {
   get(workspaceId: string): Promise<StudyProgressState | null>
   select(input: StudySelection): Promise<StudyProgressState>
+  updatePosition(input: z.infer<typeof updateStudyPositionSchema>): Promise<StudyProgressState>
   record(input: z.infer<typeof recordStudyEventSchema>): Promise<StudyProgressEvent>
 }

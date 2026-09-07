@@ -141,6 +141,13 @@
       "when": 1788789300000,
       "tag": "0019_study_progress",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1788789900000,
+      "tag": "0020_lesson_positions",
+      "breakpoints": true
     }
   ]
 }

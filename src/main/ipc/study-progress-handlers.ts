@@ -1,16 +1,60 @@
 import { ipcMain } from 'electron'
 import type { CoachDatabase } from '../database/connection'
 import { STUDY_PROGRESS_CHANNELS } from '../../shared/contracts/study-progress-channels'
-import { recordStudyEventSchema, studySelectionSchema, type StudyProgressState } from '../../shared/contracts/study-progress-contract'
+import { recordStudyEventSchema, studySelectionSchema, updateStudyPositionSchema, type StudyLessonPosition, type StudyProgressState } from '../../shared/contracts/study-progress-contract'
 import { workspaceConversationInputSchema } from '../../shared/contracts/conversation-contract'
 import { assertTrustedSender } from './trusted-sender'
 
-type ProgressRow = { workspaceId: string; roadmapId: string; currentModuleId: string; currentTopicId: string; currentLessonId: string; currentCheckpointId: string | null; topicStatusesJson: string; updatedAt: number }
-export function mapStudyProgressState(row: ProgressRow): StudyProgressState { return { ...row, moduleId: row.currentModuleId, topicId: row.currentTopicId, lessonId: row.currentLessonId, checkpointId: row.currentCheckpointId, topicStatuses: JSON.parse(row.topicStatusesJson) as StudyProgressState['topicStatuses'] } }
+type ProgressRow = { workspaceId: string; roadmapId: string; currentModuleId: string; currentTopicId: string; currentLessonId: string; currentCheckpointId: string | null; topicStatusesJson: string; lessonPositionsJson: string; updatedAt: number }
+
+export function mapStudyProgressState(row: ProgressRow): StudyProgressState {
+  const lessonPositions = JSON.parse(row.lessonPositionsJson) as Record<string, StudyLessonPosition>
+  return { ...row, moduleId: row.currentModuleId, topicId: row.currentTopicId, lessonId: row.currentLessonId, checkpointId: row.currentCheckpointId, topicStatuses: JSON.parse(row.topicStatusesJson) as StudyProgressState['topicStatuses'], lessonPositions, currentPosition: lessonPositions[row.currentLessonId] ?? null }
+}
 
 export function registerStudyProgressHandlers(database: CoachDatabase): void {
-  const get = (workspaceId: string) => { const row = database.sqlite.prepare('SELECT workspace_id AS workspaceId, roadmap_id AS roadmapId, current_module_id AS currentModuleId, current_topic_id AS currentTopicId, current_lesson_id AS currentLessonId, current_checkpoint_id AS currentCheckpointId, topic_statuses_json AS topicStatusesJson, updated_at AS updatedAt FROM study_progress WHERE workspace_id = ?').get(workspaceId) as ProgressRow | undefined; return row ? mapStudyProgressState(row) : null }
+  const get = (workspaceId: string) => {
+    const row = database.sqlite.prepare('SELECT workspace_id AS workspaceId, roadmap_id AS roadmapId, current_module_id AS currentModuleId, current_topic_id AS currentTopicId, current_lesson_id AS currentLessonId, current_checkpoint_id AS currentCheckpointId, topic_statuses_json AS topicStatusesJson, lesson_positions_json AS lessonPositionsJson, updated_at AS updatedAt FROM study_progress WHERE workspace_id = ?').get(workspaceId) as ProgressRow | undefined
+    return row ? mapStudyProgressState(row) : null
+  }
   ipcMain.handle(STUDY_PROGRESS_CHANNELS.get, (event, payload) => { assertTrustedSender(event); return get(workspaceConversationInputSchema.parse(payload).workspaceId) })
-  ipcMain.handle(STUDY_PROGRESS_CHANNELS.select, (event, payload) => { assertTrustedSender(event); const input = studySelectionSchema.parse(payload); const existing = get(input.workspaceId); const statuses = existing?.roadmapId === input.roadmapId ? { ...existing.topicStatuses } : {}; const topicChanged = existing?.roadmapId !== input.roadmapId || existing?.topicId !== input.topicId; const started = topicChanged && (!statuses[input.topicId] || statuses[input.topicId] === 'NOT_STARTED'); if (started) statuses[input.topicId] = 'IN_PROGRESS'; const now = Date.now(); database.sqlite.transaction(() => { database.sqlite.prepare(`INSERT INTO study_progress (workspace_id, roadmap_id, current_module_id, current_topic_id, current_lesson_id, current_checkpoint_id, topic_statuses_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET roadmap_id=excluded.roadmap_id, current_module_id=excluded.current_module_id, current_topic_id=excluded.current_topic_id, current_lesson_id=excluded.current_lesson_id, current_checkpoint_id=excluded.current_checkpoint_id, topic_statuses_json=excluded.topic_statuses_json, updated_at=excluded.updated_at`).run(input.workspaceId, input.roadmapId, input.moduleId, input.topicId, input.lessonId, input.checkpointId, JSON.stringify(statuses), now); if (started) database.sqlite.prepare('INSERT INTO study_progress_events (id, workspace_id, type, module_id, topic_id, lesson_id, checkpoint_id, correct, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)').run(crypto.randomUUID(), input.workspaceId, 'TOPIC_STARTED', input.moduleId, input.topicId, input.lessonId, input.checkpointId, now) })(); return get(input.workspaceId) })
-  ipcMain.handle(STUDY_PROGRESS_CHANNELS.record, (event, payload) => { assertTrustedSender(event); const input = recordStudyEventSchema.parse(payload); const id = crypto.randomUUID(); const now = Date.now(); database.sqlite.transaction(() => { database.sqlite.prepare('INSERT INTO study_progress_events (id, workspace_id, type, module_id, topic_id, lesson_id, checkpoint_id, correct, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, input.workspaceId, input.type, input.moduleId, input.topicId, input.lessonId, input.checkpointId, input.correct === undefined ? null : Number(input.correct), now); if (input.type === 'TOPIC_COMPLETED') { const state = get(input.workspaceId); if (state) database.sqlite.prepare('UPDATE study_progress SET topic_statuses_json = ?, updated_at = ? WHERE workspace_id = ?').run(JSON.stringify({ ...state.topicStatuses, [input.topicId]: 'COMPLETED' }), now, input.workspaceId) } })(); return { id, type: input.type, topicId: input.topicId, checkpointId: input.checkpointId, correct: input.correct ?? null, createdAt: now } })
+  ipcMain.handle(STUDY_PROGRESS_CHANNELS.select, (event, payload) => {
+    assertTrustedSender(event)
+    const input = studySelectionSchema.parse(payload)
+    const existing = get(input.workspaceId)
+    const sameRoadmap = existing?.roadmapId === input.roadmapId
+    const statuses = sameRoadmap ? { ...existing.topicStatuses } : {}
+    const positions = sameRoadmap ? { ...existing.lessonPositions } : {}
+    const topicChanged = !sameRoadmap || existing?.topicId !== input.topicId
+    const started = topicChanged && (!statuses[input.topicId] || statuses[input.topicId] === 'NOT_STARTED')
+    if (started) statuses[input.topicId] = 'IN_PROGRESS'
+    const checkpointId = positions[input.lessonId]?.currentCheckpointId ?? input.checkpointId
+    const now = Date.now()
+    database.sqlite.transaction(() => {
+      database.sqlite.prepare(`INSERT INTO study_progress (workspace_id, roadmap_id, current_module_id, current_topic_id, current_lesson_id, current_checkpoint_id, topic_statuses_json, lesson_positions_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET roadmap_id=excluded.roadmap_id, current_module_id=excluded.current_module_id, current_topic_id=excluded.current_topic_id, current_lesson_id=excluded.current_lesson_id, current_checkpoint_id=excluded.current_checkpoint_id, topic_statuses_json=excluded.topic_statuses_json, lesson_positions_json=excluded.lesson_positions_json, updated_at=excluded.updated_at`).run(input.workspaceId, input.roadmapId, input.moduleId, input.topicId, input.lessonId, checkpointId, JSON.stringify(statuses), JSON.stringify(positions), now)
+      if (started) database.sqlite.prepare('INSERT INTO study_progress_events (id, workspace_id, type, module_id, topic_id, lesson_id, checkpoint_id, correct, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)').run(crypto.randomUUID(), input.workspaceId, 'TOPIC_STARTED', input.moduleId, input.topicId, input.lessonId, checkpointId, now)
+    })()
+    return get(input.workspaceId)
+  })
+  ipcMain.handle(STUDY_PROGRESS_CHANNELS.updatePosition, (event, payload) => {
+    assertTrustedSender(event)
+    const input = updateStudyPositionSchema.parse(payload)
+    const existing = get(input.workspaceId)
+    if (!existing || existing.lessonId !== input.position.lessonId) throw new Error('Study lesson is not the active lesson')
+    const positions = { ...existing.lessonPositions, [input.position.lessonId]: input.position }
+    const now = Date.now()
+    database.sqlite.prepare('UPDATE study_progress SET current_checkpoint_id = ?, lesson_positions_json = ?, updated_at = ? WHERE workspace_id = ?').run(input.position.currentCheckpointId, JSON.stringify(positions), now, input.workspaceId)
+    return get(input.workspaceId)
+  })
+  ipcMain.handle(STUDY_PROGRESS_CHANNELS.record, (event, payload) => {
+    assertTrustedSender(event)
+    const input = recordStudyEventSchema.parse(payload)
+    const id = crypto.randomUUID()
+    const now = Date.now()
+    database.sqlite.transaction(() => {
+      database.sqlite.prepare('INSERT INTO study_progress_events (id, workspace_id, type, module_id, topic_id, lesson_id, checkpoint_id, correct, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, input.workspaceId, input.type, input.moduleId, input.topicId, input.lessonId, input.checkpointId, input.correct === undefined ? null : Number(input.correct), now)
+      if (input.type === 'TOPIC_COMPLETED') { const state = get(input.workspaceId); if (state) database.sqlite.prepare('UPDATE study_progress SET topic_statuses_json = ?, updated_at = ? WHERE workspace_id = ?').run(JSON.stringify({ ...state.topicStatuses, [input.topicId]: 'COMPLETED' }), now, input.workspaceId) }
+    })()
+    return { id, type: input.type, topicId: input.topicId, checkpointId: input.checkpointId, correct: input.correct ?? null, createdAt: now }
+  })
 }

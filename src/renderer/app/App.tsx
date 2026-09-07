@@ -414,6 +414,17 @@ export function App() {
     setPlannerSending(true)
     setMessages((current) => [...current, { id: `optimistic-${crypto.randomUUID()}`, role: 'user', content, createdAt: Date.now(), sequence: (current.at(-1)?.sequence ?? 0) + 1, providerId: null, modelId: null }])
     setPlannerInput('')
+    const assessment = /(?:tenho|vai ter|terei)\s+(prova|trabalho|avaliação|avaliacao)\s+(?:de\s+)?(.+?)\s+(amanhã|amanha|hoje)/i.exec(content)
+    if (assessment) {
+      const subject = assessment[2]!.trim().toLocaleLowerCase('pt-BR')
+      const workspace = workspaces.find((item) => item.name.toLocaleLowerCase('pt-BR').includes(subject) || subject.includes(item.name.toLocaleLowerCase('pt-BR')))
+      if (workspace) {
+        const due = new Date(); if (/amanh/i.test(assessment[3]!)) due.setDate(due.getDate() + 1); due.setHours(23, 59, 59, 999)
+        await window.coach.planning.createDeadline({ workspaceId: workspace.id, title: `${assessment[1]} de ${assessment[2]}`, dueAt: due.getTime(), estimatedMinutes: 120, masteryPercent: 35 })
+        const [nextPriorities, nextSchedule] = await Promise.all([window.coach.planning.listPriorities(), window.coach.planning.getSchedule()])
+        setPriorities(nextPriorities); setSchedule(nextSchedule)
+      }
+    }
     void window.coach.plannerAction.proposeFromText(content).then((actions) => setPlannerActions((current) => [...actions, ...current.filter((item) => !actions.some((action) => action.id === item.id))])).catch(() => setPlannerError('O Coach respondeu, mas não conseguiu preparar a ação no sistema.'))
     setStreamedContent('')
     try {
@@ -570,7 +581,7 @@ export function App() {
   }
 
   return <>
-    <HomeScreen section={homeSection} loading={loading} error={error} report={globalReport} workspaces={workspaces} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={providerAccounts.find((account) => account.isActive)?.label ?? 'IA desconectada'} onSection={setHomeSection} onSettings={() => setProviderDialogOpen(true)} onCreate={() => setDialogOpen(true)} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} onPlannerInput={setPlannerInput} onPlannerSend={() => void sendPlannerMessage()} onResolveAction={(actionId, decision) => { void window.coach.plannerAction.resolve({ actionId, decision }).then(async () => { setPlannerActions((current) => current.filter((item) => item.id !== actionId)); await loadWorkspaces() }) }} />
+    <HomeScreen section={homeSection} loading={loading} error={error} report={globalReport} schedule={schedule} workspaces={workspaces} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={providerAccounts.find((account) => account.isActive)?.label ?? 'IA desconectada'} onSection={setHomeSection} onSettings={() => setProviderDialogOpen(true)} onCreate={() => setDialogOpen(true)} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} onPlannerInput={setPlannerInput} onPlannerSend={() => void sendPlannerMessage()} onResolveAction={(actionId, decision) => { void window.coach.plannerAction.resolve({ actionId, decision }).then(async () => { setPlannerActions((current) => current.filter((item) => item.id !== actionId)); await loadWorkspaces() }) }} />
     {dialogOpen && <CreateWorkspaceDialog open={dialogOpen} submitting={submitting} onClose={() => setDialogOpen(false)} onSubmit={createWorkspace} />}
     {providerDialogOpen && <ProviderSettingsDialog status={providerStatus} accounts={providerAccounts} onClose={() => setProviderDialogOpen(false)} onConfigured={async (label, apiKey, model, persistence) => { const result = await window.coach.provider.configureOpenAI({ label, apiKey, model, persistence }); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()); return result }} onConfiguredCompatible={async (label, baseUrl, apiKey, model, persistence) => { const result = await window.coach.provider.configureCompatible({ label, baseUrl, apiKey, model, persistence }); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()); return result }} onSelect={async (accountId) => { await window.coach.provider.selectAccount(accountId); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()) }} onRemove={async (accountId) => { await window.coach.provider.removeAccount(accountId); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()) }} />}
   </>

@@ -3,6 +3,7 @@ import type { HomeOrganizerResult } from '../../shared/contracts/planning-contra
 import type { HomePlannerService } from './home-planner-service'
 import type { PlanningService } from '../planning/planning-service'
 import type { PlannerActionService } from '../planning/planner-action-service'
+import type { AcademicSubjectContextService } from '../workspaces/academic-subject-context'
 
 export interface HomeTurnClock {
   readonly currentTime: number
@@ -21,11 +22,13 @@ function confirmationText(content: string): boolean { return /^(autorizo|confirm
 function mentionsProposal(content: string): boolean { return /cad[eê]\s+a\s+proposta|qual\s+(?:é\s+)?a\s+proposta/i.test(content) }
 
 export class HomeOrganizerService {
-  constructor(private readonly conversation: HomePlannerService, private readonly planning: PlanningService, private readonly actions: PlannerActionService, private readonly listWorkspaces: () => Promise<Array<{ id: string; name: string }>>, private readonly recalculate: (workspaceId: string) => Promise<unknown>, private readonly now = Date.now) {}
+  constructor(private readonly conversation: HomePlannerService, private readonly planning: PlanningService, private readonly actions: PlannerActionService, private readonly listWorkspaces: () => Promise<Array<{ id: string; name: string }>>, private readonly recalculate: (workspaceId: string) => Promise<unknown>, private readonly now = Date.now, private readonly academicContext?: AcademicSubjectContextService) {}
   listMessages(): Promise<ConversationMessage[]> { return this.conversation.listMessages() }
 
   async organize(input: SendHomeMessageInput): Promise<{ messages: ConversationMessage[]; result: HomeOrganizerResult }> {
     const content = input.content.trim(); const normalized = content.toLocaleLowerCase('pt-BR'); const clock = currentClock(this.now); const version = clock.currentTime; const pending = this.actions.listPending()
+    this.academicContext?.recordMessage(content)
+    if (/\b(?:criar|novo|preparar)\s+(?:um\s+)?workspace\b/i.test(content) && !/\b(?:prova|trabalho|prazo)\b/i.test(content)) return this.persist(content, { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: 'Para criar um Workspace, me diga o tema, seu objetivo e seu nível atual.' })
     if (confirmationText(content)) return this.persist(content, { outcome: 'informational', operations: [], actions: [], affectedWorkspaceIds: [], message: pending.length ? 'Há uma decisão pendente, mas ela só pode ser executada pelo botão ligado à mensagem original.' : 'Não há nenhuma ação aguardando confirmação. Quando uma decisão for necessária, ela aparecerá aqui com um botão próprio.' })
     if (mentionsProposal(content)) return this.persist(content, { outcome: 'informational', operations: [], actions: pending, affectedWorkspaceIds: [], message: pending.length ? 'As decisões pendentes continuam disponíveis nos botões da mensagem que as originou.' : 'Não há nenhuma proposta pendente no estado real do Coach.' })
 
@@ -52,7 +55,7 @@ export class HomeOrganizerService {
         if (!matching) {
           const language = subject.toLocaleLowerCase('pt-BR') === 'c' ? 'c' as const : undefined
           const event = mutation.pendingEvent
-          const action = this.actions.propose({ type: 'workspace.create', payload: { name: subject, objective: `Preparação acadêmica em ${subject}`, language, academicEvent: { type: event.type, title: `${event.type === 'exam' ? 'Prova' : event.type === 'assignment' ? 'Trabalho' : 'Prazo'} ${subject}`, dueAt: event.dueAt, estimatedMinutes: event.type === 'exam' ? 240 : 180, masteryPercent: null } }, label: `Criar Workspace de ${subject}`, originMessageId: messageId, contextVersion: version })
+          const action = this.actions.propose({ type: 'workspace.prepare', payload: { name: subject, objective: `Preparação acadêmica em ${subject}` }, label: `Preparar Workspace de ${subject}`, originMessageId: messageId, contextVersion: version })
           const date = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long', timeZone: clock.timezone }).format(mutation.pendingEvent.dueAt)
           return this.persist(content, { outcome: 'needs_decision', operations: [], actions: [action], affectedWorkspaceIds: [], message: `Reconheci a prova de ${subject} em ${date}. Você ainda não tem um Workspace de ${subject}; não alterei nenhum Workspace nem inventei um cronograma. O conteúdo da prova ainda não foi informado.` }, messageId)
         }

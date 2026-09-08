@@ -19,6 +19,8 @@ import { CurriculumSourceService } from '../../src/application/roadmaps/curricul
 import { StudyLessonService } from '../../src/application/study-lessons/study-lesson-service'
 import type { AIProvider } from '../../src/application/ai/ai-provider'
 import { studyLessonContentSchema, studyPresentationPreferencesSchema, type StudyLessonBlock } from '../../src/shared/contracts/study-lesson-contract'
+import { AcademicSubjectContextService } from '../../src/application/workspaces/academic-subject-context'
+import { SqliteAcademicSubjectContextRepository } from '../../src/main/repositories/sqlite-academic-subject-context-repository'
 
 const temporaryDirectories: string[] = []
 const migrationsFolder = resolve('drizzle/migrations')
@@ -48,6 +50,7 @@ function migrationsThrough0028(): string {
 }
 
 describe('Coach database migrations', () => {
+  it('persists academic declarations separately from observed evidence', () => { const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const service = new AcademicSubjectContextService(new SqliteAcademicSubjectContextRepository(database), () => 10); service.recordMessage('Sei bastante Python e já uso bibliotecas'); expect(service.get('python')).toMatchObject({ subject: 'Python', declaredLevel: 'advanced', declaredKnowledge: ['Sei bastante Python e já uso bibliotecas'] }); expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM topic_learning_states').get()).toEqual({ count: 0 }); database.close() })
   it('upgrades a populated 0028 database through the registered adaptive-page migration', () => {
     const databasePath = createDatabasePath()
     const oldMigrations = migrationsThrough0028()
@@ -89,6 +92,7 @@ describe('Coach database migrations', () => {
       { name: '__drizzle_migrations' },
       { name: 'academic_availability' },
       { name: 'academic_events' },
+      { name: 'academic_subject_contexts' },
       { name: 'conversation_messages' },
       { name: 'conversation_threads' },
       { name: 'learning_events' },

@@ -1,6 +1,7 @@
 import type { ObserverState } from '../../shared/contracts/observer-contract'
 import type { StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
 import type { Workspace } from '../../shared/contracts/workspace-contract'
+import type { AcademicSubjectContext } from '../../shared/contracts/academic-subject-context-contract'
 
 export interface CurrentWorkspaceContext {
   readonly version: number
@@ -9,6 +10,7 @@ export interface CurrentWorkspaceContext {
   readonly observer: ObserverState
   readonly activePlanItem: string | null
   readonly memory: string | null
+  readonly academicSubject?: AcademicSubjectContext | null
 }
 
 export interface CurrentWorkspaceContextDependencies {
@@ -16,6 +18,7 @@ export interface CurrentWorkspaceContextDependencies {
   readonly getStudyState: (workspaceId: string) => Promise<StudyWorkspaceState>
   readonly getObserverState: (workspaceId: string) => ObserverState
   readonly getWorkspaceMemory: (workspaceId: string) => string | null
+  readonly getAcademicSubjectContext?: (subject: string) => AcademicSubjectContext | null
 }
 
 export class CurrentWorkspaceContextService {
@@ -32,6 +35,7 @@ export class CurrentWorkspaceContextService {
       observer: this.dependencies.getObserverState(workspaceId),
       activePlanItem: study.plan.find((item) => item.status === 'active')?.title ?? null,
       memory: this.dependencies.getWorkspaceMemory(workspaceId),
+      academicSubject: this.dependencies.getAcademicSubjectContext?.(workspace.name) ?? null,
     }
   }
 }

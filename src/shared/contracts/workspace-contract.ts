@@ -1,10 +1,15 @@
 import { z } from 'zod'
+import { declaredAcademicLevelSchema } from './academic-subject-context-contract'
 
 export const workspaceIdSchema = z.uuid()
 
 export const createWorkspaceInputSchema = z.object({
   name: z.string().trim().min(1).max(80),
   objective: z.string().trim().max(500),
+  declaredLevel: declaredAcademicLevelSchema.optional(),
+  declaredKnowledge: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
+  declaredDifficulties: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
+  goals: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
 }).strict()
 
 export type CreateWorkspaceInput = z.infer<typeof createWorkspaceInputSchema>

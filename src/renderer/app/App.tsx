@@ -93,9 +93,10 @@ function DeadlineDialog({ open, workspaces, onClose, onSubmit }: { open: boolean
   return <div className="fixed inset-0 z-30 grid place-items-center bg-black/35 p-5" onMouseDown={onClose}><form className="w-full max-w-lg rounded-[2rem] bg-coach-paper p-7 shadow-2xl" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); if (!selectedId || !dueDate || saving) return; setSaving(true); setSaveError(null); void onSubmit({ workspaceId: selectedId, title, dueAt: new Date(`${dueDate}T23:59:59`).getTime(), estimatedMinutes, masteryPercent }).catch(() => setSaveError('Não foi possível salvar este prazo.')).finally(() => setSaving(false)) }}><div className="flex items-center justify-between"><div><p className="text-xs font-black uppercase tracking-wider text-coach-green">Planejamento local</p><h2 className="font-display text-2xl font-black">Adicionar prazo</h2></div><button type="button" onClick={onClose}><X /></button></div><label className="mt-6 block text-xs font-black uppercase text-coach-muted">Workspace<select value={selectedId} onChange={(event) => setWorkspaceId(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] p-3 text-sm normal-case text-coach-ink">{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label><label className="mt-4 block text-xs font-black uppercase text-coach-muted">Título<input value={title} maxLength={160} onChange={(event) => setTitle(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] p-3 text-sm normal-case text-coach-ink" /></label><div className="mt-4 grid gap-4 sm:grid-cols-2"><label className="text-xs font-black uppercase text-coach-muted">Data<input required type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] p-3 text-sm text-coach-ink" /></label><label className="text-xs font-black uppercase text-coach-muted">Carga estimada (min)<input type="number" min="1" max="100000" value={estimatedMinutes} onChange={(event) => setEstimatedMinutes(Number(event.target.value))} className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] p-3 text-sm text-coach-ink" /></label></div><label className="mt-4 block text-xs font-black uppercase text-coach-muted">Domínio atual: {masteryPercent}%<input type="range" min="0" max="100" value={masteryPercent} onChange={(event) => setMasteryPercent(Number(event.target.value))} className="mt-3 w-full accent-coach-green" /></label>{saveError && <p className="mt-4 text-sm text-red-700">{saveError}</p>}<button disabled={saving} className="mt-6 w-full rounded-xl bg-coach-orange px-5 py-3 font-black text-white disabled:opacity-50">{saving ? 'Salvando…' : 'Salvar e recalcular prioridades'}</button></form></div>
 }
 
-function CreateWorkspaceDialog({ open, submitting, onClose, onSubmit }: {
+function WorkspaceCreationScreen({ open, submitting, initial, onClose, onSubmit }: {
   open: boolean
   submitting: boolean
+  initial: { name: string; objective: string } | null
   onClose: () => void
   onSubmit: (input: CreateWorkspaceInput) => Promise<void>
 }) {
@@ -106,11 +107,20 @@ function CreateWorkspaceDialog({ open, submitting, onClose, onSubmit }: {
   const [analyzing, setAnalyzing] = useState(false)
   const [analyzed, setAnalyzed] = useState(false)
   const [analysisError, setAnalysisError] = useState<string | null>(null)
+  const [declaredLevel, setDeclaredLevel] = useState<CreateWorkspaceInput['declaredLevel']>('beginner')
+  const [declaredKnowledge, setDeclaredKnowledge] = useState<string[]>([])
+  const [declaredDifficulties, setDeclaredDifficulties] = useState<string[]>([])
+  const [goals, setGoals] = useState<string[]>([])
+  const analysisEpoch = useRef(0)
+  const resetSubjectState = () => { analysisEpoch.current += 1; setObjective(''); setDiagnosticAnswer(''); setDeclaredLevel('beginner'); setDeclaredKnowledge([]); setDeclaredDifficulties([]); setGoals([]); setAnalyzed(false); setQuestion(null); setAnalysisError(null) }
+
+  useEffect(() => { if (!open) return; setName(initial?.name ?? ''); setObjective(initial?.objective ?? ''); setDiagnosticAnswer(''); setDeclaredLevel('beginner'); setDeclaredKnowledge([]); setDeclaredDifficulties([]); setGoals([]); setAnalyzed(false); setQuestion(null); setAnalysisError(null) }, [open, initial])
 
   async function analyze() {
     if (name.trim().length < 2 || analyzing) return
+    const epoch = ++analysisEpoch.current
     setAnalyzing(true); setAnalysisError(null)
-    try { const result = await window.coach.workspaceOnboarding.analyze({ topic: name, diagnosticAnswer: diagnosticAnswer.trim() || undefined }); setName(result.topic); setObjective(result.objective); setQuestion(result.question); setAnalyzed(!result.needsDiagnostic) }
+    try { const result = await window.coach.workspaceOnboarding.analyze({ topic: name, diagnosticAnswer: diagnosticAnswer.trim() || undefined }); if (analysisEpoch.current !== epoch) return; setName(result.topic); setObjective(result.objective); setQuestion(result.question); setDeclaredLevel(result.declaredLevel ?? 'beginner'); setDeclaredKnowledge([...result.declaredKnowledge]); setDeclaredDifficulties([...result.declaredDifficulties]); setGoals([...result.goals]); setAnalyzed(!result.needsDiagnostic) }
     catch { setAnalysisError('Não consegui avaliar o tema agora. Tente novamente.') }
     finally { setAnalyzing(false) }
   }
@@ -119,22 +129,27 @@ function CreateWorkspaceDialog({ open, submitting, onClose, onSubmit }: {
   if (!open) return null
 
   return (
-    <div ref={dialogRef} className="fixed inset-0 z-20 grid place-items-center bg-coach-ink/45 p-5 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="create-workspace-title">
+    <div ref={dialogRef} className="fixed inset-0 z-20 overflow-y-auto bg-[#0d0e12] p-5" role="dialog" aria-modal="true" aria-labelledby="create-workspace-title">
       <form
-        className="w-full max-w-lg rounded-[2rem] bg-coach-paper p-7 shadow-2xl"
+        className="mx-auto min-h-full w-full max-w-5xl rounded-[2rem] border border-coach-line bg-[#111217] p-7 shadow-2xl"
         onSubmit={(event) => {
           event.preventDefault()
            if (!analyzed) { void analyze(); return }
-           void onSubmit({ name, objective })
+            void onSubmit({ name, objective, declaredLevel, declaredKnowledge, declaredDifficulties, goals })
         }}
       >
         <div className="flex items-start justify-between">
-          <div><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Novo ambiente</p><h2 id="create-workspace-title" className="mt-2 font-display text-3xl font-black">Criar Workspace</h2></div>
+          <div><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Preparação contextual</p><h2 id="create-workspace-title" className="mt-2 font-display text-3xl font-black">Criar Workspace</h2></div>
           <button type="button" aria-label="Fechar" disabled={submitting} onClick={onClose} className="rounded-full p-2 hover:bg-black/5 disabled:opacity-50"><X /></button>
         </div>
          <label className="mt-7 block text-sm font-bold">Tema que você quer aprender
-           <input autoFocus required minLength={2} maxLength={80} value={name} onChange={(event) => { setName(event.target.value); setAnalyzed(false); setQuestion(null) }} placeholder="Ex.: Estrutura de Dados" className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none focus:border-coach-green" />
+           <input autoFocus required minLength={2} maxLength={80} value={name} onChange={(event) => { setName(event.target.value); resetSubjectState() }} placeholder="Ex.: Estrutura de Dados" className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none focus:border-coach-green" />
          </label>
+         <label className="mt-5 block text-sm font-bold">Objetivo<input required maxLength={500} value={objective} onChange={(event) => setObjective(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-[#0d0e12] px-4 py-3" /></label>
+         <label className="mt-5 block text-sm font-bold">Nível atual<select value={declaredLevel} onChange={(event) => setDeclaredLevel(event.target.value as CreateWorkspaceInput['declaredLevel'])} className="mt-2 w-full rounded-xl border border-coach-line bg-[#0d0e12] px-4 py-3"><option value="beginner">Iniciante</option><option value="intermediate">Intermediário</option><option value="advanced">Avançado</option></select></label>
+         <section className="mt-6 rounded-2xl border border-coach-line p-5"><h3 className="font-display text-xl font-black">O que o Coach já sabe</h3><p className="mt-3 text-sm text-coach-muted">Conhecimentos: {declaredKnowledge.join(' · ') || 'Nenhum declarado'}</p><p className="mt-2 text-sm text-coach-muted">Dificuldades: {declaredDifficulties.join(' · ') || 'Nenhuma declarada'}</p><p className="mt-2 text-sm text-coach-muted">Objetivos relacionados: {goals.join(' · ') || 'Nenhum registrado'}</p></section>
+         <section className="mt-6 rounded-2xl border border-dashed border-coach-line p-5"><h3 className="font-display text-xl font-black">Materiais para personalização</h3><p className="mt-2 text-sm text-coach-muted">PDF e PPTX poderão ser selecionados e analisados antes da criação na próxima etapa deste fluxo.</p></section>
+         <section className="mt-6 rounded-2xl bg-white/[.03] p-5"><h3 className="font-display text-xl font-black">Resumo</h3><p className="mt-2 text-sm text-coach-muted">O Coach preparará {name || 'o tema'} para o nível {declaredLevel}, usando seu objetivo e contexto acadêmico sem transformar declarações em domínio comprovado.</p></section>
          {question && <label className="mt-5 block rounded-xl border border-[#39334f] bg-[#181622] p-4 text-sm font-bold"><span className="text-[#aa9cff]">Coach quer entender você</span><span className="mt-2 block font-normal leading-6 text-[#c8cad0]">{question}</span><textarea autoFocus maxLength={1000} value={diagnosticAnswer} onChange={(event) => setDiagnosticAnswer(event.target.value)} placeholder="Conte o que já estudou, praticou e onde trava…" className="mt-3 min-h-24 w-full resize-none rounded-lg border border-[#39334f] bg-[#111217] px-4 py-3 outline-none" /></label>}
          {analyzed && <label className="mt-5 block text-sm font-bold">Objetivo sugerido pelo Coach<textarea maxLength={500} value={objective} onChange={(event) => setObjective(event.target.value)} className="mt-2 min-h-24 w-full resize-none rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none focus:border-coach-green" /></label>}
          {analysisError && <p className="mt-4 text-xs text-red-400">{analysisError}</p>}
@@ -235,6 +250,7 @@ export function App() {
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [workspaceCreationInitial, setWorkspaceCreationInitial] = useState<{ name: string; objective: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [messages, setMessages] = useState<ConversationMessage[]>([])
   const [plannerInput, setPlannerInput] = useState('')
@@ -665,8 +681,8 @@ export function App() {
   }
 
   return <>
-    <HomeScreen section={homeSection} loading={loading} error={error} report={globalReport} schedule={schedule} academicOverview={academicOverview} workspaces={workspaces} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={providerAccounts.find((account) => account.isActive)?.label ?? 'IA desconectada'} onSection={setHomeSection} onSettings={() => setProviderDialogOpen(true)} onCreate={() => setDialogOpen(true)} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} onPlannerInput={setPlannerInput} onPlannerSend={() => void sendPlannerMessage()} onResolveAction={(actionId, decision) => { if (plannerSending || plannerLoading) return; setPlannerSending(true); setPlannerError(null); void window.coach.plannerAction.resolve({ actionId, decision }).then(async (action) => { setPlannerActions(await window.coach.plannerAction.listPending()); await loadWorkspaces(); const message = decision === 'reject' ? `A ação ${action.label} foi descartada.` : action.type === 'workspace.create' ? `Criei o Workspace ${(action.result as { name?: string } | null)?.name ?? ''}.` : `${action.label} foi aplicada.`; setMessages(await window.coach.conversation.saveHomeActionResult(message)); const [nextPriorities, nextSchedule, overview] = await Promise.all([window.coach.planning.listPriorities(), window.coach.planning.getSchedule(), window.coach.planning.getAcademicOverview()]); setPriorities(nextPriorities); setSchedule(nextSchedule); setAcademicOverview(overview) }).catch(() => setPlannerError('Esta ação já foi executada ou ficou obsoleta.')).finally(() => setPlannerSending(false)) }} />
-    {dialogOpen && <CreateWorkspaceDialog open={dialogOpen} submitting={submitting} onClose={() => setDialogOpen(false)} onSubmit={createWorkspace} />}
+    <HomeScreen section={homeSection} loading={loading} error={error} report={globalReport} schedule={schedule} academicOverview={academicOverview} workspaces={workspaces} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={providerAccounts.find((account) => account.isActive)?.label ?? 'IA desconectada'} onSection={setHomeSection} onSettings={() => setProviderDialogOpen(true)} onCreate={() => { setWorkspaceCreationInitial(null); setDialogOpen(true) }} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} onPlannerInput={setPlannerInput} onPlannerSend={() => void sendPlannerMessage()} onResolveAction={(actionId, decision) => { if (plannerSending || plannerLoading) return; setPlannerSending(true); setPlannerError(null); void window.coach.plannerAction.resolve({ actionId, decision }).then(async (action) => { setPlannerActions(await window.coach.plannerAction.listPending()); if (action.type === 'workspace.prepare' && decision === 'apply') { const result = action.result as { name: string; objective: string }; setWorkspaceCreationInitial(result); setDialogOpen(true) } await loadWorkspaces(); const message = decision === 'reject' ? `A ação ${action.label} foi descartada.` : action.type === 'workspace.prepare' ? 'Abri a preparação do Workspace com os dados disponíveis.' : action.type === 'workspace.create' ? `Criei o Workspace ${(action.result as { name?: string } | null)?.name ?? ''}.` : `${action.label} foi aplicada.`; setMessages(await window.coach.conversation.saveHomeActionResult(message)); const [nextPriorities, nextSchedule, overview] = await Promise.all([window.coach.planning.listPriorities(), window.coach.planning.getSchedule(), window.coach.planning.getAcademicOverview()]); setPriorities(nextPriorities); setSchedule(nextSchedule); setAcademicOverview(overview) }).catch(() => setPlannerError('Esta ação já foi executada ou ficou obsoleta.')).finally(() => setPlannerSending(false)) }} />
+    {dialogOpen && <WorkspaceCreationScreen open={dialogOpen} submitting={submitting} initial={workspaceCreationInitial} onClose={() => { setDialogOpen(false); setWorkspaceCreationInitial(null) }} onSubmit={createWorkspace} />}
     {providerDialogOpen && <ProviderSettingsDialog status={providerStatus} accounts={providerAccounts} onClose={() => setProviderDialogOpen(false)} onConfigured={async (label, apiKey, model, persistence) => { const result = await window.coach.provider.configureOpenAI({ label, apiKey, model, persistence }); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()); return result }} onConfiguredCompatible={async (label, baseUrl, apiKey, model, persistence) => { const result = await window.coach.provider.configureCompatible({ label, baseUrl, apiKey, model, persistence }); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()); return result }} onSelect={async (accountId) => { await window.coach.provider.selectAccount(accountId); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()) }} onRemove={async (accountId) => { await window.coach.provider.removeAccount(accountId); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()) }} />}
   </>
 }

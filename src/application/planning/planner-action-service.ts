@@ -47,7 +47,9 @@ export class PlannerActionService {
     if (decision === 'reject') return this.dependencies.repository.complete(actionId, 'rejected', null, this.now())
     try {
       let result: unknown
-      if (action.type === 'workspace.create') {
+      if (action.type === 'workspace.prepare') {
+        result = action.payload
+      } else if (action.type === 'workspace.create') {
         const payload = action.payload as WorkspaceCreateIntent
         const workspace = await this.dependencies.createWorkspace(payload)
         if (payload.language) await this.dependencies.createProject(workspace.id, workspace.name, payload.language)

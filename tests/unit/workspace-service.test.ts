@@ -37,6 +37,7 @@ class MemoryWorkspaceRepository implements WorkspaceRepository {
 }
 
 describe('WorkspaceService', () => {
+  it('stores declared context separately without converting it to observed mastery', async () => { const repository = new MemoryWorkspaceRepository(); const recorded: any[] = []; const service = new WorkspaceService({ repository, academicContext: { record: (input: unknown) => { recorded.push(input); return {} } } as any }); await service.create({ name: 'Python', objective: 'Automação', declaredLevel: 'advanced', declaredKnowledge: ['Uso pandas'], declaredDifficulties: [], goals: ['Faculdade'] }); expect(recorded[0]).toMatchObject({ subject: 'Python', declaredLevel: 'advanced', declaredKnowledge: ['Uso pandas'] }); expect(JSON.stringify(recorded[0])).not.toContain('mastery') })
   it('returns a created workspace before learning path generation finishes', async () => { const repository = new MemoryWorkspaceRepository(); let release!: () => void; const pending = new Promise<void>((resolve) => { release = resolve }); const service = new WorkspaceService({ repository, ensureLearningPath: async () => pending }); const created = await Promise.race([service.create({ name: 'C', objective: 'Estudar C' }), new Promise((_, reject) => setTimeout(() => reject(new Error('blocked')), 20))]); expect(created).toMatchObject({ name: 'C' }); release() })
   it('uses the default UUID generator without losing its Crypto receiver', async () => {
     const repository = new MemoryWorkspaceRepository()

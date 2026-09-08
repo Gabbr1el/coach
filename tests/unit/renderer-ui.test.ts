@@ -42,4 +42,17 @@ describe('renderer UI safeguards', () => {
     expect(workspace).toContain('aria-label="Mensagem para o Coach"')
     expect(css).toMatch(/textarea:focus-visible/)
   })
+
+  it('keeps workspace chat scroll user-controlled and explains context sharing', () => {
+    const app = read('src/renderer/app/App.tsx')
+    const home = read('src/renderer/app/HomeScreen.tsx')
+    const workspace = read('src/renderer/app/WorkspaceShell.tsx')
+    expect(app).toContain('workspaceFollowLatest.current')
+    expect(app).toContain('pane.scrollHeight - pane.scrollTop - pane.clientHeight < 72')
+    expect(workspace).toContain('onScroll={onConversationScroll}')
+    expect(workspace).toContain('contexto autorizado ao provedor')
+    expect(workspace).toContain('não enviados ao provedor')
+    expect(workspace).toContain('Enviar contexto local ao provedor')
+    expect(home).toContain('Dados acadêmicos mantidos localmente')
+  })
 })

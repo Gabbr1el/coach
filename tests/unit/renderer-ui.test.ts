@@ -60,10 +60,21 @@ describe('renderer UI safeguards', () => {
     expect(app).toContain('provedor configurado está indisponível')
   })
 
+  it('exposes dialogs and hidden row actions to keyboard users', () => {
+    const app = read('src/renderer/app/App.tsx')
+    const home = read('src/renderer/app/HomeScreen.tsx')
+    expect(app).toContain("event.key === 'Escape'")
+    expect(app).toContain('aria-labelledby="quick-notes-title"')
+    expect(app).toContain('aria-label="Fechar notas"')
+    expect(app).toContain('htmlFor="quick-notes"')
+    expect(home).toContain('focus-visible:opacity-100')
+  })
+
   it('invalidates execution evidence when source or workspace changes', () => {
     const app = read('src/renderer/app/App.tsx')
     const project = read('src/renderer/app/ProjectWorkspace.tsx')
-    expect(project).toContain('setExecution(null) }, [workspaceId, active?.id, draft]')
+    expect(project).toContain('setBusy(false); setExecution(null) }, [workspaceId, active?.id, draft]')
+    expect(project).toContain('executionEpoch.current === epoch')
     expect(app).toMatch(/setExecution\(null\)\s+setPracticeContext\(null\)/)
   })
 })

@@ -37,7 +37,7 @@ Execution roadmap: `ROADMAP.md`. The local MVP vertical slices 0-8 are implement
 - Packaged-bundle smoke test verified with sandboxed preload and typed IPC
 - SQLite database created under Electron `userData`
 - Drizzle migration history is the single executable migration source
-- Versioned SQLite domain schema evolved through 14 forward migrations
+- Versioned SQLite domain schema evolved through 30 forward migrations
 - WAL, foreign keys, busy timeout and deterministic close lifecycle
 - Linux unpacked package validated with rebuilt native SQLite addon
 - Typed Workspace contracts validated at runtime with Zod
@@ -78,6 +78,16 @@ Execution roadmap: `ROADMAP.md`. The local MVP vertical slices 0-8 are implement
 - Atomic local SQLite backup export after WAL checkpoint
 - Validated crash-recoverable backup restoration with migration, schema, FK and integrity checks
 
+## Learning-state authority
+
+| Concern | Authority | Projection | Invalidation / refresh |
+| --- | --- | --- | --- |
+| Academic schedule | Deadlines, academic events, availability and focus history | HOME schedule and priorities | Recomputed after Planner actions and planning updates |
+| Daily plan | Accepted roadmap, study progress and topic learning state | Active session plan items | Recalculated after progress evidence and plan changes |
+| Learning path | Accepted roadmap and workspace learning-path state | Trilha and current module/topic | Refreshed when a roadmap is accepted or selection changes |
+| Lesson position | Study progress position and checkpoint state | Adaptive Knowledge Page | Persisted on viewport/checkpoint changes |
+| Mastery evidence | Topic learning state derived from checkpoints and practice | Reports and adaptive planning | Updated by recorded learning events; no-data remains unevaluated |
+
 ## Pending beyond the local MVP
 
 - Cross-platform execution and PDF extraction for Windows/macOS; sandbox tooling is Linux-first
@@ -89,8 +99,8 @@ Execution roadmap: `ROADMAP.md`. The local MVP vertical slices 0-8 are implement
 ## Database
 
 - Database file: `coach.sqlite` under Electron `userData`.
-- Current migration: `0013_fat_donald_blake.sql` (14 total).
-- Domain tables cover workspaces, conversations, providers, study state, sessions, plans, events, priorities, materials, memories, outlines and saved distractions.
+- Current migration: `0029_adaptive_study_pages.sql` (30 total).
+- Domain tables cover workspaces, conversations, providers, projects, study sessions and plans, academic events, roadmaps, progress, lessons, checkpoints, topic learning evidence, materials, memories, reports, outlines and saved distractions.
 - Infrastructure table: `__drizzle_migrations`.
 - Migrations are forward-only and executed transactionally by Drizzle.
 
@@ -117,6 +127,9 @@ Execution roadmap: `ROADMAP.md`. The local MVP vertical slices 0-8 are implement
 ## Known Issues
 
 - Workspace IPC and preload behavior have packaged smoke coverage but not direct automated contract tests yet.
+- Planner action effects and progress-to-plan recalculation are durable but not one atomic database transaction; failure-injection coverage remains pending.
+- Privacy gates have service-level coverage; a process-level Electron test proving sensitive payload omission remains pending.
+- Python, C and Java toolchains have focused tests; persisted reopen-and-run journeys per language remain pending.
 - Linux unpacked packaging is configured; signed installers and Windows/macOS targets remain pending.
 - Developer tools remain available in development.
 - The earlier GPU/zygote cascade was produced when the smoke-test timeout terminated Electron, not by a startup failure. A direct packaged-bundle smoke test reached the renderer and completed the typed IPC call successfully.
@@ -124,4 +137,4 @@ Execution roadmap: `ROADMAP.md`. The local MVP vertical slices 0-8 are implement
 
 ## Next Step
 
-MVP 1.4: add structured academic deadlines and weekly availability, then let the HOME Planner propose schedules that require explicit student confirmation.
+Harden process-level IPC/privacy and restart tests, add failure-injection coverage for planning updates, and validate persisted reopen-and-run journeys on all supported toolchains.

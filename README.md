@@ -23,7 +23,7 @@ Runtime requirements for the hardened local tools:
 - `python3`, `gcc`, a JDK (`javac`/`java`), `bwrap`, and `prlimit` for sandboxed learning-code execution
 - `pdftotext` (Poppler), `bwrap`, and `prlimit` for sandboxed PDF extraction
 
-Provider API keys remain in Electron `safeStorage` (or session memory when secure persistence is unavailable). Study data stays in `coach.sqlite` under Electron's `userData` directory.
+Provider API keys remain in Electron `safeStorage` (or session memory when secure persistence is unavailable). Study data stays in `coach.sqlite` under Electron's `userData` directory. Local memory and PDF excerpts are sent to the selected provider only when Workspace context sharing is enabled; endpoint retention remains governed by that provider.
 
 If Chromium cannot start its GPU process on Linux, use the documented fallback:
 
@@ -40,4 +40,6 @@ pnpm build
 pnpm package:dir
 ```
 
-The local SQLite database is created as `coach.sqlite` under Electron `userData`. Drizzle migrations run automatically during startup. Projects, roadmaps, learning events, materials, planning actions, conversations, memories, and reports remain local unless explicitly sent to the selected AI provider.
+The local SQLite database is created as `coach.sqlite` under Electron `userData`. All 30 forward Drizzle migrations through `0029_adaptive_study_pages.sql` run automatically during startup, with compatibility repair for preliminary adaptive-study schemas during migration. Projects, roadmaps, learning events, materials, planning actions, conversations, memories, and reports are stored locally. Messages needed to answer a prompt are sent to the selected provider; optional Workspace memory and PDF excerpts are included only when context sharing is explicitly enabled.
+
+Known validation gaps are process-level preload/IPC and privacy tests, failure injection across multi-step planning updates, and persisted reopen-and-run journeys for every supported language. Linux is the hardened runtime target; Windows/macOS sandboxing and signed packages remain future work.

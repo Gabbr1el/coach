@@ -1,4 +1,5 @@
 import type { AcademicMutationResult, AcademicOverview, StudyScheduleItem, WorkspacePriority } from '../../shared/contracts/planning-contract'
+import { normalizeSubject } from '../workspaces/subject-normalizer'
 import { academicEventPhase } from './academic-time'
 
 export interface HomeTurnTimeContext {
@@ -12,6 +13,7 @@ export interface PlanningRepository {
   listPriorityInputs(): Array<{ workspaceId: string; title: string; dueAt: number; estimatedMinutes: number; masteryPercent: number | null; recentFocusSeconds: number }>
   listRoutineNotes(): string[]
   getWorkspaceName(workspaceId: string): string
+  listAuthoritativeSchedule?(): StudyScheduleItem[]
   listWorkspaces?(): Array<{ id: string; name: string; objective: string }>
   registerAcademicEvent?(input: { id: string; deadlineId: string; workspaceId: string; type: 'exam' | 'assignment' | 'deadline'; title: string; dueAt: number; estimatedMinutes: number; masteryPercent: number | null; now: number }): void
   updateLatestAcademicEvent?(workspaceId: string, type: 'exam' | 'assignment' | 'deadline', dueAt: number, now: number): boolean
@@ -81,9 +83,11 @@ export class PlanningService {
     const normalized = content.toLocaleLowerCase('pt-BR'); const now = time.currentTime
     const workspaces = this.repository.listWorkspaces?.() ?? []
     const correction = /na verdade|corrigindo|mudou|remarcad|adiad/.test(normalized)
-    const matches = workspaces.filter((item) => normalized.includes(item.name.toLocaleLowerCase('pt-BR')) || (item.name.length <= 3 && new RegExp(`\\b${item.name.toLocaleLowerCase('pt-BR')}\\b`, 'i').test(normalized)))
-    const workspace = matches.length === 1 ? matches[0] : matches.length === 0 && workspaces.length === 1 && correction ? workspaces[0] : undefined
     const type = eventType(normalized, correction); const dueAt = parseExplicitDate(normalized, now)
+    const stated = type ? statedSubject(content) : null
+    const normalizedSubject = stated ? normalizeSubject(stated).subject.toLocaleLowerCase('pt-BR') : null
+    const matches = workspaces.filter((item) => { const workspaceSubject = normalizeSubject(item.name).subject.toLocaleLowerCase('pt-BR'); return normalizedSubject ? workspaceSubject === normalizedSubject : normalized.includes(item.name.toLocaleLowerCase('pt-BR')) || (item.name.length <= 3 && new RegExp(`\\b${item.name.toLocaleLowerCase('pt-BR')}\\b`, 'i').test(normalized)) })
+    const workspace = matches.length === 1 ? matches[0] : matches.length === 0 && workspaces.length === 1 && correction ? workspaces[0] : undefined
     const targetName = WEEKDAYS.find((name) => normalized.includes(name)); const availabilityDay = targetName ? WEEKDAYS.indexOf(targetName) : -1
     const hours = /(?:só|so)?\s*(?:vou\s+ter\s+)?(\d+(?:[.,]\d+)?)\s*horas?/i.exec(content)?.[1]
 
@@ -92,7 +96,7 @@ export class PlanningService {
       this.repository.setAvailability?.(availabilityDay, minutes, now)
       return { changed: true, summary: `Disponibilidade de ${targetName} atualizada para ${minutes / 60}h.`, workspaceIds: workspaces.map((item) => item.id), needsRefinement: null }
     }
-    if (type && matches.length > 1) return { changed: false, summary: 'Encontrei mais de um Workspace relacionado.', workspaceIds: [], needsRefinement: 'Escolha o Workspace correto.', ambiguousWorkspaces: matches, pendingEvent: dueAt ? { type, subject: statedSubject(content) ?? 'evento', dueAt } : undefined }
+    if (type && matches.length > 1) return { changed: false, summary: 'Encontrei mais de um Workspace relacionado.', workspaceIds: [], needsRefinement: 'Escolha o Workspace correto.', ambiguousWorkspaces: matches, pendingEvent: dueAt ? { type, subject: stated ?? 'evento', dueAt } : undefined }
     if (correction && type && dueAt && workspace) {
       const changed = this.repository.updateLatestAcademicEvent?.(workspace.id, type, dueAt, now) ?? false
       return { changed, summary: changed ? `${type === 'exam' ? 'Prova' : 'Evento'} de ${workspace.name} reagendada para ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long', timeZone: time.timezone }).format(dueAt)}.` : 'Não encontrei um evento anterior; nenhuma alteração foi feita.', workspaceIds: changed ? [workspace.id] : [], needsRefinement: changed ? null : 'Qual evento deve ser reagendado?' }
@@ -102,21 +106,16 @@ export class PlanningService {
       this.repository.registerAcademicEvent?.({ id: crypto.randomUUID(), deadlineId: crypto.randomUUID(), workspaceId: workspace.id, type, title, dueAt, estimatedMinutes: type === 'exam' ? 240 : 180, masteryPercent: null, now })
       return { changed: true, summary: `${title} registrada para ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long', timeZone: time.timezone }).format(dueAt)}.`, workspaceIds: [workspace.id], needsRefinement: null }
     }
-    const subject = type ? statedSubject(content) : null
-    return { changed: false, summary: 'Nenhuma alteração foi feita.', workspaceIds: [], needsRefinement: type && !dueAt ? 'Qual é a data do evento?' : type && !subject ? 'Qual é a matéria desse evento?' : type && !workspace ? 'A qual Workspace esse evento pertence?' : null, pendingEvent: type && dueAt && subject ? { type, subject, dueAt } : undefined }
+    return { changed: false, summary: 'Nenhuma alteração foi feita.', workspaceIds: [], needsRefinement: type && !dueAt ? 'Qual é a data do evento?' : type && !stated ? 'Qual é a matéria desse evento?' : type && !workspace ? 'A qual Workspace esse evento pertence?' : null, pendingEvent: type && dueAt && stated ? { type, subject: stated, dueAt } : undefined }
   }
 
   getAcademicOverview(): AcademicOverview { return this.repository.getAcademicOverview?.(this.now()) ?? { events: [], availability: [], workspaces: [], routine: this.listRoutineNotes() } }
-  getSchedule(): StudyScheduleItem[] {
-    const routine = this.repository.listRoutineNotes().join(' ').toLocaleLowerCase('pt-BR'); const today = WEEKDAYS[new Date(this.now()).getDay()]
-    const blockedToday = routine.includes(`${today} não consigo`) || routine.includes(`${today} indisponível`)
-    return this.listPriorities().slice(0, 3).map((priority) => { const base = priority.level === 'urgent' ? 50 : priority.level === 'attention' ? 35 : 25; return { workspaceId: priority.workspaceId, workspaceName: this.repository.getWorkspaceName(priority.workspaceId), title: priority.nextDeadline ?? 'Revisão', suggestedMinutes: blockedToday ? 0 : base, reason: blockedToday ? `Rotina indica indisponibilidade hoje. Próxima prioridade: ${priority.reason}` : priority.reason } })
-  }
+  getSchedule(): StudyScheduleItem[] { return this.repository.listAuthoritativeSchedule?.() ?? [] }
   listPriorities(): WorkspacePriority[] {
     const now = this.now(); const priorities = new Map<string, WorkspacePriority>()
     for (const input of this.repository.listPriorityInputs()) {
       const rawDays = (input.dueAt - now) / 86_400_000; if (rawDays < 0) continue
-      const days = Math.max(0.25, rawDays); const urgency = Math.min(100, 100 / days); const difficulty = input.masteryPercent === null ? 50 : 100 - input.masteryPercent; const workload = Math.min(100, input.estimatedMinutes / 6); const recentCredit = Math.min(20, input.recentFocusSeconds / 180); const score = Math.max(0, Math.round(urgency * 0.45 + difficulty * 0.35 + workload * 0.2 - recentCredit)); const current = priorities.get(input.workspaceId); const phase = academicEventPhase(input.dueAt, now); const deadlineText = phase === 'today' ? 'hoje' : Math.ceil(days) === 1 ? 'amanhã' : `em ${Math.ceil(days)} dias`; const masteryText = input.masteryPercent === null ? 'domínio ainda não avaliado' : `domínio ${input.masteryPercent}%`
+      const days = Math.max(0.25, rawDays); const urgency = Math.min(100, 100 / days); const difficulty = input.masteryPercent === null ? 0 : 100 - input.masteryPercent; const workload = Math.min(100, input.estimatedMinutes / 6); const recentCredit = Math.min(20, input.recentFocusSeconds / 180); const score = Math.max(0, Math.round(urgency * 0.45 + difficulty * 0.35 + workload * 0.2 - recentCredit)); const current = priorities.get(input.workspaceId); const phase = academicEventPhase(input.dueAt, now); const deadlineText = phase === 'today' ? 'hoje' : Math.ceil(days) === 1 ? 'amanhã' : `em ${Math.ceil(days)} dias`; const masteryText = input.masteryPercent === null ? 'domínio ainda não avaliado' : `domínio ${input.masteryPercent}%`
       if (!current || score > current.score) priorities.set(input.workspaceId, { workspaceId: input.workspaceId, score, level: score >= 65 ? 'urgent' : score >= 35 ? 'attention' : 'on_track', reason: `${input.title}: ${deadlineText}, ${masteryText}`, nextDeadline: input.title, eventPhase: phase, dueAt: input.dueAt })
     }
     return [...priorities.values()].sort((a, b) => b.score - a.score)

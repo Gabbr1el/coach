@@ -30,7 +30,6 @@ export class HomeOrganizerService {
     if (mentionsProposal(content)) return this.persist(content, { outcome: 'informational', operations: [], actions: pending, affectedWorkspaceIds: [], message: pending.length ? 'As decisões pendentes continuam disponíveis nos botões da mensagem que as originou.' : 'Não há nenhuma proposta pendente no estado real do Coach.' })
 
     try {
-      this.actions.invalidateBefore(version)
       const mutation = this.planning.applyAcademicMessage(content, clock)
       if (mutation.changed) {
         try {
@@ -52,7 +51,8 @@ export class HomeOrganizerService {
         const messageId = crypto.randomUUID(); const subject = mutation.pendingEvent.subject; const matching = workspaces.find((workspace) => workspace.name.toLocaleLowerCase('pt-BR') === subject.toLocaleLowerCase('pt-BR'))
         if (!matching) {
           const language = subject.toLocaleLowerCase('pt-BR') === 'c' ? 'c' as const : undefined
-          const action = this.actions.propose({ type: 'workspace.create', payload: { name: subject, objective: `Preparação acadêmica em ${subject}`, language }, label: `Criar Workspace de ${subject}`, originMessageId: messageId, contextVersion: version })
+          const event = mutation.pendingEvent
+          const action = this.actions.propose({ type: 'workspace.create', payload: { name: subject, objective: `Preparação acadêmica em ${subject}`, language, academicEvent: { type: event.type, title: `${event.type === 'exam' ? 'Prova' : event.type === 'assignment' ? 'Trabalho' : 'Prazo'} ${subject}`, dueAt: event.dueAt, estimatedMinutes: event.type === 'exam' ? 240 : 180, masteryPercent: null } }, label: `Criar Workspace de ${subject}`, originMessageId: messageId, contextVersion: version })
           const date = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long', timeZone: clock.timezone }).format(mutation.pendingEvent.dueAt)
           return this.persist(content, { outcome: 'needs_decision', operations: [], actions: [action], affectedWorkspaceIds: [], message: `Reconheci a prova de ${subject} em ${date}. Você ainda não tem um Workspace de ${subject}; não alterei nenhum Workspace nem inventei um cronograma. O conteúdo da prova ainda não foi informado.` }, messageId)
         }

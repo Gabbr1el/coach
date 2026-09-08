@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { workspaceIdSchema } from './workspace-contract'
 import type { HomeOrganizerResult } from './planning-contract'
+import type { WorkspaceActionResult } from './workspace-action-contract'
 
 export const sendHomeMessageInputSchema = z.object({
   content: z.string().trim().min(1).max(4_000),
@@ -51,6 +52,7 @@ export interface ConversationApi {
     dispose(): void
   }
   listWorkspaceMessages(workspaceId: string): Promise<ConversationMessage[]>
+  executeWorkspaceAction(input: unknown): Promise<WorkspaceActionResult>
   streamWorkspaceMessage(input: StreamWorkspaceMessageInput, onEvent: (event: HomeStreamEvent) => void): {
     cancel(): void
     dispose(): void

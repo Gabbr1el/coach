@@ -5,10 +5,12 @@ import type { WorkspaceCoachService } from '../../application/conversations/work
 import { cancelHomeStreamInputSchema, cancelWorkspaceStreamInputSchema, sendHomeMessageInputSchema, streamHomeMessageInputSchema, streamWorkspaceMessageInputSchema, workspaceConversationInputSchema, type HomeStreamEvent } from '../../shared/contracts/conversation-contract'
 import { CONVERSATION_CHANNELS } from '../../shared/contracts/conversation-channels'
 import { assertTrustedSender } from './trusted-sender'
+import type { WorkspaceActionService } from '../../application/workspaces/workspace-action-service'
 
-export function registerConversationHandlers(service: HomePlannerService, workspaceService: WorkspaceCoachService, organizer: HomeOrganizerService): void {
+export function registerConversationHandlers(service: HomePlannerService, workspaceService: WorkspaceCoachService, organizer: HomeOrganizerService, workspaceActions?: WorkspaceActionService): void {
   const activeStreams = new Map<string, { controller: AbortController; senderId: number; threadKey: string }>()
   let homeStreamActive = false
+  if (workspaceActions) ipcMain.handle(CONVERSATION_CHANNELS.executeWorkspaceAction, (event, payload) => { assertTrustedSender(event); return workspaceActions.execute(payload) })
   ipcMain.handle(CONVERSATION_CHANNELS.listHomeMessages, (event) => {
     assertTrustedSender(event)
     return service.listMessages()

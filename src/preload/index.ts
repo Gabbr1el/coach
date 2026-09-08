@@ -79,6 +79,7 @@ const api: CoachDesktopApi = {
       }
     },
     listWorkspaceMessages: (workspaceId) => ipcRenderer.invoke(CONVERSATION_CHANNELS.listWorkspaceMessages, { workspaceId }),
+    executeWorkspaceAction: (input) => ipcRenderer.invoke(CONVERSATION_CHANNELS.executeWorkspaceAction, input),
     streamWorkspaceMessage: (input, onEvent) => {
       let disposed = false
       const dispose = () => {

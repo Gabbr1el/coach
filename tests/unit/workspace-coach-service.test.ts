@@ -22,6 +22,7 @@ class MemoryConversationRepository implements ConversationRepository {
 const workspace = { id: '00000000-0000-4000-8000-000000000123', name: 'Cálculo', objective: 'Dominar derivadas', status: 'active' as const, createdAt: 1, updatedAt: 1, lastOpenedAt: null, archivedAt: null }
 
 describe('WorkspaceCoachService', () => {
+  it('uses managed workspace context regardless of the legacy sharing flag', async () => { const repository = new MemoryConversationRepository(); const manager = new AIProviderManager(); let request: AIRequest | null = null; manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'm' }), streamMessage: async function* (value) { request = value; yield { type: 'completed', response: { content: 'ok', providerId: 'stream', modelId: 'm' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream'); const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(false) }); for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'explique meu plano', activePage: 'plan' }, new AbortController().signal)) {} expect(decodePromptField(request!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ activePlanItem: expect.anything() }) })
   it('keeps a stable isolated thread and sends workspace context to the provider', async () => {
     const repository = new MemoryConversationRepository()
     const manager = new AIProviderManager()
@@ -41,27 +42,27 @@ describe('WorkspaceCoachService', () => {
     expect(repository.thread).toMatchObject({ workspaceId: workspace.id, title: 'Cálculo' })
   })
 
-  it('sends no workspace, file, lesson, note, material, history or execution context when privacy is off', async () => {
+  it('uses managed workspace context even when the legacy privacy flag is off', async () => {
     const repository = new MemoryConversationRepository()
     repository.messages.push({ id: 'private-turn', role: 'assistant', content: 'PRIVATE_HISTORY', createdAt: 1, sequence: 1, providerId: 'old', modelId: 'old' })
     const manager = new AIProviderManager()
     let providerRequest: AIRequest | null = null
     manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Resposta', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
     manager.select('stream')
-    const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(false), getWorkspaceMemory: () => { throw new Error('memory must not be read while privacy is off') }, searchMaterials: () => { throw new Error('materials must not be searched while privacy is off') } })
+    const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(false), getWorkspaceMemory: () => 'WORKSPACE_MEMORY', searchMaterials: () => [] })
     const activeStudy = { roadmapId: crypto.randomUUID(), moduleId: 'module-b', module: 'Saida', topicId: 'module-b:print', topic: 'print', lessonId: 'lesson', currentBlockId: 'block', checkpointId: null, currentExcerpt: 'PRIVATE_EXCERPT' }
 
     for await (const _delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Faça uma análise profunda', activePage: 'practice', activeStudy, practiceContext: { fileName: 'PRIVATE_FILE.py', language: 'python', code: 'PRIVATE_CODE' }, lastExecution: { stdout: 'PRIVATE_STDOUT', stderr: 'PRIVATE_STDERR', exitCode: 1, timedOut: false } }, new AbortController().signal)) { /* consume */ }
 
     const serialized = JSON.stringify(providerRequest)
-    for (const secret of ['Cálculo', 'Dominar derivadas', 'PRIVATE_HISTORY', 'PRIVATE_FILE.py', 'PRIVATE_CODE', 'PRIVATE_STDOUT', 'PRIVATE_STDERR', 'PRIVATE_EDITOR', 'PRIVATE_NOTES', 'PRIVATE_MEMORY', 'PRIVATE_EXCERPT']) expect(serialized).not.toContain(secret)
-    expect(decodePromptField(providerRequest!, 'WORKSPACE_METADATA_BASE64')).toBeNull()
-    expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toBeNull()
+    expect(serialized).not.toBe('{}')
+    expect(decodePromptField(providerRequest!, 'WORKSPACE_METADATA_BASE64')).not.toBeNull()
+    expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).not.toBeNull()
     expect(decodePromptField(providerRequest!, 'WORKSPACE_MEMORY_BASE64')).toBeNull()
     expect(decodePromptField(providerRequest!, 'MATERIAL_SNIPPETS_BASE64')).toEqual([])
   })
 
-  it('does not adapt a study block through a provider when privacy is off', async () => {
+  it('adapts a managed study block regardless of the legacy privacy flag', async () => {
     const manager = new AIProviderManager()
     let providerRequest: AIRequest | null = null
     manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Resposta localmente limitada', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
@@ -71,7 +72,7 @@ describe('WorkspaceCoachService', () => {
 
     for await (const _delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'use uma analogia', activePage: 'studies', activeStudy: { roadmapId: crypto.randomUUID(), moduleId: 'module', module: 'M', topicId: 'topic', topic: 'T', lessonId: 'lesson', currentBlockId: 'block', checkpointId: null, currentExcerpt: 'PRIVATE_EXCERPT' } }, new AbortController().signal)) { /* consume */ }
 
-    expect(adaptSection).not.toHaveBeenCalled()
+    expect(adaptSection).toHaveBeenCalledTimes(1)
     expect(JSON.stringify(providerRequest)).not.toContain('PRIVATE_EXCERPT')
   })
 
@@ -89,9 +90,9 @@ describe('WorkspaceCoachService', () => {
     for await (const _delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Faça uma análise profunda', activePage: 'practice', activeStudy, practiceContext, lastExecution: execution }, new AbortController().signal)) { /* consume */ }
 
     expect(decodePromptField(providerRequest!, 'WORKSPACE_METADATA_BASE64')).toEqual({ subject: 'Cálculo', objective: 'Dominar derivadas' })
-    expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ fileName: 'PRIVATE_FILE.py', editorContent: 'PRIVATE_EDITOR', notes: 'PRIVATE_NOTES', activeStudy, practiceContext, lastExecution: execution })
-    expect(decodePromptField(providerRequest!, 'WORKSPACE_MEMORY_BASE64')).toBe('PRIVATE_MEMORY')
-    expect(decodePromptField(providerRequest!, 'MATERIAL_SNIPPETS_BASE64')).toEqual([{ chunkId: 'chunk-1', materialId: 'material-1', materialName: 'PRIVATE_MATERIAL.pdf', pageNumber: 2, topicId: null, retrieval: 'lexical' as const, content: 'PRIVATE_SNIPPET' }])
+    expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ fileName: '', editorContent: '', notes: '', activeStudy, practiceContext, lastExecution: execution })
+    expect(decodePromptField(providerRequest!, 'WORKSPACE_MEMORY_BASE64')).toBeNull()
+    expect(decodePromptField(providerRequest!, 'MATERIAL_SNIPPETS_BASE64')).toEqual([])
   })
 
   it('does not represent a null execution as execution evidence', async () => {

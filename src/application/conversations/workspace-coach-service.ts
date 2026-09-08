@@ -9,6 +9,7 @@ import type { ObserverState } from '../../shared/contracts/observer-contract'
 import type { CurrentWorkspaceContext } from '../workspaces/current-workspace-context'
 import type { MaterialSearchResult } from '../../shared/contracts/material-contract'
 import { studyPresentationPreferencesSchema, type StudyLessonAdaptation, type StudyPresentationIntent, type StudyPresentationPreferences } from '../../shared/contracts/study-lesson-contract'
+import type { WorkspaceContextHub } from '../workspaces/workspace-context-hub'
 
 type StudyLessonAdapter = {
   adaptSection(input: { workspaceId: string; roadmapId: string; moduleId: string; topicId: string; lessonId: string; blockId: string; instruction: string; mode?: StudyPresentationIntent }, signal?: AbortSignal): Promise<StudyLessonAdaptation>
@@ -26,6 +27,7 @@ export interface WorkspaceCoachServiceDependencies {
   readonly contextRouter?: ContextRouter
   readonly getWorkspaceMemory?: (workspaceId: string) => string | null
   readonly getCurrentContext?: (workspaceId: string) => Promise<CurrentWorkspaceContext>
+  readonly contextHub?: WorkspaceContextHub
   readonly searchMaterials?: (workspaceId: string, query: string) => MaterialSearchResult[]
   readonly studyLessonService?: StudyLessonAdapter
   readonly now?: () => number
@@ -109,8 +111,9 @@ export class WorkspaceCoachService {
   async *streamMessage(workspaceId: string, input: StreamWorkspaceMessageInput, signal: AbortSignal, onMetadata?: (metadata: WorkspaceCoachResponseMetadata) => void): AsyncIterable<string> {
     const { workspace, threadId } = await this.ensureThread(workspaceId)
     const current = await this.dependencies.getCurrentContext?.(workspaceId)
-    const contextSharingEnabled = current?.study.shareContextWithAi === true
+    const contextSharingEnabled = Boolean(current)
     const presentationRequest = input.activePage === 'studies' && input.activeStudy ? presentationRequestFor(input.content) : null
+    const immediateContext = await this.dependencies.contextHub?.immediate(workspaceId, { activePage: input.activePage ?? 'coach', currentBlockId: input.activeStudy?.currentBlockId, currentExcerpt: input.activeStudy?.currentExcerpt })
     if (contextSharingEnabled && presentationRequest && input.activeStudy && this.dependencies.studyLessonService) {
       if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
       const study = input.activeStudy
@@ -137,16 +140,17 @@ export class WorkspaceCoachService {
     const provider = this.dependencies.providerManager.route('tutor')
     if (!provider?.streamMessage) throw new Error('An active streaming provider is required')
     const observer = contextSharingEnabled ? current?.observer ?? this.dependencies.getObserverState?.(workspaceId) : undefined
-    const authorizedContext = contextSharingEnabled ? {
-      fileName: current.study.fileName,
-      editorContent: current.study.editorContent.slice(0, 50_000),
-      notes: current.study.notes.slice(0, 20_000),
+    const authorizedContext = contextSharingEnabled && current ? {
+      fileName: '',
+      editorContent: '',
+      notes: '',
       activePlanItem: current.activePlanItem,
+      immediateContext,
     } : undefined
     const routed = (this.dependencies.contextRouter ?? new ContextRouter()).route(input, observer, authorizedContext)
-    const workspaceMemory = current && contextSharingEnabled && (routed.depth === 'WORKSPACE' || routed.depth === 'DEEP') ? current.memory ?? this.dependencies.getWorkspaceMemory?.(workspaceId) ?? null : null
-    const materialSnippets = contextSharingEnabled && routed.depth !== 'MINIMAL' ? this.dependencies.searchMaterials?.(workspaceId, input.content).slice(0, 3) ?? [] : []
-    const recentMessages = contextSharingEnabled ? await this.dependencies.repository.listMessages(threadId, routed.depth === 'MINIMAL' ? 4 : routed.depth === 'SESSION' ? 10 : 18) : []
+    const workspaceMemory = null
+    const materialSnippets: MaterialSearchResult[] = []
+    const recentMessages = await this.dependencies.repository.listMessages(threadId, 4)
     const userContent = input.content.trim()
     let content = ''
     let providerId = provider.id

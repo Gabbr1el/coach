@@ -10,6 +10,7 @@ export interface AuthorizedStudyContext {
   readonly activeStudy?: StreamWorkspaceMessageInput['activeStudy']
   readonly lastExecution?: { stdout: string; stderr: string; exitCode: number | null; timedOut: boolean } | null
   readonly practiceContext?: { fileName: string; language: string; code: string }
+  readonly immediateContext?: unknown
 }
 
 export type ContextDepth = 'MINIMAL' | 'SESSION' | 'WORKSPACE' | 'DEEP'
@@ -32,7 +33,7 @@ export class ContextRouter {
     const text = input.content.trim()
     const intervention = Boolean(observer?.interventionSuggested)
     const context = authorizedContext
-      ? { ...authorizedContext, activePage: input.activePage, activeStudy: input.activeStudy, practiceContext: input.practiceContext, ...(input.lastExecution ? { lastExecution: input.lastExecution } : {}) }
+      ? { ...authorizedContext, activePage: input.activePage, activeStudy: input.activeStudy ? { ...input.activeStudy, currentExcerpt: input.activeStudy.currentExcerpt?.slice(0, 2000) ?? null } : undefined, practiceContext: input.practiceContext ? { fileName: input.practiceContext.fileName, language: input.practiceContext.language, code: input.practiceContext.code.slice(0, 12_000) } : undefined, ...(input.lastExecution ? { lastExecution: { ...input.lastExecution, stdout: input.lastExecution.stdout.slice(0, 4000), stderr: input.lastExecution.stderr.slice(0, 4000) } } : {}) }
       : undefined
     if (intervention) return { depth: context ? 'SESSION' : 'MINIMAL', outputBudget: 'HINT', maxOutputTokens: 160, helpLevel: 1, context: context ? { ...context, notes: '' } : undefined, observerSignal: { repeatedErrorCount: observer!.repeatedErrorCount } }
     if (DEEP_REQUEST.test(text)) return { depth: context ? 'DEEP' : 'WORKSPACE', outputBudget: 'DEEP_ANALYSIS', maxOutputTokens: 900, helpLevel: 4, context, observerSignal: null }

@@ -82,7 +82,7 @@ describe('DrizzleReportRepository', () => {
     ])
     expect(workspace?.domain.averageMastery).not.toBe(workspace?.executions)
     const daily = new DrizzleStudyWorkspaceRepository(database).listSessionHistory('workspace-evidence', 100)
-    expect(daily[0]).toMatchObject({ successRate: 100, focusRetentionPercent: null, recommendation: 'Faça o próximo sprint em 15 minutos e elimine uma distração.' })
+    expect(daily[0]).toMatchObject({ successRate: 100, focusRetentionPercent: null, recommendation: null })
     database.close()
   })
 })

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { z } from 'zod'
 import { plannerActionProposalSchema, type PlannerAction, type PlannerActionType } from '../../shared/contracts/planner-action-contract'
 import type { ProjectLanguage } from '../../shared/contracts/project-contract'
 
@@ -12,6 +13,10 @@ export interface PlannerActionRepository {
   invalidateSiblings(originMessageId: string, exceptId: string, now: number): void
   invalidatePending(contextVersion: number, now: number): void
 }
+
+const workspaceAcademicEventIntentSchema = z.object({ type: z.enum(['exam', 'assignment', 'deadline']), title: z.string().trim().min(1).max(160), dueAt: z.number().int().positive(), estimatedMinutes: z.number().int().min(1).max(100000), masteryPercent: z.number().int().min(0).max(100).nullable() }).strict()
+export type WorkspaceAcademicEventIntent = z.infer<typeof workspaceAcademicEventIntentSchema>
+export interface WorkspaceCreateIntent { readonly name: string; readonly objective: string; readonly language?: ProjectLanguage; readonly academicEvent?: WorkspaceAcademicEventIntent }
 
 export interface PlannerActionDependencies {
   readonly repository: PlannerActionRepository
@@ -29,9 +34,12 @@ export class PlannerActionService {
   constructor(private readonly dependencies: PlannerActionDependencies) { this.now = dependencies.now ?? Date.now; this.createId = dependencies.createId ?? (() => crypto.randomUUID()) }
   listPending(): PlannerAction[] { return this.dependencies.repository.listPending() }
   propose(input: { type: PlannerActionType; payload: unknown; label: string; originMessageId: string; contextVersion: number }): PlannerAction {
-    const parsed = plannerActionProposalSchema.parse({ type: input.type, payload: input.payload })
-    const key = createHash('sha256').update(JSON.stringify({ ...parsed, originMessageId: input.originMessageId, contextVersion: input.contextVersion })).digest('hex')
-    return this.dependencies.repository.create({ id: this.createId(), originMessageId: input.originMessageId, label: input.label, contextVersion: input.contextVersion, type: parsed.type, status: 'proposed', payload: parsed.payload, result: null, createdAt: this.now(), resolvedAt: null }, key)
+    const workspaceIntent = input.type === 'workspace.create' ? input.payload as WorkspaceCreateIntent : null
+    const parsed = plannerActionProposalSchema.parse({ type: input.type, payload: workspaceIntent ? { name: workspaceIntent.name, objective: workspaceIntent.objective, language: workspaceIntent.language } : input.payload })
+    const academicEvent = workspaceIntent?.academicEvent ? workspaceAcademicEventIntentSchema.parse(workspaceIntent.academicEvent) : undefined
+    const payload = workspaceIntent ? { ...parsed.payload, academicEvent } : parsed.payload
+    const key = createHash('sha256').update(JSON.stringify({ type: parsed.type, payload, originMessageId: input.originMessageId, contextVersion: input.contextVersion })).digest('hex')
+    return this.dependencies.repository.create({ id: this.createId(), originMessageId: input.originMessageId, label: input.label, contextVersion: input.contextVersion, type: parsed.type, status: 'proposed', payload, result: null, createdAt: this.now(), resolvedAt: null }, key)
   }
   invalidateBefore(contextVersion: number): void { this.dependencies.repository.invalidatePending(contextVersion, this.now()) }
   async resolve(actionId: string, decision: 'apply' | 'reject'): Promise<PlannerAction> {
@@ -40,9 +48,10 @@ export class PlannerActionService {
     try {
       let result: unknown
       if (action.type === 'workspace.create') {
-        const payload = action.payload as { name: string; objective: string; language?: ProjectLanguage }
+        const payload = action.payload as WorkspaceCreateIntent
         const workspace = await this.dependencies.createWorkspace(payload)
         if (payload.language) await this.dependencies.createProject(workspace.id, workspace.name, payload.language)
+        if (payload.academicEvent) this.dependencies.createDeadline({ workspaceId: workspace.id, title: payload.academicEvent.title, dueAt: payload.academicEvent.dueAt, estimatedMinutes: payload.academicEvent.estimatedMinutes, masteryPercent: payload.academicEvent.masteryPercent })
         result = workspace
       } else if (action.type === 'deadline.create') {
         this.dependencies.createDeadline(action.payload as Parameters<PlannerActionDependencies['createDeadline']>[0])

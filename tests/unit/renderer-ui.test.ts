@@ -54,6 +54,8 @@ describe('renderer UI safeguards', () => {
     expect(workspace).toContain('não enviados ao provedor')
     expect(workspace).toContain('Enviar contexto local ao provedor')
     expect(home).toContain('Dados acadêmicos mantidos localmente')
+    expect(home).toContain("'Não avaliado'")
+    expect(home).not.toContain('averageSuccessRate ?? 100')
     expect(app).toContain('a cota disponível foi esgotada')
     expect(app).toContain('provedor configurado está indisponível')
   })

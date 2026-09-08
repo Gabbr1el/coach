@@ -82,6 +82,7 @@ describe('DrizzleReportRepository', () => {
     ])
     expect(workspace?.domain.averageMastery).not.toBe(workspace?.executions)
     const daily = new DrizzleStudyWorkspaceRepository(database).listSessionHistory('workspace-evidence', 100)
+    expect(daily).toHaveLength(1)
     expect(daily[0]).toMatchObject({ successRate: 100, focusRetentionPercent: null, recommendation: null })
     database.close()
   })

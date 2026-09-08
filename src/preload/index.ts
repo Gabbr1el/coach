@@ -147,9 +147,11 @@ const api: CoachDesktopApi = {
   },
   material: {
     importPdf: (workspaceId) => ipcRenderer.invoke(MATERIAL_CHANNELS.importPdf, { workspaceId }),
+    importFile: (workspaceId) => ipcRenderer.invoke(MATERIAL_CHANNELS.importFile, { workspaceId }),
     list: (workspaceId) => ipcRenderer.invoke(MATERIAL_CHANNELS.list, { workspaceId }),
     search: (input) => ipcRenderer.invoke(MATERIAL_CHANNELS.search, input),
     updateRelevance: (input) => ipcRenderer.invoke(MATERIAL_CHANNELS.updateRelevance, input),
+    decide: (input) => ipcRenderer.invoke(MATERIAL_CHANNELS.decide, input),
   },
   sessionNavigation: {
     addSavedForLater: (input) => ipcRenderer.invoke(SESSION_NAVIGATION_CHANNELS.addSavedForLater, input),

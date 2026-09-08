@@ -2,6 +2,7 @@ import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PdfMaterialService, assessLexicalRelevance, type MinimalMaterialReviewRequest } from '../../src/main/materials/pdf-material-service'
 import type { CoachDatabase } from '../../src/main/database/connection'
+import type { MaterialSemanticAnalysis } from '../../src/shared/contracts/material-contract'
 
 let sqlite: Database.Database
 let database: CoachDatabase
@@ -11,7 +12,7 @@ beforeEach(() => {
   sqlite = new Database(':memory:')
   sqlite.exec(`
     CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, objective TEXT NOT NULL);
-    CREATE TABLE materials (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, media_type TEXT NOT NULL, page_count INTEGER NOT NULL, status TEXT NOT NULL, relevance INTEGER NOT NULL, source_url TEXT, content_hash TEXT, error_message TEXT, created_at INTEGER NOT NULL);
+    CREATE TABLE materials (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, media_type TEXT NOT NULL, page_count INTEGER NOT NULL, status TEXT NOT NULL, relevance INTEGER NOT NULL, role TEXT NOT NULL DEFAULT 'reference', semantic_analysis_json TEXT, source_url TEXT, content_hash TEXT, error_message TEXT, created_at INTEGER NOT NULL);
     CREATE TABLE material_chunks (id TEXT PRIMARY KEY, material_id TEXT NOT NULL, page_number INTEGER NOT NULL, content TEXT NOT NULL);
     CREATE TABLE roadmaps (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, status TEXT NOT NULL);
     CREATE TABLE roadmap_modules (id TEXT PRIMARY KEY, roadmap_id TEXT NOT NULL, topics_json TEXT NOT NULL);
@@ -27,10 +28,12 @@ function service(pages: string[], reviewAmbiguous?: (request: MinimalMaterialRev
   return new PdfMaterialService(database, { extractPages: vi.fn(async () => pages), reviewAmbiguous, now: () => 10, createId: () => `id-${++sequence}` })
 }
 
+const semantic = (relevance: MaterialSemanticAnalysis['relevance']): MaterialSemanticAnalysis => ({ documentType: relevance === 'unrelated' ? 'unrelated' : 'lecture_slides', subject: relevance === 'unrelated' ? 'Energia' : 'Estruturas de Dados', summary: 'Resumo', topics: relevance === 'unrelated' ? ['kWh'] : ['árvores', 'filas'], prerequisiteTopics: [], estimatedLevel: 'intermediate', relationToObjective: relevance === 'unrelated' ? 'Sem relação' : 'Conteúdo da disciplina', relevance, confidence: 0.95 })
+
 async function importPdf(materialService: PdfMaterialService, name = 'apostila.pdf'): Promise<Awaited<ReturnType<PdfMaterialService['importPdf']>>> {
   const fs = await import('node:fs/promises')
   const path = `/tmp/${name}`
-  await fs.writeFile(path, '%PDF-test')
+  await fs.writeFile(path, `%PDF-test-${name}`)
   try { return await materialService.importPdf('workspace-1', path) } finally { await fs.rm(path, { force: true }) }
 }
 
@@ -40,10 +43,9 @@ describe('PDF material pipeline', () => {
     expect(assessLexicalRelevance({ name: 'Estruturas de Dados', objective: 'Árvores binárias' }, 'conta-de-luz.pdf', ['Vencimento energia consumo kWh código de barras pagamento mensal.']).decision).toBe('irrelevant')
   })
 
-  it('persists irrelevant documents as failed instead of ready', async () => {
+  it('keeps lexically irrelevant documents staged until semantic analysis', async () => {
     const result = await importPdf(service(['Vencimento energia consumo mensal código de barras pagamento residencial.']))
-    expect(result).toMatchObject({ status: 'failed', relevance: 0 })
-    expect(result.errorMessage).toContain('não apresentou evidência lexical')
+    expect(result).toMatchObject({ status: 'staged', relevance: 0 })
     expect(service([]).search('workspace-1', 'energia')).toEqual([])
   })
 
@@ -51,8 +53,8 @@ describe('PDF material pipeline', () => {
     let request: MinimalMaterialReviewRequest | undefined
     const result = await importPdf(service(['Árvores '.repeat(2_000)], async (value) => { request = value; return { decision: 'ambiguous', confidence: 0.6 } }))
     expect(result.status).toBe('staged')
-    expect(request?.excerpt.length).toBeLessThanOrEqual(4_000)
-    expect(request).not.toHaveProperty('pdf')
+    expect(request).toBeUndefined()
+    expect(request ?? {}).not.toHaveProperty('pdf')
   })
 
   it('keeps ambiguous material staged when contextual review is unavailable', async () => {
@@ -60,13 +62,18 @@ describe('PDF material pipeline', () => {
     expect(result.status).toBe('staged')
   })
 
+  it('preserves extracted staging when semantic analysis is unavailable', async () => { const materialService = new PdfMaterialService(database, { extractPages: async () => ['Árvores e filas'], analyzeSemantic: async () => { throw new Error('provider unavailable') }, createId: () => `id-${++sequence}` }); const material = await importPdf(materialService, 'offline.pdf'); expect(material).toMatchObject({ status: 'staged', semanticAnalysis: null }); expect(sqlite.prepare('SELECT COUNT(*) AS count FROM material_chunks WHERE material_id = ?').get(material.id)).toEqual({ count: 1 }) })
+
+  it('uses semantic analysis to reject unrelated content and preserve useful metadata', async () => { const unrelated = new PdfMaterialService(database, { extractPages: async () => ['Conta de energia kWh'], analyzeSemantic: async () => semantic('unrelated'), createId: () => `id-${++sequence}` }); const rejected = await importPdf(unrelated, 'conta.pdf'); expect(rejected).toMatchObject({ status: 'failed', semanticAnalysis: { documentType: 'unrelated', relevance: 'unrelated' } }); const useful = new PdfMaterialService(database, { extractPages: async () => ['Slides sobre árvores e filas'], analyzeSemantic: async () => semantic('high'), createId: () => `id-${++sequence}` }); const staged = await importPdf(useful, 'slides.pdf'); expect(staged).toMatchObject({ status: 'staged', semanticAnalysis: { documentType: 'lecture_slides', topics: ['árvores', 'filas'] } }); expect(useful.decide('workspace-1', staged.id, 'approve', 'base')).toMatchObject({ status: 'ready', role: 'base' }) })
+
   it('indexes only after approval and labels LIKE retrieval as lexical', async () => {
     sqlite.prepare("UPDATE workspaces SET name = 'C', objective = 'Aprender C' WHERE id = 'workspace-1'").run()
     sqlite.prepare("INSERT INTO roadmaps (id, workspace_id, status) VALUES ('roadmap-1', 'workspace-1', 'accepted')").run()
     sqlite.prepare("INSERT INTO roadmap_modules (id, roadmap_id, topics_json) VALUES ('module-1', 'roadmap-1', '[\"ponteiros em C\"]')").run()
     const materialService = service(['Curso de C sobre ponteiros em C, memória e endereços. '.repeat(100)])
     const result = await importPdf(materialService)
-    expect(result.status).toBe('ready')
+    expect(result.status).toBe('staged')
+    materialService.decide('workspace-1', result.id, 'approve', 'base')
     expect(materialService.search('workspace-1', 'ponteiros')).toEqual([expect.objectContaining({ materialId: result.id, pageNumber: 1, topicId: 'module-1:ponteiros em C', retrieval: 'lexical' })])
   })
 
@@ -86,7 +93,8 @@ describe('PDF material pipeline', () => {
     sqlite.prepare("INSERT INTO roadmaps (id, workspace_id, status) VALUES ('roadmap-1', 'workspace-1', 'accepted')").run()
     sqlite.prepare("INSERT INTO roadmap_modules (id, roadmap_id, topics_json) VALUES ('module-1', 'roadmap-1', '[\"ponteiros\",\"ponteiros em C\"]')").run()
     const materialService = service(['Curso de C com ponteiros em C, memória e endereços.'])
-    await importPdf(materialService)
+    const material = await importPdf(materialService)
+    materialService.decide('workspace-1', material.id, 'approve', 'reference')
     expect(materialService.search('workspace-1', 'ponteiros')[0]?.topicId).toBeNull()
   })
 })

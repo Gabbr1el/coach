@@ -29,6 +29,8 @@ import { PlanningService } from '../application/planning/planning-service'
 import { DrizzlePlanningRepository } from './repositories/drizzle-planning-repository'
 import { registerPlanningHandlers } from './ipc/planning-handlers'
 import { PdfMaterialService } from './materials/pdf-material-service'
+import { extractJsonDocument } from '../application/ai/structured-json'
+import { materialSemanticAnalysisSchema } from '../shared/contracts/material-contract'
 import { registerMaterialHandlers } from './ipc/material-handlers'
 import { registerSessionNavigationHandlers } from './ipc/session-navigation-handlers'
 import { registerBackupHandlers } from './ipc/backup-handlers'
@@ -111,7 +113,7 @@ void app.whenReady().then(async () => {
     const observerService = new ObserverService(new DrizzleObserverRepository(database))
     const getWorkspaceMemory = (id: string) => (database!.sqlite.prepare('SELECT summary FROM workspace_memories WHERE workspace_id = ?').get(id) as { summary: string } | undefined)?.summary ?? null
     const currentWorkspaceContext = new CurrentWorkspaceContextService({ getWorkspace: (id) => workspaceRepository.findById(id), getStudyState: (id) => studyWorkspaceService.getState(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory, getAcademicSubjectContext: (subject) => academicSubjectContext.get(subject) })
-    const materialService = new PdfMaterialService(database)
+    const materialService = new PdfMaterialService(database, { analyzeSemantic: async (request) => { const provider = providerManager.route('roadmap'); if (!provider) return { documentType: 'unknown', subject: '', summary: 'Análise indisponível.', topics: [], prerequisiteTopics: [], estimatedLevel: 'unknown', relationToObjective: '', relevance: 'low', confidence: 0 }; const response = await provider.sendMessage({ messages: [{ role: 'system', content: 'Analise semanticamente o material acadêmico. Retorne somente JSON com documentType, subject, summary, topics, prerequisiteTopics, estimatedLevel, relationToObjective, relevance e confidence. Não trate validade do arquivo como relevância. relevance: high|medium|low|unrelated.' }, { role: 'user', content: JSON.stringify(request) }], maxOutputTokens: 1200, signal: AbortSignal.timeout(120_000) }); return materialSemanticAnalysisSchema.parse(extractJsonDocument(response.content)) } })
     const curriculumSourceService = new CurriculumSourceService(new HttpsCurriculumSourceGateway())
     const getTopicLearningState = (workspaceId: string, topicId: string) => {
       const row = database!.sqlite.prepare('SELECT difficulty_level AS difficulty, needs_review AS needsReview, mastery_estimate AS mastery, confidence, assessments, correct_first_try AS correctFirstTry, correct_after_help AS correctAfterHelp, incorrect FROM topic_learning_states WHERE workspace_id = ? AND topic_id = ?').get(workspaceId, topicId) as { difficulty: 'low' | 'medium' | 'high'; needsReview: number; mastery: number | null; confidence: 'low' | 'medium' | 'high'; assessments: number; correctFirstTry: number; correctAfterHelp: number; incorrect: number } | undefined

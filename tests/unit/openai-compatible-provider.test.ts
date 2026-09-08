@@ -15,6 +15,14 @@ describe('OpenAICompatibleProvider', () => {
     await expect(provider.testConnection()).resolves.toBeUndefined()
   })
 
+  it('distinguishes exhausted quota from transient rate limiting', async () => {
+    const quota = new OpenAICompatibleProvider('Route', 'https://route.example/v1', 'token', 'route/model', async () => new Response(JSON.stringify({ error: { message: 'You exceeded your current quota' } }), { status: 429 }))
+    const rateLimit = new OpenAICompatibleProvider('Route', 'https://route.example/v1', 'token', 'route/model', async () => new Response(JSON.stringify({ error: { message: 'Rate limit reached' } }), { status: 429 }))
+
+    await expect(quota.sendMessage({ messages: [{ role: 'user', content: 'Oi' }], maxOutputTokens: 20 })).rejects.toMatchObject({ code: 'INSUFFICIENT_QUOTA' })
+    await expect(rateLimit.sendMessage({ messages: [{ role: 'user', content: 'Oi' }], maxOutputTokens: 20 })).rejects.toMatchObject({ code: 'RATE_LIMITED' })
+  })
+
   it('maps chat completions into the canonical response', async () => {
     const fetcher: typeof fetch = async (input) => {
       if (String(input).endsWith('/models')) return new Response(JSON.stringify({ data: [] }), { status: 200 })

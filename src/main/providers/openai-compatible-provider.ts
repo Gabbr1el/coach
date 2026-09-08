@@ -23,7 +23,7 @@ interface ChatCompletionBody {
 }
 
 export class OpenAICompatibleProviderError extends Error {
-  constructor(readonly code: 'INVALID_CREDENTIAL' | 'MODEL_UNAVAILABLE' | 'ACCESS_RESTRICTED' | 'RATE_LIMITED' | 'NETWORK_UNAVAILABLE' | 'UNKNOWN', message?: string) {
+  constructor(readonly code: 'INVALID_CREDENTIAL' | 'INSUFFICIENT_QUOTA' | 'MODEL_UNAVAILABLE' | 'ACCESS_RESTRICTED' | 'RATE_LIMITED' | 'NETWORK_UNAVAILABLE' | 'UNKNOWN', message?: string) {
     super(message ?? code)
     this.name = 'OpenAICompatibleProviderError'
   }
@@ -157,7 +157,15 @@ export class OpenAICompatibleProvider implements AIProvider {
     if (status === 401) return new OpenAICompatibleProviderError('INVALID_CREDENTIAL')
     if (status === 403) return new OpenAICompatibleProviderError('ACCESS_RESTRICTED')
     if (status === 404 || (status === 400 && message?.toLowerCase().includes('model'))) return new OpenAICompatibleProviderError('MODEL_UNAVAILABLE')
-    if (status === 429) return new OpenAICompatibleProviderError('RATE_LIMITED')
+    if (status === 429) {
+      const detail = message?.toLocaleLowerCase('en-US') ?? ''
+      const quotaExhausted = detail.includes('insufficient_quota')
+        || detail.includes('exceeded your current quota')
+        || detail.includes('credit balance')
+        || detail.includes('spend limit')
+        || detail.includes('usage limit')
+      return new OpenAICompatibleProviderError(quotaExhausted ? 'INSUFFICIENT_QUOTA' : 'RATE_LIMITED')
+    }
     return new OpenAICompatibleProviderError('UNKNOWN', `Compatible provider failed with status ${status}`)
   }
 }

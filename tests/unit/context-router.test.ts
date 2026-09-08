@@ -13,13 +13,21 @@ describe('ContextRouter', () => {
   it('prioritizes a short level-one intervention during a loop', () => {
     expect(new ContextRouter().route(base, { active: true, repeatedErrorCount: 3, interventionSuggested: true, focusExitCount: 0, timeAwaySeconds: 0 })).toMatchObject({ outputBudget: 'HINT', helpLevel: 1, maxOutputTokens: 160 })
   })
-  it('routes live practice context even when persisted context sharing is off', () => {
-    const route = new ContextRouter().route({ ...base, content: 'por que não funciona?', activePage: 'practice', practiceContext: { fileName: 'main.py', language: 'python', code: 'print hello word' }, lastExecution: { stdout: '', stderr: 'SyntaxError: Missing parentheses', exitCode: 1, timedOut: false } })
+  it('drops every input context when context sharing is not authorized', () => {
+    const route = new ContextRouter().route({ ...base, content: 'por que não funciona?', activePage: 'practice', practiceContext: { fileName: 'private.py', language: 'python', code: 'PRIVATE_CODE' }, lastExecution: { stdout: 'PRIVATE_STDOUT', stderr: 'PRIVATE_STDERR', exitCode: 1, timedOut: false } })
+    expect(route).toMatchObject({ depth: 'MINIMAL', context: undefined })
+  })
+  it('routes live practice and execution context only when authorized', () => {
+    const route = new ContextRouter().route({ ...base, content: 'por que não funciona?', activePage: 'practice', practiceContext: { fileName: 'main.py', language: 'python', code: 'print hello word' }, lastExecution: { stdout: '', stderr: 'SyntaxError: Missing parentheses', exitCode: 1, timedOut: false } }, null, { fileName: 'main.py', editorContent: '', notes: '', activePlanItem: null })
     expect(route.context).toMatchObject({ activePage: 'practice', practiceContext: { code: 'print hello word' }, lastExecution: { exitCode: 1 } })
   })
+  it('omits a null execution instead of representing it as evidence', () => {
+    const route = new ContextRouter().route({ ...base, activePage: 'practice', practiceContext: { fileName: 'main.py', language: 'python', code: 'print(1)' }, lastExecution: null }, null, { fileName: 'main.py', editorContent: '', notes: '', activePlanItem: null })
+    expect(route.context).not.toHaveProperty('lastExecution')
+  })
   it('keeps the exact selected study topic as authorized context', () => {
-    const activeStudy = { moduleId: 'module-b', module: 'Saida', topicId: 'module-b:print', topic: 'print', lessonId: 'module-b:print:lesson', checkpointId: 'module-b:print:lesson:checkpoint', currentExcerpt: 'print envia texto para a saida' }
-    const route = new ContextRouter().route({ ...base, content: 'não entendi essa parte', activePage: 'studies', activeStudy })
+    const activeStudy = { roadmapId: '00000000-0000-4000-8000-000000000003', moduleId: 'module-b', module: 'Saida', topicId: 'module-b:print', topic: 'print', lessonId: 'module-b:print:lesson', currentBlockId: 'module-b:print:lesson:explanation', checkpointId: 'module-b:print:lesson:checkpoint', currentExcerpt: 'print envia texto para a saida' }
+    const route = new ContextRouter().route({ ...base, content: 'não entendi essa parte', activePage: 'studies', activeStudy }, null, { fileName: '', editorContent: '', notes: '', activePlanItem: activeStudy.topic })
     expect(route.context?.activeStudy).toEqual(activeStudy)
   })
 })

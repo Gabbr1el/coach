@@ -7,7 +7,7 @@ export interface AuthorizedStudyContext {
   readonly notes: string
   readonly activePlanItem: string | null
   readonly activePage?: string
-  readonly activeStudy?: { moduleId: string; module: string; topicId: string; topic: string; lessonId: string; checkpointId: string | null; currentExcerpt: string | null }
+  readonly activeStudy?: StreamWorkspaceMessageInput['activeStudy']
   readonly lastExecution?: { stdout: string; stderr: string; exitCode: number | null; timedOut: boolean } | null
   readonly practiceContext?: { fileName: string; language: string; code: string }
 }
@@ -32,10 +32,8 @@ export class ContextRouter {
     const text = input.content.trim()
     const intervention = Boolean(observer?.interventionSuggested)
     const context = authorizedContext
-      ? { ...authorizedContext, activePage: input.activePage, activeStudy: input.activeStudy, practiceContext: input.practiceContext, lastExecution: input.lastExecution }
-      : input.practiceContext || input.activeStudy || input.lastExecution
-        ? { fileName: input.practiceContext?.fileName ?? '', editorContent: input.practiceContext?.code ?? '', notes: '', activePlanItem: input.activeStudy?.topic ?? null, activePage: input.activePage, activeStudy: input.activeStudy, practiceContext: input.practiceContext, lastExecution: input.lastExecution }
-        : undefined
+      ? { ...authorizedContext, activePage: input.activePage, activeStudy: input.activeStudy, practiceContext: input.practiceContext, ...(input.lastExecution ? { lastExecution: input.lastExecution } : {}) }
+      : undefined
     if (intervention) return { depth: context ? 'SESSION' : 'MINIMAL', outputBudget: 'HINT', maxOutputTokens: 160, helpLevel: 1, context: context ? { ...context, notes: '' } : undefined, observerSignal: { repeatedErrorCount: observer!.repeatedErrorCount } }
     if (DEEP_REQUEST.test(text)) return { depth: context ? 'DEEP' : 'WORKSPACE', outputBudget: 'DEEP_ANALYSIS', maxOutputTokens: 900, helpLevel: 4, context, observerSignal: null }
     if (HELP_REQUEST.test(text)) return { depth: context ? 'SESSION' : 'MINIMAL', outputBudget: 'SHORT_EXPLANATION', maxOutputTokens: 220, helpLevel: 2, context: context ? { ...context, notes: '' } : undefined, observerSignal: null }

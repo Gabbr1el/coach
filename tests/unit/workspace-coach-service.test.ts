@@ -67,7 +67,7 @@ describe('WorkspaceCoachService', () => {
     let providerRequest: AIRequest | null = null
     manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Resposta', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
     manager.select('stream')
-    const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(true), searchMaterials: () => [{ materialId: 'material-1', materialName: 'PRIVATE_MATERIAL.pdf', pageNumber: 2, content: 'PRIVATE_SNIPPET' }] })
+    const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(true), searchMaterials: () => [{ chunkId: 'chunk-1', materialId: 'material-1', materialName: 'PRIVATE_MATERIAL.pdf', pageNumber: 2, topicId: null, retrieval: 'lexical' as const, content: 'PRIVATE_SNIPPET' }] })
     const activeStudy = { roadmapId: crypto.randomUUID(), moduleId: 'module-b', module: 'Saida', topicId: 'module-b:print', topic: 'print', lessonId: 'lesson', currentBlockId: 'block', checkpointId: null, currentExcerpt: 'PRIVATE_EXCERPT' }
     const execution = { stdout: 'PRIVATE_STDOUT', stderr: '', exitCode: 0, timedOut: false }
     const practiceContext = { fileName: 'PRIVATE_FILE.py', language: 'python', code: 'PRIVATE_CODE' }
@@ -77,7 +77,7 @@ describe('WorkspaceCoachService', () => {
     expect(decodePromptField(providerRequest!, 'WORKSPACE_METADATA_BASE64')).toEqual({ subject: 'Cálculo', objective: 'Dominar derivadas' })
     expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ fileName: 'PRIVATE_FILE.py', editorContent: 'PRIVATE_EDITOR', notes: 'PRIVATE_NOTES', activeStudy, practiceContext, lastExecution: execution })
     expect(decodePromptField(providerRequest!, 'WORKSPACE_MEMORY_BASE64')).toBe('PRIVATE_MEMORY')
-    expect(decodePromptField(providerRequest!, 'MATERIAL_SNIPPETS_BASE64')).toEqual([{ materialId: 'material-1', materialName: 'PRIVATE_MATERIAL.pdf', pageNumber: 2, content: 'PRIVATE_SNIPPET' }])
+    expect(decodePromptField(providerRequest!, 'MATERIAL_SNIPPETS_BASE64')).toEqual([{ chunkId: 'chunk-1', materialId: 'material-1', materialName: 'PRIVATE_MATERIAL.pdf', pageNumber: 2, topicId: null, retrieval: 'lexical' as const, content: 'PRIVATE_SNIPPET' }])
   })
 
   it('does not represent a null execution as execution evidence', async () => {

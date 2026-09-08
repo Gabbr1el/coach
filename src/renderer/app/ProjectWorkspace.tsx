@@ -19,6 +19,7 @@ export function ProjectWorkspace({ workspaceId, workspaceName, onError, onContex
   const saveTimer = useRef<number | null>(null)
   const active = project?.files.find((file) => file.id === project.activeFileId) ?? null
   useEffect(() => { if (active) onContextChange?.({ fileName: active.path, language: editorLanguage(active.path), code: draft, execution }) }, [active?.id, active?.path, draft, execution])
+  useEffect(() => { setExecution(null) }, [workspaceId, active?.id, draft])
 
   useEffect(() => {
     setLoading(true)

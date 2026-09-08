@@ -9,7 +9,7 @@ export type ProviderHealth = { readonly connected: boolean; readonly quota: 'unk
 const OPENAI_SECRET_REFERENCE = 'provider-openai-api-key'
 function isLocalOmniRoute(baseUrl: string | null): boolean { try { const url = new URL(baseUrl ?? ''); return (url.hostname === '127.0.0.1' || url.hostname === 'localhost') && url.port === '20128' } catch { return false } }
 function isQuotaError(error: unknown): boolean { return error instanceof Error && 'code' in error && error.code === 'INSUFFICIENT_QUOTA' }
-function failedHealth(error: unknown): ProviderHealth { return { connected: false, quota: isQuotaError(error) ? 'exhausted' : 'unknown' } }
+function failedHealth(error: unknown): ProviderHealth { return isQuotaError(error) ? { connected: true, quota: 'exhausted' } : { connected: false, quota: 'unknown' } }
 
 export class ProviderConfigurationService {
   private operationQueue: Promise<void> = Promise.resolve()
@@ -48,7 +48,7 @@ export class ProviderConfigurationService {
     return {
       configured: sessionActive || Boolean(configuration),
       connected: health.connected && Boolean(this.manager.getActive()),
-      connectionState: sessionActive || configuration ? (health.connected && this.manager.getActive() ? 'connected' : this.manager.getActive() ? 'unchecked' : 'unreachable') : 'not-configured',
+      connectionState: sessionActive || configuration ? (health.connected ? 'connected' : this.manager.getActive() ? 'unchecked' : 'unreachable') : 'not-configured',
       quota: health.quota,
       providerId: sessionActive ? this.sessionAccount!.providerId : configuration?.providerId ?? null,
       providerName: sessionActive ? this.sessionAccount!.providerName : configuration?.displayName ?? null,

@@ -61,6 +61,20 @@ describe('WorkspaceCoachService', () => {
     expect(decodePromptField(providerRequest!, 'MATERIAL_SNIPPETS_BASE64')).toEqual([])
   })
 
+  it('does not adapt a study block through a provider when privacy is off', async () => {
+    const manager = new AIProviderManager()
+    let providerRequest: AIRequest | null = null
+    manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Resposta localmente limitada', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
+    manager.select('stream')
+    const adaptSection = vi.fn()
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(false), studyLessonService: { adaptSection, getPreferences: () => ({ detail: 'standard', explanation: 'balanced', examples: 'balanced', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] }), updatePreferences: (_workspaceId, value) => value } })
+
+    for await (const _delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'use uma analogia', activePage: 'studies', activeStudy: { roadmapId: crypto.randomUUID(), moduleId: 'module', module: 'M', topicId: 'topic', topic: 'T', lessonId: 'lesson', currentBlockId: 'block', checkpointId: null, currentExcerpt: 'PRIVATE_EXCERPT' } }, new AbortController().signal)) { /* consume */ }
+
+    expect(adaptSection).not.toHaveBeenCalled()
+    expect(JSON.stringify(providerRequest)).not.toContain('PRIVATE_EXCERPT')
+  })
+
   it('routes authorized live, persisted, lesson, material and execution context when privacy is on', async () => {
     const repository = new MemoryConversationRepository()
     const manager = new AIProviderManager()
@@ -118,7 +132,7 @@ describe('WorkspaceCoachService', () => {
     const preferences: StudyPresentationPreferences = { detail: 'standard', explanation: 'balanced', examples: 'balanced', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] }
     const adaptSection = vi.fn(async () => ({ id: 'adaptation', workspaceId: workspace.id, lessonId: 'lesson', blockId: 'block', revision: 1, reason: 'use uma analogia', mode: 'ANALOGY' as const, originalBlock: { id: 'block', type: 'explanation' as const, title: 'T', content: 'Original' }, adaptedBlock: { id: 'block', type: 'analogy' as const, title: 'T', content: 'Adaptado' }, isActive: true, providerId: 'stream', modelId: 'model', createdAt: 1 }))
     const updatePreferences = vi.fn((_workspaceId: string, value: StudyPresentationPreferences) => value)
-    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, studyLessonService: { adaptSection, getPreferences: () => preferences, updatePreferences } })
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(true), studyLessonService: { adaptSection, getPreferences: () => preferences, updatePreferences } })
     const metadata = vi.fn()
     const controller = new AbortController()
     for await (const _delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'use uma analogia', activePage: 'studies', activeStudy: { roadmapId: crypto.randomUUID(), moduleId: crypto.randomUUID(), module: 'M', topicId: 'topic', topic: 'T', lessonId: 'lesson', currentBlockId: 'block', checkpointId: null, currentExcerpt: 'Original' } }, controller.signal, metadata)) { /* consume */ }
@@ -133,7 +147,7 @@ describe('WorkspaceCoachService', () => {
     manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* () { throw new Error('must not stream') }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
     manager.select('stream')
     let preferences: StudyPresentationPreferences = { detail: 'standard', explanation: 'balanced', examples: 'balanced', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] }
-    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, studyLessonService: { adaptSection: async (input) => ({ id: crypto.randomUUID(), workspaceId: workspace.id, lessonId: input.lessonId, blockId: input.blockId, revision: 1, reason: input.instruction, mode: input.mode ?? 'CUSTOM', originalBlock: { id: input.blockId, type: 'explanation', title: 'T', content: 'Original' }, adaptedBlock: { id: input.blockId, type: 'explanation', title: 'T', content: 'Adaptado' }, isActive: true, providerId: 'stream', modelId: 'model', createdAt: 1 }), getPreferences: () => preferences, updatePreferences: (_workspaceId, value) => { preferences = value; return value } } })
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(true), studyLessonService: { adaptSection: async (input) => ({ id: crypto.randomUUID(), workspaceId: workspace.id, lessonId: input.lessonId, blockId: input.blockId, revision: 1, reason: input.instruction, mode: input.mode ?? 'CUSTOM', originalBlock: { id: input.blockId, type: 'explanation', title: 'T', content: 'Original' }, adaptedBlock: { id: input.blockId, type: 'explanation', title: 'T', content: 'Adaptado' }, isActive: true, providerId: 'stream', modelId: 'model', createdAt: 1 }), getPreferences: () => preferences, updatePreferences: (_workspaceId, value) => { preferences = value; return value } } })
     const activeStudy = { roadmapId: crypto.randomUUID(), moduleId: crypto.randomUUID(), module: 'M', topicId: 'topic-a', topic: 'T', lessonId: 'lesson', currentBlockId: 'block', checkpointId: null, currentExcerpt: 'Original' }
     for (let index = 0; index < 2; index += 1) for await (const _delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'simplifique esta parte', activePage: 'studies', activeStudy: { ...activeStudy, topicId: `topic-${index}`, currentBlockId: `block-${index}` } }, new AbortController().signal)) { /* consume */ }
     expect(preferences.recurringEvidence.SIMPLIFY).toBe(2)

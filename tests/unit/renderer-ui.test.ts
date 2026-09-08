@@ -54,5 +54,14 @@ describe('renderer UI safeguards', () => {
     expect(workspace).toContain('não enviados ao provedor')
     expect(workspace).toContain('Enviar contexto local ao provedor')
     expect(home).toContain('Dados acadêmicos mantidos localmente')
+    expect(app).toContain('a cota disponível foi esgotada')
+    expect(app).toContain('provedor configurado está indisponível')
+  })
+
+  it('invalidates execution evidence when source or workspace changes', () => {
+    const app = read('src/renderer/app/App.tsx')
+    const project = read('src/renderer/app/ProjectWorkspace.tsx')
+    expect(project).toContain('setExecution(null) }, [workspaceId, active?.id, draft]')
+    expect(app).toMatch(/setExecution\(null\)\s+setPracticeContext\(null\)/)
   })
 })

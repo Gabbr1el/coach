@@ -111,7 +111,7 @@ export class WorkspaceCoachService {
     const current = await this.dependencies.getCurrentContext?.(workspaceId)
     const contextSharingEnabled = current?.study.shareContextWithAi === true
     const presentationRequest = input.activePage === 'studies' && input.activeStudy ? presentationRequestFor(input.content) : null
-    if (presentationRequest && input.activeStudy && this.dependencies.studyLessonService) {
+    if (contextSharingEnabled && presentationRequest && input.activeStudy && this.dependencies.studyLessonService) {
       if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
       const study = input.activeStudy
       await this.dependencies.studyLessonService.adaptSection({ workspaceId, roadmapId: study.roadmapId, moduleId: study.moduleId, topicId: study.topicId, lessonId: study.lessonId, blockId: study.currentBlockId, instruction: input.content.trim(), mode: presentationRequest.intent }, signal)

@@ -66,7 +66,7 @@ describe('ProviderConfigurationService', () => {
 
     await expect(service.selectAccount(repository.configuration!.id)).rejects.toBe(quotaError)
 
-    expect(await service.getStatus()).toMatchObject({ configured: true, connected: false, connectionState: 'unreachable', quota: 'exhausted', activeAccountId: repository.configuration!.id })
+    expect(await service.getStatus()).toMatchObject({ configured: true, connected: false, connectionState: 'connected', quota: 'exhausted', activeAccountId: repository.configuration!.id })
   })
 
   it('fails closed when secure storage is unavailable', async () => {

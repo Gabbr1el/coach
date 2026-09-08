@@ -320,6 +320,8 @@ export function App() {
     setWorkspaceMessages([])
     setWorkspaceStreamedContent('')
     setWorkspaceError(null)
+    setExecution(null)
+    setPracticeContext(null)
     setStudyState(null)
     studySelectionEpoch.current += 1
     setStudyRoadmap(null)
@@ -506,6 +508,14 @@ export function App() {
     if (workspacePage === 'studies' && (!studyProgress || !studyModule)) { setWorkspaceError('Aguarde o tópico atual ser carregado antes de conversar com o Coach.'); return }
     if (!providerStatus?.configured) {
       setWorkspaceError('Conecte um provedor de IA na Home antes de conversar neste Workspace.')
+      return
+    }
+    if (providerStatus.quota === 'exhausted') {
+      setWorkspaceError('O provedor está acessível, mas a cota disponível foi esgotada.')
+      return
+    }
+    if (providerStatus.connectionState === 'unreachable') {
+      setWorkspaceError('O provedor configurado está indisponível no momento.')
       return
     }
     if (workspacePage === 'studies' && studyProgress && studyModule && /\b(não entendi|nao entendi|ajuda|dica|explique|explica)\b/i.test(content)) {

@@ -6,6 +6,15 @@ export interface ObserverRepository {
   listSession(workspaceId: string, sessionId: string): Array<{ type: string; payloadJson: string; createdAt: number }>
 }
 
+interface ExecutionObservation { exitCode: number | null; durationMs: number; errorSignature: string | null; sourceRevision?: string; topicId?: string; topicConfidence?: number }
+interface ExecutionPayload extends ExecutionObservation { topicId?: string }
+
+function parsePayload(value: string): ExecutionPayload {
+  try { return JSON.parse(value) as ExecutionPayload } catch { return { exitCode: null, durationMs: 0, errorSignature: null } }
+}
+
+function executionSignature(payload: ExecutionPayload): string { return payload.errorSignature ?? `exit:${payload.exitCode ?? 'signal'}` }
+
 export class ObserverService {
   constructor(private readonly repository: ObserverRepository, private readonly now = Date.now, private readonly createId = () => crypto.randomUUID()) {}
 
@@ -15,33 +24,56 @@ export class ObserverService {
     const events = this.repository.listSession(workspaceId, session.id)
     const executions = events.filter((event) => event.type === 'execution_error' || event.type === 'code_executed')
     const latest = executions.at(-1)
-    const latestPayload = latest?.type === 'execution_error' ? JSON.parse(latest.payloadJson) as { errorSignature: string | null; exitCode: number | null } : null
-    const latestSignature = latestPayload ? latestPayload.errorSignature ?? `exit:${latestPayload.exitCode ?? 'signal'}` : null
+    const latestPayload = latest?.type === 'execution_error' ? parsePayload(latest.payloadJson) : null
+    const latestSignature = latestPayload ? executionSignature(latestPayload) : null
     let normalizedCount = 0
     for (const event of executions.slice().reverse()) {
-      const payload = JSON.parse(event.payloadJson) as { errorSignature: string | null; exitCode: number | null }
-      const eventSignature = payload.errorSignature ?? `exit:${payload.exitCode ?? 'signal'}`
-      if (event.type !== 'execution_error' || eventSignature !== latestSignature) break
+      const payload = parsePayload(event.payloadJson)
+      if (event.type !== 'execution_error' || executionSignature(payload) !== latestSignature) break
       normalizedCount += 1
     }
-    let blurredAt: number | null = null
+    let latestSuccessIndex = -1
+    for (let index = events.length - 1; index >= 0; index -= 1) if (events[index]?.type === 'code_executed') { latestSuccessIndex = index; break }
+    const interventionRecorded = latestSignature !== null && events.slice(latestSuccessIndex + 1).some((event) => event.type === 'possible_learning_loop' && executionSignature(parsePayload(event.payloadJson)) === latestSignature)
     let timeAwaySeconds = 0
-    for (const event of events) {
-      if (event.type === 'window_blurred') blurredAt = event.createdAt
-      if (event.type === 'window_focused' && blurredAt) { timeAwaySeconds += Math.max(0, Math.floor((event.createdAt - blurredAt) / 1000)); blurredAt = null }
+    let focusExitCount = 0
+    for (const event of events) if (event.type === 'window_focused') {
+      const payload = parsePayload(event.payloadJson) as ExecutionPayload & { awaySeconds?: number; focusExit?: boolean }
+      if (payload.focusExit) { timeAwaySeconds += payload.awaySeconds ?? 0; focusExitCount += 1 }
     }
-    return { active: true, repeatedErrorCount: normalizedCount, interventionSuggested: normalizedCount >= 3, focusExitCount: events.filter((event) => event.type === 'window_blurred').length, timeAwaySeconds }
+    return { active: true, repeatedErrorCount: normalizedCount, interventionSuggested: normalizedCount >= 3 && !interventionRecorded, focusExitCount, timeAwaySeconds }
   }
 
   recordFocus(workspaceId: string, focused: boolean): ObserverState {
-    this.record(workspaceId, focused ? 'window_focused' : 'window_blurred', {})
+    if (!focused) this.record(workspaceId, 'window_blurred', {})
+    else {
+      const session = this.repository.getActiveSession(workspaceId)
+      const events = session ? this.repository.listSession(workspaceId, session.id) : []
+      const lastFocusEvent = events.slice().reverse().find((event) => event.type === 'window_blurred' || event.type === 'window_focused')
+      const awaySeconds = lastFocusEvent?.type === 'window_blurred' ? Math.max(0, Math.floor((this.now() - lastFocusEvent.createdAt) / 1000)) : 0
+      this.record(workspaceId, 'window_focused', { awaySeconds, focusExit: awaySeconds >= 15 })
+    }
     return this.getState(workspaceId)
   }
 
-  recordExecution(workspaceId: string, input: { exitCode: number | null; durationMs: number; errorSignature: string | null }): ObserverState {
-    this.record(workspaceId, input.exitCode !== 0 || input.errorSignature ? 'execution_error' : 'code_executed', input)
+  recordExecution(workspaceId: string, input: ExecutionObservation): ObserverState {
+    const payload: ExecutionPayload = { ...input, topicId: input.topicId && (input.topicConfidence ?? 0) >= 0.8 ? input.topicId : undefined }
+    const failed = input.exitCode !== 0 || input.errorSignature !== null
+    if (failed) {
+      const session = this.repository.getActiveSession(workspaceId)
+      const previous = session ? this.repository.listSession(workspaceId, session.id).filter((event) => event.type === 'execution_error').at(-1) : undefined
+      const previousPayload = previous ? parsePayload(previous.payloadJson) : null
+      if (previousPayload && executionSignature(previousPayload) === executionSignature(payload) && previousPayload.sourceRevision && input.sourceRevision && previousPayload.sourceRevision !== input.sourceRevision) {
+        this.record(workspaceId, 'code_executed', { ...payload, progress: true, unresolvedError: true })
+        return this.getState(workspaceId)
+      }
+    }
+    this.record(workspaceId, failed ? 'execution_error' : 'code_executed', payload)
     const state = this.getState(workspaceId)
-    if (state.repeatedErrorCount === 3) this.record(workspaceId, 'possible_learning_loop', { repeatedErrorCount: state.repeatedErrorCount, errorSignature: input.errorSignature })
+    if (state.interventionSuggested) {
+      this.record(workspaceId, 'possible_learning_loop', { repeatedErrorCount: state.repeatedErrorCount, errorSignature: input.errorSignature, exitCode: input.exitCode, topicId: payload.topicId })
+      return { ...state, interventionSuggested: true }
+    }
     return state
   }
 

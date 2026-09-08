@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { AIProviderManager } from '../../src/application/ai/ai-provider-manager'
 import { StudyLessonService, isSpecificLesson, localLesson, validateGeneratedLesson, type StudyLessonRepository } from '../../src/application/study-lessons/study-lesson-service'
 import type { AIProvider } from '../../src/application/ai/ai-provider'
-import type { NewStudyLessonAdaptation, PersistedStudyLesson, StudyLessonAdaptation, StudyLessonBlock, StudyPresentationPreferences } from '../../src/shared/contracts/study-lesson-contract'
+import { studyLessonBlockSchema, type NewStudyLessonAdaptation, type PersistedStudyLesson, type StudyLessonAdaptation, type StudyLessonBlock, type StudyPresentationPreferences } from '../../src/shared/contracts/study-lesson-contract'
 import type { Roadmap, RoadmapModule } from '../../src/shared/contracts/roadmap-contract'
 import type { TopicLearningState } from '../../src/application/study-progress/topic-learning'
 
@@ -51,6 +51,13 @@ function generated(topicId: string, topic: string, language = 'python', code = '
 }
 
 describe('StudyLessonService', () => {
+  it('rejects checkpoints with an unreachable answer or mismatched option diagnostics', () => {
+    const checkpoint = { id: 'checkpoint', type: 'checkpoint' as const, title: 'Verificação', question: 'Qual opção?', options: ['A', 'B'], correctIndex: 2, difficultyByOption: ['nenhuma'], hint: 'Compare.', reinforcement: 'Revise.' }
+    const result = studyLessonBlockSchema.safeParse(checkpoint)
+    expect(result.success).toBe(false)
+    if (!result.success) expect(result.error.issues.map((issue) => issue.path.join('.'))).toEqual(expect.arrayContaining(['correctIndex', 'difficultyByOption']))
+  })
+
   it('keeps only the two genuinely specific local lessons', () => {
     const item = module(['print()', 'decorators', 'ponteiros'])
     expect(localLesson(workspace('Python'), item, 'print()', `${item.id}:print()`)).not.toBeNull()
@@ -198,6 +205,39 @@ describe('StudyLessonService', () => {
     expect(prompt.topicLearningState).toMatchObject({ confidence: 'medium', mastery: 78 })
   })
 
+  it('repairs an invalid generated lesson exactly once', async () => {
+    const item = module(['decorators'])
+    const ws = workspace('Python Avançado')
+    const path = roadmap(ws.id, item)
+    const topicId = `${item.id}:decorators`
+    let calls = 0
+    const send = vi.fn<AIProvider['sendMessage']>(async () => ({ content: ++calls === 1 ? '{"title":"incomplete"}' : generated(topicId, 'decorators'), providerId: 'test', modelId: 'model' }))
+    const result = await new StudyLessonService(new MemoryLessons(), providerManager(send), async () => ws, () => path).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId })
+    expect(result.status).toBe('ready')
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send.mock.calls[1]![0].messages[0]!.content).toContain('Corrija apenas a estrutura JSON da aula')
+  })
+
+  it('classifies a lesson timeout as provider request failure', async () => {
+    const item = module(['ponteiros'])
+    const ws = workspace('C')
+    const path = roadmap(ws.id, item)
+    const topicId = `${item.id}:ponteiros`
+    const result = await new StudyLessonService(new MemoryLessons(), providerManager(async () => { throw new DOMException('This operation was aborted', 'AbortError') }), async () => ws, () => path).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId })
+    expect(result).toEqual({ status: 'failed_retryable', errorCode: 'PROVIDER_REQUEST_FAILED' })
+  })
+
+  it('does not loop when lesson repair is invalid', async () => {
+    const item = module(['ponteiros'])
+    const ws = workspace('C')
+    const path = roadmap(ws.id, item)
+    const topicId = `${item.id}:ponteiros`
+    const send = vi.fn<AIProvider['sendMessage']>(async () => ({ content: '{}', providerId: 'test', modelId: 'model' }))
+    const result = await new StudyLessonService(new MemoryLessons(), providerManager(send), async () => ws, () => path).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId })
+    expect(result).toEqual({ status: 'failed_retryable', errorCode: 'LESSON_SCHEMA_INVALID' })
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps a provisional lesson intact after invalid generation', async () => {
     const item = module(['print()'])
     const ws = workspace('Python Básico')
@@ -212,12 +252,15 @@ describe('StudyLessonService', () => {
     expect(repository.replaces).toBe(0)
   })
 
-  it('diagnoses checkpoints on a ready local lesson', async () => {
+  it('diagnoses checkpoints on a ready persisted lesson', async () => {
     const item = module(['print()'])
     const ws = workspace('Python Básico')
     const path = roadmap(ws.id, item)
-    const service = new StudyLessonService(new MemoryLessons(), new AIProviderManager(), async () => ws, () => path)
-    const result = await service.getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId: `${item.id}:print()` })
+    const topicId = `${item.id}:print()`
+    const repository = new MemoryLessons()
+    repository.create({ ...localLesson(ws, item, 'print()', topicId)!, id: 'lesson', generationKind: 'ai_generated', workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId, providerId: 'provider', modelId: 'model', createdAt: 1 })
+    const service = new StudyLessonService(repository, new AIProviderManager(), async () => ws, () => path)
+    const result = await service.getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId })
     expect(result.status).toBe('ready')
     if (result.status !== 'ready') throw new Error('lesson not ready')
     const checkpoint = result.lesson.blocks.find((block) => block.type === 'checkpoint')!

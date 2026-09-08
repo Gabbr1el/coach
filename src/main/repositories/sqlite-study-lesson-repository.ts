@@ -27,7 +27,13 @@ export class SqliteStudyLessonRepository implements StudyLessonRepository {
 
   private findBase(roadmapId: string, topicId: string): PersistedStudyLesson | null {
     const row = this.database.sqlite.prepare(`SELECT ${lessonColumns} FROM study_lessons WHERE roadmap_id = ? AND topic_id = ?`).get(roadmapId, topicId) as LessonRow | undefined
-    return row ? mapLesson(row) : null
+    if (!row) return null
+    try { return mapLesson(row) }
+    catch {
+      this.database.sqlite.prepare('DELETE FROM study_lesson_adaptations WHERE lesson_id = ?').run(row.id)
+      this.database.sqlite.prepare('DELETE FROM study_lessons WHERE id = ?').run(row.id)
+      return null
+    }
   }
 
   private findBaseById(lessonId: string): PersistedStudyLesson | null {
@@ -48,12 +54,16 @@ export class SqliteStudyLessonRepository implements StudyLessonRepository {
 
   create(lesson: PersistedStudyLesson): PersistedStudyLesson {
     this.database.sqlite.prepare('INSERT OR IGNORE INTO study_lessons (id, workspace_id, roadmap_id, module_id, topic_id, generation_kind, content_json, provider_id, model_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(lesson.id, lesson.workspaceId, lesson.roadmapId, lesson.moduleId, lesson.topicId, lesson.generationKind, JSON.stringify({ title: lesson.title, level: lesson.level, objective: lesson.objective, blocks: lesson.blocks, sources: lesson.sources }), lesson.providerId, lesson.modelId, lesson.createdAt, lesson.createdAt)
-    return this.find(lesson.roadmapId, lesson.topicId) ?? lesson
+    const persisted = this.find(lesson.roadmapId, lesson.topicId)
+    if (!persisted || persisted.workspaceId !== lesson.workspaceId || persisted.moduleId !== lesson.moduleId || persisted.topicId !== lesson.topicId) throw new Error('Study lesson persistence verification failed')
+    return persisted
   }
 
   replace(lesson: PersistedStudyLesson): PersistedStudyLesson {
     this.database.sqlite.prepare('UPDATE study_lessons SET workspace_id = ?, module_id = ?, generation_kind = ?, content_json = ?, provider_id = ?, model_id = ?, updated_at = ? WHERE roadmap_id = ? AND topic_id = ?').run(lesson.workspaceId, lesson.moduleId, lesson.generationKind, JSON.stringify({ title: lesson.title, level: lesson.level, objective: lesson.objective, blocks: lesson.blocks, sources: lesson.sources }), lesson.providerId, lesson.modelId, Date.now(), lesson.roadmapId, lesson.topicId)
-    return this.find(lesson.roadmapId, lesson.topicId) ?? this.create(lesson)
+    const persisted = this.find(lesson.roadmapId, lesson.topicId)
+    if (!persisted || persisted.workspaceId !== lesson.workspaceId || persisted.moduleId !== lesson.moduleId || persisted.topicId !== lesson.topicId) throw new Error('Study lesson persistence verification failed')
+    return persisted
   }
 
   createAdaptation(value: NewStudyLessonAdaptation, signal?: AbortSignal): StudyLessonAdaptation {

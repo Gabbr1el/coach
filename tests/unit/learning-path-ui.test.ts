@@ -1,17 +1,22 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { ROADMAP_CHANNELS } from '../../src/shared/contracts/roadmap-channels'
+import { studiesPreparationMessage } from '../../src/renderer/app/studies-preparation'
 
 const appSource = readFileSync(new URL('../../src/renderer/app/App.tsx', import.meta.url), 'utf8')
 const drawerSource = readFileSync(new URL('../../src/renderer/app/LearningPathDrawer.tsx', import.meta.url), 'utf8')
 const lessonSource = readFileSync(new URL('../../src/renderer/app/StudyLessonView.tsx', import.meta.url), 'utf8')
+const preparationSource = readFileSync(new URL('../../src/renderer/app/studies-preparation.ts', import.meta.url), 'utf8')
 
 describe('learning path UI integration', () => {
   it('exposes a read-only lifecycle channel and never polls generation', () => {
     expect(ROADMAP_CHANNELS.getLearningPathState).toBe('roadmap:get-learning-path-state')
     expect(appSource).toContain('window.coach.roadmap.getLearningPathState(workspaceId)')
-    expect(appSource).not.toContain('window.coach.roadmap.generate')
+    expect(appSource.match(/window\.coach\.roadmap\.generate/g)).toHaveLength(1)
     expect(appSource).toContain("const interval = window.setInterval(() => void poll(), 2500)")
+    expect(appSource).toContain("learningPathState.status === 'ready' && studyLessonLoad !== null")
+    expect(appSource).toContain("learningPathState.status === 'failed_retryable'")
+    expect(appSource).toContain('setStudyLessonRetryNonce((value) => value + 1)')
     expect(appSource).toContain('window.clearInterval(interval)')
   })
 
@@ -21,6 +26,13 @@ describe('learning path UI integration', () => {
     expect(appSource).toContain("if (lessonLoad.status !== 'ready')")
     expect(appSource).toContain('studyProgress.select({ workspaceId: selected.id, roadmapId: roadmap.id, moduleId: module.id, topicId, lessonId: lessonLoad.lesson.id')
     expect(drawerSource).toContain('const topicId = `${module.id}:${topic}`')
+  })
+
+  it('distinguishes lesson failures from learning-path failures', () => {
+    const path = { workspaceId: crypto.randomUUID(), status: 'ready' as const, activeRoadmapId: crypto.randomUUID(), lastAttemptAt: 1, retryAfter: null, lastErrorCode: null, updatedAt: 1 }
+    expect(studiesPreparationMessage({ status: 'failed_retryable', errorCode: 'LESSON_SCHEMA_INVALID' }, path)).toContain('aula')
+    expect(studiesPreparationMessage({ status: 'waiting_for_provider', errorCode: 'PROVIDER_UNAVAILABLE' }, path)).toContain('aula')
+    expect(studiesPreparationMessage(null, { ...path, status: 'failed_retryable', activeRoadmapId: null, lastErrorCode: 'ROADMAP_SCHEMA_INVALID' })).toContain('Trilha')
   })
 
   it('contains the drawer in Studies and removes the permanent curriculum sidebar', () => {
@@ -35,9 +47,11 @@ describe('learning path UI integration', () => {
   })
 
   it('shows lifecycle-specific empty states without manual actions', () => {
-    expect(appSource).toContain('Preparando sua Trilha de Aprendizado…')
-    expect(appSource).toContain('A Trilha será preparada quando a IA estiver disponível.')
-    expect(appSource).toContain('Não foi possível concluir a Trilha agora. O Coach tentará novamente automaticamente.')
+    expect(preparationSource).toContain('Preparando sua Trilha de Aprendizado…')
+    expect(preparationSource).toContain('A Trilha será preparada quando a IA estiver disponível.')
+    expect(preparationSource).toContain('Não foi possível concluir a Trilha agora. O Coach tentará novamente automaticamente.')
+    expect(preparationSource).toContain('A aula não pôde ser preparada agora. O Coach tentará novamente.')
+    expect(preparationSource).toContain('Aguardando a IA para preparar esta aula.')
     expect(appSource).not.toContain('Gere ou aceite')
   })
 

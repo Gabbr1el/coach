@@ -19,6 +19,12 @@ export class CurriculumSourceService {
   async sourcesFor(workspace: Workspace): Promise<CurriculumSource[]> {
     const subject = workspace.name.trim().toLocaleLowerCase() === 'c' ? 'linguagem c' : `${workspace.name} ${workspace.objective}`
     const selected = references.find((entry) => entry.match.test(subject))?.sources ?? []
-    return Promise.all(selected.slice(0, 3).map(async (source) => { try { return await this.gateway.retrieve(source) } catch { return source } }))
+    return Promise.all(selected.slice(0, 3).map(async (source) => {
+      try { return await this.gateway.retrieve(source) }
+      catch (error) {
+        if (process.env.NODE_ENV === 'development' || Boolean(process.env.ELECTRON_RENDERER_URL) || process.env.COACH_DEBUG_AI === '1') console.error('[CurriculumSource] retrieval failed', { sourceId: source.id, host: new URL(source.url).hostname, errorName: error instanceof Error ? error.name : 'UnknownError', errorMessage: error instanceof Error ? error.message : String(error) })
+        return source
+      }
+    }))
   }
 }

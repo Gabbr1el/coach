@@ -12,7 +12,13 @@ import { DrizzleStudyWorkspaceRepository } from '../../src/main/repositories/dri
 import { DrizzlePlannerActionRepository } from '../../src/main/repositories/drizzle-planner-action-repository'
 import { DrizzleRoadmapRepository } from '../../src/main/repositories/drizzle-roadmap-repository'
 import { SqliteStudyLessonRepository } from '../../src/main/repositories/sqlite-study-lesson-repository'
-import { studyLessonContentSchema, studyPresentationPreferencesSchema } from '../../src/shared/contracts/study-lesson-contract'
+import { AIProviderManager } from '../../src/application/ai/ai-provider-manager'
+import { WorkspaceService } from '../../src/application/workspaces/workspace-service'
+import { RoadmapService } from '../../src/application/roadmaps/roadmap-service'
+import { CurriculumSourceService } from '../../src/application/roadmaps/curriculum-source-service'
+import { StudyLessonService } from '../../src/application/study-lessons/study-lesson-service'
+import type { AIProvider } from '../../src/application/ai/ai-provider'
+import { studyLessonContentSchema, studyPresentationPreferencesSchema, type StudyLessonBlock } from '../../src/shared/contracts/study-lesson-contract'
 
 const temporaryDirectories: string[] = []
 const migrationsFolder = resolve('drizzle/migrations')
@@ -252,6 +258,78 @@ describe('Coach database migrations', () => {
   it('preserves learning path lifecycle and active roadmap after reopening SQLite', async () => {
     const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const workspaces = new DrizzleWorkspaceRepository(database); const workspace = await workspaces.create({ id: crypto.randomUUID(), name: 'C', objective: 'Aprender C', createdAt: 1, updatedAt: 1 }); const repository = new DrizzleRoadmapRepository(database); repository.setLearningPathState({ workspaceId: workspace.id, status: 'waiting_for_provider', activeRoadmapId: null, lastAttemptAt: 2, retryAfter: 302000, lastErrorCode: 'PROVIDER_UNAVAILABLE', updatedAt: 2 }); const path = { id: crypto.randomUUID(), workspaceId: workspace.id, title: 'Trilha C', status: 'accepted' as const, generationKind: 'ai_generated' as const, version: 1, providerId: 'test', modelId: 'test', createdAt: 3, updatedAt: 3, modules: [{ id: crypto.randomUUID(), title: 'Tipos e compilação', objective: 'Compilar', estimatedMinutes: 60, position: 1, status: 'active' as const, topics: ['gcc', 'tipos'], outcomes: ['Compilar'], practice: 'Programa C', completionCriteria: ['Sem erros'], resources: [] }, { id: crypto.randomUUID(), title: 'Ponteiros', objective: 'Usar endereços', estimatedMinutes: 90, position: 2, status: 'locked' as const, topics: ['endereços', 'arrays'], outcomes: ['Explicar ponteiros'], practice: 'Vetor', completionCriteria: ['Sem acesso inválido'], resources: [] }] }; repository.activate(path); const databasePath = database.path; database.close(); const reopened = openCoachDatabase({ databasePath, migrationsFolder }); const restored = new DrizzleRoadmapRepository(reopened); expect(restored.getLearningPathState(workspace.id)).toMatchObject({ status: 'ready', activeRoadmapId: path.id, retryAfter: null }); expect(restored.findCurrent(workspace.id)?.id).toBe(path.id); reopened.close()
   })
+  it('runs Workspace C through a persisted roadmap, real topic selection, and JIT lesson content', async () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    const workspaceRepository = new DrizzleWorkspaceRepository(database)
+    const roadmapRepository = new DrizzleRoadmapRepository(database)
+    const lessonRepository = new SqliteStudyLessonRepository(database)
+    const providers = new AIProviderManager()
+    const calls: string[] = []
+    const sendMessage: AIProvider['sendMessage'] = async (request) => {
+      calls.push(request.messages[0]?.content ?? '')
+      if (calls.length === 1) return { content: JSON.stringify({ title: 'Programação em C', modules: [{ title: 'Tipos, expressões e controle', objective: 'Escrever programas C determinísticos', estimatedMinutes: 120, topics: ['tipos inteiros e conversões', 'if, switch e laços'], outcomes: ['Compilar programas com fluxo correto'], practice: 'Construir um conversor de unidades com validação', completionCriteria: ['Compilar sem warnings'], sourceIds: [] }, { title: 'Funções, arrays e memória', objective: 'Modelar dados e memória explicitamente', estimatedMinutes: 180, topics: ['funções e passagem de parâmetros', 'arrays e aritmética de ponteiros', 'malloc, realloc e free', 'structs e composição de dados'], outcomes: ['Gerenciar memória sem vazamentos'], practice: 'Implementar um vetor dinâmico de structs', completionCriteria: ['Liberar toda memória alocada'], sourceIds: [] }] }), providerId: 'openai-compatible', modelId: 'codex/gpt-5.6-sol' }
+      const topicId = JSON.parse(request.messages[1]!.content).topicId as string
+      const topic = 'tipos inteiros e conversões'
+      const blocks: StudyLessonBlock[] = [
+        { id: `${topicId}:model`, type: 'explanation', title: 'Representação de tipos inteiros', content: 'Tipos inteiros em C definem largura, sinal e intervalo representável; conversões seguem regras explícitas.' },
+        { id: `${topicId}:promotion`, type: 'explanation', title: 'Promoções inteiras', content: 'Antes de muitas operações, char e short sofrem promoção para int, afetando tipos inteiros e conversões.' },
+        { id: `${topicId}:analogy`, type: 'analogy', title: 'Intervalos como recipientes', content: 'Cada tipo inteiro é um recipiente com limite; uma conversão pode descartar bits que não cabem.' },
+        { id: `${topicId}:code`, type: 'codeExample', title: 'Conversão observável em C', language: 'c', code: '#include <stdio.h>\nint main(void) { unsigned int u = 300u; unsigned char c = (unsigned char)u; printf("%u\\n", (unsigned)c); return 0; }', expectedOutput: '44', walkthrough: ['300 não cabe em oito bits.', 'A conversão conserva o resto no intervalo de unsigned char.', 'O cast para unsigned torna a impressão compatível.'] },
+        { id: `${topicId}:warning`, type: 'warning', title: 'Conversão com sinal', content: 'Misturar signed e unsigned pode converter um valor negativo para um inteiro positivo grande.' },
+        { id: `${topicId}:compare`, type: 'comparison', title: 'Conversão implícita e cast', content: 'A conversão implícita segue o contexto; o cast documenta a intenção, mas não impede perda de informação.' },
+        { id: `${topicId}:check-range`, type: 'checkpoint', title: 'Verifique o intervalo', question: `Qual cuidado é central em ${topic}?`, options: ['Verificar se o valor cabe no tipo de destino', 'Ignorar largura e sinal'], correctIndex: 0, difficultyByOption: ['nenhuma', 'intervalos de tipos inteiros'], hint: 'Compare origem e destino.', reinforcement: 'Revise os intervalos antes da conversão.' },
+        { id: `${topicId}:check-signed`, type: 'checkpoint', title: 'Mistura de sinais', question: `O que pode ocorrer em ${topic} ao comparar -1 com unsigned?`, options: ['O negativo pode ser convertido para unsigned', 'O compilador sempre rejeita'], correctIndex: 0, difficultyByOption: ['nenhuma', 'conversão usual aritmética'], hint: 'Observe o tipo comum da comparação.', reinforcement: 'A conversão para unsigned pode produzir valor positivo grande.' },
+        { id: `${topicId}:exercise`, type: 'miniExercise', title: 'Teste limites', instruction: `Escreva um programa de ${topic} que teste valores nos limites de unsigned char.`, nextAction: 'PRACTICE' },
+      ]
+      return { content: JSON.stringify({ title: `Aula de ${topic}`, level: 'basic', objective: `Aplicar ${topic} sem perda inesperada.`, blocks, usedSourceIds: [] }), providerId: 'openai-compatible', modelId: 'codex/gpt-5.6-sol' }
+    }
+    providers.register({ id: 'omniroute-mock', name: 'OmniRoute compatible', testConnection: async () => {}, getCapabilities: () => ({ streaming: false, usageInformation: false, supportedInput: ['text'] }), sendMessage })
+    providers.select('omniroute-mock')
+    providers.setRoute('roadmap', 'omniroute-mock')
+    providers.setRoute('lesson', 'omniroute-mock')
+    const roadmapService = new RoadmapService(roadmapRepository, providers, (id) => workspaceRepository.findById(id), undefined, new CurriculumSourceService({ retrieve: async (source) => source }))
+    const workspaceService = new WorkspaceService({ repository: workspaceRepository, createId: () => crypto.randomUUID() })
+    workspaceService.setLearningPathEnsurer((id) => roadmapService.ensureLearningPath(id))
+    const workspace = await workspaceService.create({ name: 'C', objective: 'Aprender programação em C' })
+    const state = await roadmapService.ensureLearningPath(workspace.id)
+    const roadmap = await roadmapService.get(workspace.id)
+    expect(state).toMatchObject({ status: 'ready', activeRoadmapId: roadmap?.id })
+    expect(roadmap?.modules.every((module) => module.topics.length > 0)).toBe(true)
+    const module = roadmap!.modules[0]!
+    const topicId = `${module.id}:${module.topics[0]}`
+    const lessonResult = await new StudyLessonService(lessonRepository, providers, (id) => workspaceRepository.findById(id), (id) => roadmapRepository.findCurrent(id)).getOrCreate({ workspaceId: workspace.id, roadmapId: roadmap!.id, moduleId: module.id, topicId })
+    expect(lessonResult.status).toBe('ready')
+    if (lessonResult.status !== 'ready') throw new Error('Lesson did not become ready')
+    expect(lessonResult.lesson.topicId).toBe(topicId)
+    expect(lessonResult.lesson.generationKind).toBe('ai_generated')
+    expect(lessonResult.lesson.blocks.some((block) => block.type === 'codeExample' && block.language === 'c')).toBe(true)
+    expect(lessonResult.lesson.blocks.some((block) => JSON.stringify(block).includes('tipos inteiros'))).toBe(true)
+    const now = Date.now()
+    database.sqlite.prepare('INSERT INTO study_progress (workspace_id, roadmap_id, current_module_id, current_topic_id, current_lesson_id, current_checkpoint_id, topic_statuses_json, lesson_positions_json, checkpoint_states_json, updated_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)').run(workspace.id, roadmap!.id, module.id, topicId, lessonResult.lesson.id, JSON.stringify({ [topicId]: 'IN_PROGRESS' }), '{}', '{}', now)
+    expect(database.sqlite.prepare('SELECT roadmap_id AS roadmapId, current_module_id AS moduleId, current_topic_id AS topicId, current_lesson_id AS lessonId FROM study_progress WHERE workspace_id = ?').get(workspace.id)).toEqual({ roadmapId: roadmap!.id, moduleId: module.id, topicId, lessonId: lessonResult.lesson.id })
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM study_lessons WHERE workspace_id = ?').get(workspace.id)).toEqual({ count: 1 })
+    expect(calls).toHaveLength(2)
+    database.close()
+  })
+  it('rejects activation of a roadmap without usable modules and topics', async () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    const workspaces = new DrizzleWorkspaceRepository(database)
+    const workspace = await workspaces.create({ id: crypto.randomUUID(), name: 'C', objective: 'Aprender C', createdAt: 1, updatedAt: 1 })
+    const repository = new DrizzleRoadmapRepository(database)
+    expect(() => repository.activate({ id: crypto.randomUUID(), workspaceId: workspace.id, title: 'Inválida', status: 'accepted', generationKind: 'ai_generated', version: 1, providerId: 'test', modelId: 'test', modules: [], createdAt: 2, updatedAt: 2 })).toThrow('modules with topics')
+    expect(repository.getLearningPathState(workspace.id)).toBeNull()
+    database.close()
+  })
+  it('quarantines an incompatible legacy lesson so it can be regenerated', async () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    const workspace = await new DrizzleWorkspaceRepository(database).create({ id: crypto.randomUUID(), name: 'Python', objective: 'Aprender Python', createdAt: 1, updatedAt: 1 })
+    const roadmapId = crypto.randomUUID()
+    database.sqlite.prepare('INSERT INTO study_lessons (id, workspace_id, roadmap_id, module_id, topic_id, generation_kind, content_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('legacy-invalid', workspace.id, roadmapId, crypto.randomUUID(), 'topic', 'ai_generated', JSON.stringify({ title: 'Legacy', level: 'basic', objective: 'Legacy', blocks: [{ id: 'checkpoint', type: 'checkpoint', title: 'Check', question: 'Qual?', options: ['A', 'B'], correctIndex: 2, difficultyByOption: ['x'], hint: 'h', reinforcement: 'r' }, { id: 'a', type: 'explanation', title: 'A', content: 'A' }, { id: 'b', type: 'explanation', title: 'B', content: 'B' }, { id: 'c', type: 'explanation', title: 'C', content: 'C' }], sources: [] }), 1, 1)
+    expect(new SqliteStudyLessonRepository(database).find(roadmapId, 'topic')).toBeNull()
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM study_lessons WHERE id = ?').get('legacy-invalid')).toEqual({ count: 0 })
+    database.close()
+  })
+
   it('defaults legacy lesson sources and persists adaptations and preferences', async () => {
     const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const workspaces = new DrizzleWorkspaceRepository(database); const workspace = await workspaces.create({ id: crypto.randomUUID(), name: 'C', objective: 'Ponteiros', createdAt: 1, updatedAt: 1 }); const repository = new SqliteStudyLessonRepository(database); const roadmapId = crypto.randomUUID(); const moduleId = crypto.randomUUID(); const content = { title: 'Ponteiros', level: 'basic' as const, objective: 'Compreender endereços', blocks: Array.from({ length: 4 }, (_, index) => ({ id: `b${index}`, type: 'explanation' as const, title: `Bloco ${index}`, content: 'Conteúdo' })) }; database.sqlite.prepare('INSERT INTO study_lessons (id, workspace_id, roadmap_id, module_id, topic_id, generation_kind, content_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('lesson', workspace.id, roadmapId, moduleId, 'topic', 'ai_generated', JSON.stringify(content), 1, 1)
     const lesson = repository.find(roadmapId, 'topic')!; expect(lesson.sources).toEqual([]); const readBaseJson = () => (database.sqlite.prepare('SELECT content_json AS contentJson FROM study_lessons WHERE id = ?').get(lesson.id) as { contentJson: string }).contentJson; const baseJson = readBaseJson(); const baseBlock = lesson.blocks[0]!; if (!('content' in baseBlock)) throw new Error('Expected text block'); const adapted = { ...baseBlock, content: 'Mais simples' }; const first = repository.createAdaptation({ id: 'adaptation-1', workspaceId: workspace.id, lessonId: lesson.id, blockId: adapted.id, reason: 'Simplifique', mode: 'SIMPLIFY', adaptedBlock: adapted, providerId: 'test', modelId: 'model', createdAt: 2 }); const second = repository.createAdaptation({ id: 'adaptation-2', workspaceId: workspace.id, lessonId: lesson.id, blockId: adapted.id, reason: 'Seja direto', mode: 'MORE_CONCISE', adaptedBlock: { ...adapted, content: 'Direto' }, providerId: 'test', modelId: 'model', createdAt: 3 }); expect(readBaseJson()).toBe(baseJson); expect(repository.find(roadmapId, 'topic')!.blocks[0]).toMatchObject({ content: 'Direto' }); expect(repository.listAdaptations(lesson.id, adapted.id)).toMatchObject([{ revision: 2, reason: 'Seja direto', isActive: true }, { revision: 1, reason: 'Simplifique', isActive: false }]); expect(repository.restoreOriginal(lesson.id, adapted.id).blocks[0]).toEqual(lesson.blocks[0]); expect(repository.listAdaptations(lesson.id, adapted.id)).toHaveLength(2); expect(repository.activateAdaptation(lesson.id, adapted.id, first.id).blocks[0]).toEqual(adapted); expect(repository.listAdaptations(lesson.id, adapted.id).filter((item) => item.isActive)).toHaveLength(1); expect(() => database.sqlite.prepare('UPDATE study_lesson_adaptations SET is_active = 1 WHERE id = ?').run(second.id)).toThrow(); expect(readBaseJson()).toBe(baseJson); expect(second.revision).toBe(2); expect(repository.getPreferences(workspace.id)).toEqual(studyPresentationPreferencesSchema.parse({})); const preference = studyPresentationPreferencesSchema.parse({ detail: 'concise', explanation: 'simple', examples: 'practical', evidence: [{ intent: 'ANALOGY', source: 'situational', topicId: 'topic', blockId: adapted.id }] }); expect(repository.setPreferences(workspace.id, preference, 4)).toEqual(preference); expect(repository.getPreferences(workspace.id)).toEqual(preference); expect(studyLessonContentSchema.parse(content).sources).toEqual([]); database.close()

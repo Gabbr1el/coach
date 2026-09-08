@@ -87,6 +87,32 @@ describe('StudyLessonService', () => {
     expect(repository.creates).toBe(0)
   })
 
+  it('does not send local memory or materials when context sharing is disabled', async () => {
+    const ws = workspace('Python')
+    const item = module(['decorators'])
+    const path = roadmap(ws.id, item)
+    let request = ''
+    const send = vi.fn(async (input) => { request = JSON.stringify(input); return { content: JSON.stringify(generated('Decorators', 'decorators')), providerId: 'provider', modelId: 'model' } })
+    const service = new StudyLessonService(new MemoryLessons(), providerManager(send), async () => ws, () => path, Date.now, undefined, { getTopicLearningState: () => null, getWorkspaceMemory: () => 'PRIVATE_MEMORY', searchMaterials: () => [{ chunkId: 'private', materialId: 'private', materialName: 'Private.pdf', pageNumber: 1, topicId: null, retrieval: 'lexical', content: 'PRIVATE_MATERIAL' }], canShareContext: () => false })
+
+    await service.getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId: `${item.id}:decorators` })
+
+    expect(request).not.toContain('PRIVATE_MEMORY')
+    expect(request).not.toContain('PRIVATE_MATERIAL')
+  })
+
+  it('rejects a cached lesson that belongs to another workspace', async () => {
+    const owner = workspace('Python')
+    const attacker = workspace('Python Avançado')
+    const item = module(['decorators'])
+    const path = roadmap(attacker.id, item)
+    const repository = new MemoryLessons()
+    repository.create({ ...localLesson(owner, item, 'decorators', `${item.id}:decorators`)!, id: 'lesson-private', workspaceId: owner.id, roadmapId: path.id, moduleId: item.id, topicId: `${item.id}:decorators`, generationKind: 'ai_generated', providerId: 'provider', modelId: 'model', createdAt: 1 })
+    const service = new StudyLessonService(repository, new AIProviderManager(), async () => attacker, () => path)
+
+    await expect(service.getOrCreate({ workspaceId: attacker.id, roadmapId: path.id, moduleId: item.id, topicId: `${item.id}:decorators` })).rejects.toThrow('does not belong')
+  })
+
   it('uses zero provider calls for cached AI', async () => {
     const item = module(['decorators'])
     const ws = workspace('Python Avançado')
@@ -99,7 +125,7 @@ describe('StudyLessonService', () => {
     const searchMaterials = vi.fn()
     const local = localLesson(ws, item, 'decorators', `${item.id}:decorators`)!
     repository.create({ ...local, id: 'lesson', generationKind: 'ai_generated', workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId: `${item.id}:decorators`, providerId: 'old', modelId: 'old', createdAt: 1 })
-    const result = await new StudyLessonService(repository, providerManager(send), async () => ws, () => path, Date.now, { sourcesFor }, { getTopicLearningState, getWorkspaceMemory, searchMaterials }).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId: `${item.id}:decorators` })
+    const result = await new StudyLessonService(repository, providerManager(send), async () => ws, () => path, Date.now, { sourcesFor }, { getTopicLearningState, getWorkspaceMemory, searchMaterials, canShareContext: () => true }).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId: `${item.id}:decorators` })
     expect(result.status).toBe('ready')
     expect(send).not.toHaveBeenCalled()
     expect(sourcesFor).not.toHaveBeenCalled()
@@ -135,8 +161,8 @@ describe('StudyLessonService', () => {
     repository.preferences = { ...repository.preferences, detail: 'detailed', explanation: 'step_by_step', examples: 'practical' }
     const send = vi.fn<AIProvider['sendMessage']>(async () => ({ content: generated(topicId, 'decorators'), providerId: 'test', modelId: 'model' }))
     const learningState: TopicLearningState = { workspaceId: ws.id, topicId, evidenceCount: 2, assessments: 2, correctFirstTry: 1, correctAfterHelp: 0, incorrect: 1, hintsUsed: 1, reinforcementEvents: 0, exercisesCompleted: 0, lessonsCompleted: 0, difficultyLevel: 'medium', masteryEstimate: 91, confidence: 'low', needsReview: true, lastPracticedAt: null, lastAssessedAt: 10, reasons: ['private detail'], updatedAt: 10 }
-    const context = { getTopicLearningState: vi.fn(() => ({ difficulty: learningState.difficultyLevel, needsReview: learningState.needsReview, mastery: learningState.masteryEstimate, confidence: learningState.confidence, assessments: learningState.assessments, correctFirstTry: learningState.correctFirstTry, correctAfterHelp: learningState.correctAfterHelp, incorrect: learningState.incorrect })), getWorkspaceMemory: vi.fn(() => 'Prefere exemplos concretos.'), searchMaterials: vi.fn(() => [{ chunkId: 'chunk-private', materialId: 'private-id', materialName: 'Notas.pdf', pageNumber: 4, topicId: 'topic-decorators', retrieval: 'lexical' as const, content: 'Decorators preservam contratos.' }]) }
-    await new StudyLessonService(repository, providerManager(send), async () => ws, () => path, Date.now, undefined, context).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId })
+    const context = { getTopicLearningState: vi.fn(() => ({ difficulty: learningState.difficultyLevel, needsReview: learningState.needsReview, mastery: learningState.masteryEstimate, confidence: learningState.confidence, assessments: learningState.assessments, correctFirstTry: learningState.correctFirstTry, correctAfterHelp: learningState.correctAfterHelp, incorrect: learningState.incorrect })), getWorkspaceMemory: vi.fn(() => 'Prefere exemplos concretos.'), searchMaterials: vi.fn(() => [{ chunkId: 'chunk-private', materialId: 'private-id', materialName: 'Notas.pdf', pageNumber: 4, topicId, retrieval: 'lexical' as const, content: 'Decorators preservam contratos.' }]) }
+    await new StudyLessonService(repository, providerManager(send), async () => ws, () => path, Date.now, undefined, { ...context, canShareContext: () => true }).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId })
     const prompt = JSON.parse(send.mock.calls[0]![0].messages[1]!.content)
     expect(prompt.presentationProfile).toMatchObject({ detail: 'detailed', explanation: 'step_by_step', examples: 'practical' })
     expect(prompt.topicLearningState).toEqual({ difficulty: 'medium', needsReview: true, confidence: 'low', assessmentCounts: { total: 2, correctFirstTry: 1, correctAfterHelp: 0, incorrect: 1 } })
@@ -153,7 +179,7 @@ describe('StudyLessonService', () => {
     const send = vi.fn<AIProvider['sendMessage']>(async () => ({ content: generated(topicId, 'decorators'), providerId: 'test', modelId: 'model' }))
     const sources = { sourcesFor: vi.fn(async () => Array.from({ length: 5 }, (_, index) => ({ id: `source-${index}`, title: `Source ${index}`, url: `https://docs.python.org/3/tutorial/${index}`, type: 'documentation' as const, authority: 'PSF', retrieved: true, retrievedAt: 1, excerpt: `Excerpt ${index}` }))) }
     const context = { getTopicLearningState: () => null, searchMaterials: () => Array.from({ length: 5 }, (_, index) => ({ chunkId: `chunk-${index}`, materialId: `material-${index}`, materialName: `Material ${index}`, pageNumber: index + 1, topicId: null, retrieval: 'lexical' as const, content: `Snippet ${index}` })) }
-    await new StudyLessonService(new MemoryLessons(), providerManager(send), async () => ws, () => path, Date.now, sources, context).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId })
+    await new StudyLessonService(new MemoryLessons(), providerManager(send), async () => ws, () => path, Date.now, sources, { ...context, canShareContext: () => true }).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId })
     const prompt = JSON.parse(send.mock.calls[0]![0].messages[1]!.content)
     expect(prompt.providedSources).toHaveLength(3)
     expect(prompt.materialSnippets).toHaveLength(3)

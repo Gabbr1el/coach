@@ -281,7 +281,7 @@ async function extractPdfPages(data: Uint8Array): Promise<string[]> {
   const privatePdf = join(directory, 'material.pdf')
   try {
     await writeFile(privatePdf, data, { mode: 0o400, flag: 'wx' })
-    const result = await promisify(execFile)('/usr/bin/bwrap', ['--die-with-parent', '--unshare-all', '--ro-bind', '/usr', '/usr', '--ro-bind', '/lib', '/lib', '--ro-bind-try', '/lib64', '/lib64', '--ro-bind', privatePdf, '/material.pdf', '--tmpfs', '/tmp', '--proc', '/proc', '--dev', '/dev', '/usr/bin/prlimit', '--cpu=15:15', '--as=536870912:536870912', '--fsize=8388608:8388608', '--nofile=32:32', '--nproc=8:8', '/usr/bin/pdftotext', '-layout', '-enc', 'UTF-8', '/material.pdf', '-'], { timeout: 20_000, killSignal: 'SIGKILL', maxBuffer: 6_000_000, windowsHide: true })
+    const result = await promisify(execFile)('/usr/bin/bwrap', ['--die-with-parent', '--unshare-all', '--clearenv', '--setenv', 'PATH', '/usr/bin', '--setenv', 'LANG', 'C.UTF-8', '--ro-bind', '/usr', '/usr', '--ro-bind', '/lib', '/lib', '--ro-bind-try', '/lib64', '/lib64', '--ro-bind', privatePdf, '/material.pdf', '--tmpfs', '/tmp', '--proc', '/proc', '--dev', '/dev', '/usr/bin/prlimit', '--cpu=15:15', '--as=536870912:536870912', '--fsize=8388608:8388608', '--nofile=32:32', '--nproc=8:8', '/usr/bin/pdftotext', '-layout', '-enc', 'UTF-8', '/material.pdf', '-'], { timeout: 20_000, killSignal: 'SIGKILL', maxBuffer: 6_000_000, windowsHide: true })
     const pages = result.stdout.split('\f')
     if (pages.at(-1)?.trim() === '') pages.pop()
     return pages

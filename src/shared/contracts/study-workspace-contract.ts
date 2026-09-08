@@ -45,11 +45,11 @@ export interface StudySessionSummary {
   readonly interventions: number
   readonly focusExits: number
   readonly completedPlanItems: number
-  readonly successRate?: number
-  readonly focusRetentionPercent?: number
-  readonly recommendation?: string
+  readonly successRate?: number | null
+  readonly focusRetentionPercent?: number | null
+  readonly recommendation?: string | null
 }
-export interface DailyStudyReport { readonly date: string; readonly startedAt: number; readonly endedAt: number; readonly focusSeconds: number; readonly executions: number; readonly errors: number; readonly interventions: number; readonly focusExits: number; readonly completedPlanItems: number; readonly successRate: number; readonly focusRetentionPercent: number; readonly sessionCount: number; readonly recommendation: string }
+export interface DailyStudyReport { readonly date: string; readonly startedAt: number; readonly endedAt: number; readonly focusSeconds: number; readonly executions: number; readonly errors: number; readonly interventions: number; readonly focusExits: number; readonly completedPlanItems: number; readonly successRate: number | null; readonly focusRetentionPercent: number | null; readonly sessionCount: number; readonly recommendation: string | null }
 
 export interface StudyPlanItem {
   readonly id: string

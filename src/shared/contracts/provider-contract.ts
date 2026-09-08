@@ -24,8 +24,14 @@ export const providerAccountIdSchema = z.uuid()
 export type ConfigureOpenAIInput = z.infer<typeof configureOpenAIInputSchema>
 export type ConfigureCompatibleInput = z.infer<typeof configureCompatibleInputSchema>
 
+export type ProviderConnectionState = 'not-configured' | 'unchecked' | 'connected' | 'unreachable'
+export type ProviderQuotaState = 'unknown' | 'available' | 'exhausted'
+
 export interface ProviderStatus {
   readonly configured: boolean
+  readonly connected: boolean
+  readonly connectionState: ProviderConnectionState
+  readonly quota: ProviderQuotaState
   readonly providerId: 'openai' | 'openai-compatible' | null
   readonly providerName: string | null
   readonly model: string | null

@@ -88,8 +88,9 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
     }
     send({ requestId: input.requestId, type: 'started' })
     try {
-      for await (const content of workspaceService.streamMessage(input.workspaceId, input, controller.signal)) send({ requestId: input.requestId, type: 'text-delta', content })
-      send({ requestId: input.requestId, type: 'completed', messages: await workspaceService.listMessages(input.workspaceId) })
+      let metadata: Extract<HomeStreamEvent, { type: 'completed' }>['metadata']
+      for await (const content of workspaceService.streamMessage(input.workspaceId, input, controller.signal, (value) => { metadata = value })) send({ requestId: input.requestId, type: 'text-delta', content })
+      send({ requestId: input.requestId, type: 'completed', messages: await workspaceService.listMessages(input.workspaceId), ...(metadata ? { metadata } : {}) })
     } catch {
       send(controller.signal.aborted ? { requestId: input.requestId, type: 'cancelled' } : { requestId: input.requestId, type: 'error', code: 'PROVIDER_UNAVAILABLE' })
     } finally {

@@ -34,6 +34,12 @@ const api: CoachDesktopApi = {
   studyLesson: {
     getOrCreate: (input) => ipcRenderer.invoke(STUDY_LESSON_CHANNELS.getOrCreate, input),
     evaluate: (input) => ipcRenderer.invoke(STUDY_LESSON_CHANNELS.evaluate, input),
+    adaptSection: (input) => ipcRenderer.invoke(STUDY_LESSON_CHANNELS.adaptSection, input),
+    listAdaptations: (input) => ipcRenderer.invoke(STUDY_LESSON_CHANNELS.listAdaptations, input),
+    restoreOriginal: (input) => ipcRenderer.invoke(STUDY_LESSON_CHANNELS.restoreOriginal, input),
+    activateAdaptation: (input) => ipcRenderer.invoke(STUDY_LESSON_CHANNELS.activateAdaptation, input),
+    getPreferences: (workspaceId) => ipcRenderer.invoke(STUDY_LESSON_CHANNELS.getPreferences, { workspaceId }),
+    updatePreferences: (input) => ipcRenderer.invoke(STUDY_LESSON_CHANNELS.updatePreferences, input),
   },
   workspace: {
     list: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.list),

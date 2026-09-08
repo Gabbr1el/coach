@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
@@ -11,6 +11,8 @@ import { DrizzleConversationRepository } from '../../src/main/repositories/drizz
 import { DrizzleStudyWorkspaceRepository } from '../../src/main/repositories/drizzle-study-workspace-repository'
 import { DrizzlePlannerActionRepository } from '../../src/main/repositories/drizzle-planner-action-repository'
 import { DrizzleRoadmapRepository } from '../../src/main/repositories/drizzle-roadmap-repository'
+import { SqliteStudyLessonRepository } from '../../src/main/repositories/sqlite-study-lesson-repository'
+import { studyLessonContentSchema, studyPresentationPreferencesSchema } from '../../src/shared/contracts/study-lesson-contract'
 
 const temporaryDirectories: string[] = []
 const migrationsFolder = resolve('drizzle/migrations')
@@ -27,7 +29,47 @@ function createDatabasePath(): string {
   return join(directory, 'coach.sqlite')
 }
 
+function migrationsThrough0028(): string {
+  const directory = mkdtempSync(join(tmpdir(), 'coach-migrations-0028-'))
+  temporaryDirectories.push(directory)
+  cpSync(migrationsFolder, directory, { recursive: true })
+  const journalPath = join(directory, 'meta/_journal.json')
+  const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: Array<{ idx: number }> }
+  journal.entries = journal.entries.filter((entry) => entry.idx <= 28)
+  writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`)
+  rmSync(join(directory, '0029_adaptive_study_pages.sql'))
+  return directory
+}
+
 describe('Coach database migrations', () => {
+  it('upgrades a populated 0028 database through the registered adaptive-page migration', () => {
+    const databasePath = createDatabasePath()
+    const oldMigrations = migrationsThrough0028()
+    let database = openCoachDatabase({ databasePath, migrationsFolder: oldMigrations })
+    database.sqlite.prepare("INSERT INTO workspaces (id, name, objective, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)").run('00000000-0000-4000-8000-000000000029', 'Sentinela 0028', 'Preservar no upgrade', 1, 1)
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 29 })
+    database.close()
+
+    database = openCoachDatabase({ databasePath, migrationsFolder })
+    expect(database.sqlite.prepare("SELECT name, objective FROM workspaces WHERE id = '00000000-0000-4000-8000-000000000029'").get()).toEqual({ name: 'Sentinela 0028', objective: 'Preservar no upgrade' })
+    expect(database.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('study_lesson_adaptations', 'workspace_study_preferences') ORDER BY name").all()).toEqual([{ name: 'study_lesson_adaptations' }, { name: 'workspace_study_preferences' }])
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: CURRENT_MIGRATION_COUNT })
+    validateCoachDatabaseSchema(database.sqlite)
+    database.close()
+  })
+
+  it('repairs the unpublished draft adaptive schema without deleting existing data', () => {
+    const databasePath = createDatabasePath()
+    let database = openCoachDatabase({ databasePath, migrationsFolder })
+    database.sqlite.exec('DROP INDEX study_lesson_adaptations_one_active; DROP INDEX study_lesson_adaptations_revision_unique; DROP INDEX study_lesson_adaptations_lesson_block_idx; DROP TABLE study_lesson_adaptations; CREATE TABLE study_lesson_adaptations (id text PRIMARY KEY NOT NULL, workspace_id text NOT NULL, lesson_id text NOT NULL, block_id text NOT NULL, instruction text NOT NULL, original_block_json text NOT NULL, adapted_block_json text NOT NULL, provider_id text, model_id text, created_at integer NOT NULL, restored_at integer);')
+    database.close()
+
+    database = openCoachDatabase({ databasePath, migrationsFolder })
+    expect((database.sqlite.pragma('table_info(study_lesson_adaptations)') as Array<{ name: string }>).map((column) => column.name)).toEqual(['id', 'workspace_id', 'lesson_id', 'source_block_id', 'revision', 'reason', 'mode', 'adapted_block_json', 'is_active', 'provider_id', 'model_id', 'created_at'])
+    validateCoachDatabaseSchema(database.sqlite)
+    database.close()
+  })
+
   it('creates the current domain schema and migration history', () => {
     const databasePath = createDatabasePath()
     const database = openCoachDatabase({ databasePath, migrationsFolder })
@@ -60,6 +102,7 @@ describe('Coach database migrations', () => {
       { name: 'session_topics' },
       { name: 'student_memory' },
       { name: 'study_deadlines' },
+      { name: 'study_lesson_adaptations' },
       { name: 'study_lessons' },
       { name: 'study_plan_items' },
       { name: 'study_progress' },
@@ -69,6 +112,7 @@ describe('Coach database migrations', () => {
       { name: 'workspace_learning_path_state' },
       { name: 'workspace_memories' },
       { name: 'workspace_projects' },
+      { name: 'workspace_study_preferences' },
       { name: 'workspace_study_states' },
       { name: 'workspaces' },
     ])
@@ -207,5 +251,9 @@ describe('Coach database migrations', () => {
   })
   it('preserves learning path lifecycle and active roadmap after reopening SQLite', async () => {
     const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const workspaces = new DrizzleWorkspaceRepository(database); const workspace = await workspaces.create({ id: crypto.randomUUID(), name: 'C', objective: 'Aprender C', createdAt: 1, updatedAt: 1 }); const repository = new DrizzleRoadmapRepository(database); repository.setLearningPathState({ workspaceId: workspace.id, status: 'waiting_for_provider', activeRoadmapId: null, lastAttemptAt: 2, retryAfter: 302000, lastErrorCode: 'PROVIDER_UNAVAILABLE', updatedAt: 2 }); const path = { id: crypto.randomUUID(), workspaceId: workspace.id, title: 'Trilha C', status: 'accepted' as const, generationKind: 'ai_generated' as const, version: 1, providerId: 'test', modelId: 'test', createdAt: 3, updatedAt: 3, modules: [{ id: crypto.randomUUID(), title: 'Tipos e compilação', objective: 'Compilar', estimatedMinutes: 60, position: 1, status: 'active' as const, topics: ['gcc', 'tipos'], outcomes: ['Compilar'], practice: 'Programa C', completionCriteria: ['Sem erros'], resources: [] }, { id: crypto.randomUUID(), title: 'Ponteiros', objective: 'Usar endereços', estimatedMinutes: 90, position: 2, status: 'locked' as const, topics: ['endereços', 'arrays'], outcomes: ['Explicar ponteiros'], practice: 'Vetor', completionCriteria: ['Sem acesso inválido'], resources: [] }] }; repository.activate(path); const databasePath = database.path; database.close(); const reopened = openCoachDatabase({ databasePath, migrationsFolder }); const restored = new DrizzleRoadmapRepository(reopened); expect(restored.getLearningPathState(workspace.id)).toMatchObject({ status: 'ready', activeRoadmapId: path.id, retryAfter: null }); expect(restored.findCurrent(workspace.id)?.id).toBe(path.id); reopened.close()
+  })
+  it('defaults legacy lesson sources and persists adaptations and preferences', async () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const workspaces = new DrizzleWorkspaceRepository(database); const workspace = await workspaces.create({ id: crypto.randomUUID(), name: 'C', objective: 'Ponteiros', createdAt: 1, updatedAt: 1 }); const repository = new SqliteStudyLessonRepository(database); const roadmapId = crypto.randomUUID(); const moduleId = crypto.randomUUID(); const content = { title: 'Ponteiros', level: 'basic' as const, objective: 'Compreender endereços', blocks: Array.from({ length: 4 }, (_, index) => ({ id: `b${index}`, type: 'explanation' as const, title: `Bloco ${index}`, content: 'Conteúdo' })) }; database.sqlite.prepare('INSERT INTO study_lessons (id, workspace_id, roadmap_id, module_id, topic_id, generation_kind, content_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run('lesson', workspace.id, roadmapId, moduleId, 'topic', 'ai_generated', JSON.stringify(content), 1, 1)
+    const lesson = repository.find(roadmapId, 'topic')!; expect(lesson.sources).toEqual([]); const readBaseJson = () => (database.sqlite.prepare('SELECT content_json AS contentJson FROM study_lessons WHERE id = ?').get(lesson.id) as { contentJson: string }).contentJson; const baseJson = readBaseJson(); const baseBlock = lesson.blocks[0]!; if (!('content' in baseBlock)) throw new Error('Expected text block'); const adapted = { ...baseBlock, content: 'Mais simples' }; const first = repository.createAdaptation({ id: 'adaptation-1', workspaceId: workspace.id, lessonId: lesson.id, blockId: adapted.id, reason: 'Simplifique', mode: 'SIMPLIFY', adaptedBlock: adapted, providerId: 'test', modelId: 'model', createdAt: 2 }); const second = repository.createAdaptation({ id: 'adaptation-2', workspaceId: workspace.id, lessonId: lesson.id, blockId: adapted.id, reason: 'Seja direto', mode: 'MORE_CONCISE', adaptedBlock: { ...adapted, content: 'Direto' }, providerId: 'test', modelId: 'model', createdAt: 3 }); expect(readBaseJson()).toBe(baseJson); expect(repository.find(roadmapId, 'topic')!.blocks[0]).toMatchObject({ content: 'Direto' }); expect(repository.listAdaptations(lesson.id, adapted.id)).toMatchObject([{ revision: 2, reason: 'Seja direto', isActive: true }, { revision: 1, reason: 'Simplifique', isActive: false }]); expect(repository.restoreOriginal(lesson.id, adapted.id).blocks[0]).toEqual(lesson.blocks[0]); expect(repository.listAdaptations(lesson.id, adapted.id)).toHaveLength(2); expect(repository.activateAdaptation(lesson.id, adapted.id, first.id).blocks[0]).toEqual(adapted); expect(repository.listAdaptations(lesson.id, adapted.id).filter((item) => item.isActive)).toHaveLength(1); expect(() => database.sqlite.prepare('UPDATE study_lesson_adaptations SET is_active = 1 WHERE id = ?').run(second.id)).toThrow(); expect(readBaseJson()).toBe(baseJson); expect(second.revision).toBe(2); expect(repository.getPreferences(workspace.id)).toEqual(studyPresentationPreferencesSchema.parse({})); const preference = studyPresentationPreferencesSchema.parse({ detail: 'concise', explanation: 'simple', examples: 'practical', evidence: [{ intent: 'ANALOGY', source: 'situational', topicId: 'topic', blockId: adapted.id }] }); expect(repository.setPreferences(workspace.id, preference, 4)).toEqual(preference); expect(repository.getPreferences(workspace.id)).toEqual(preference); expect(studyLessonContentSchema.parse(content).sources).toEqual([]); database.close()
   })
 })

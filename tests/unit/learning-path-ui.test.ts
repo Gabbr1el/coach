@@ -18,7 +18,8 @@ describe('learning path UI integration', () => {
   it('keeps the canonical module and topic identifier through selection', () => {
     expect(appSource).toContain('const topicId = `${module.id}:${topic}`')
     expect(appSource).toContain('studyLesson.getOrCreate({ workspaceId: selected.id, roadmapId: roadmap.id, moduleId: module.id, topicId })')
-    expect(appSource).toContain('studyProgress.select({ workspaceId: selected.id, roadmapId: roadmap.id, moduleId: module.id, topicId, lessonId: lesson.id')
+    expect(appSource).toContain("if (lessonLoad.status !== 'ready')")
+    expect(appSource).toContain('studyProgress.select({ workspaceId: selected.id, roadmapId: roadmap.id, moduleId: module.id, topicId, lessonId: lessonLoad.lesson.id')
     expect(drawerSource).toContain('const topicId = `${module.id}:${topic}`')
   })
 
@@ -38,5 +39,25 @@ describe('learning path UI integration', () => {
     expect(appSource).toContain('A Trilha será preparada quando a IA estiver disponível.')
     expect(appSource).toContain('Não foi possível concluir a Trilha agora. O Coach tentará novamente automaticamente.')
     expect(appSource).not.toContain('Gere ou aceite')
+  })
+
+  it('renders a continuous knowledge page and persists independent checkpoints', () => {
+    expect(lessonSource).toContain('lesson.blocks.map')
+    expect(lessonSource).toContain('new IntersectionObserver')
+    expect(lessonSource).toContain('checkpointStatesRef.current')
+    expect(lessonSource).toContain('onPosition(position, nextStates)')
+    expect(lessonSource).toContain('Concluir tópico')
+    expect(lessonSource).not.toContain('blockIndex')
+    expect(lessonSource).not.toContain('completedBlockIds: [...')
+    expect(appSource).toContain('checkpointStates }).then(setStudyProgress)')
+  })
+
+  it('keeps review mode non-destructive and Practice non-completing', () => {
+    expect(lessonSource).toContain('lesson.blocks.map')
+    expect(lessonSource).not.toContain('lesson.blocks.filter')
+    expect(lessonSource).toContain('reviewMode && reviewTypes.has(block.type)')
+    expect(lessonSource).toContain('currentExerciseId: block.type === \'miniExercise\' ? block.id')
+    expect(appSource).toContain("onPractice={() => setWorkspacePage('practice')}")
+    expect(appSource).not.toContain('onComplete={(exerciseCompleted)')
   })
 })

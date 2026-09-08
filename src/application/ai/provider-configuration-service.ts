@@ -4,12 +4,17 @@ import type { ProviderConfigurationRepository } from './provider-configuration-r
 import type { ProviderAccountSummary, ProviderStatus } from '../../shared/contracts/provider-contract'
 import type { AIProvider } from './ai-provider'
 
+export type ProviderHealth = { readonly connected: boolean; readonly quota: 'unknown' | 'available' | 'exhausted' }
+
 const OPENAI_SECRET_REFERENCE = 'provider-openai-api-key'
 function isLocalOmniRoute(baseUrl: string | null): boolean { try { const url = new URL(baseUrl ?? ''); return (url.hostname === '127.0.0.1' || url.hostname === 'localhost') && url.port === '20128' } catch { return false } }
+function isQuotaError(error: unknown): boolean { return error instanceof Error && 'code' in error && error.code === 'INSUFFICIENT_QUOTA' }
+function failedHealth(error: unknown): ProviderHealth { return { connected: false, quota: isQuotaError(error) ? 'exhausted' : 'unknown' } }
 
 export class ProviderConfigurationService {
   private operationQueue: Promise<void> = Promise.resolve()
   private sessionAccount: ProviderAccountSummary | null = null
+  private readonly healthByAccount = new Map<string, ProviderHealth>()
 
   constructor(
     private readonly repository: ProviderConfigurationRepository,
@@ -38,8 +43,13 @@ export class ProviderConfigurationService {
   async getStatus(): Promise<ProviderStatus> {
     const configuration = await this.repository.getActive()
     const sessionActive = Boolean(this.sessionAccount && this.manager.getActiveRegistrationId() === this.sessionAccount.id)
+    const accountId = sessionActive ? this.sessionAccount!.id : configuration?.id ?? null
+    const health: ProviderHealth = accountId ? this.healthByAccount.get(accountId) ?? { connected: false, quota: 'unknown' } : { connected: false, quota: 'unknown' }
     return {
-      configured: sessionActive || Boolean(configuration && this.manager.getActive() && configuration.id === this.manager.getActiveRegistrationId()),
+      configured: sessionActive || Boolean(configuration),
+      connected: health.connected && Boolean(this.manager.getActive()),
+      connectionState: sessionActive || configuration ? (health.connected && this.manager.getActive() ? 'connected' : this.manager.getActive() ? 'unchecked' : 'unreachable') : 'not-configured',
+      quota: health.quota,
       providerId: sessionActive ? this.sessionAccount!.providerId : configuration?.providerId ?? null,
       providerName: sessionActive ? this.sessionAccount!.providerName : configuration?.displayName ?? null,
       model: sessionActive ? this.sessionAccount!.model : configuration?.model ?? null,
@@ -74,14 +84,16 @@ export class ProviderConfigurationService {
     }
 
     const provider = this.createOpenAIProvider(apiKey, model)
-    await provider.testConnection()
+    const health = await this.verifyConnection(provider)
     if (persistence === 'session') {
       const accountId = crypto.randomUUID()
+      this.healthByAccount.set(accountId, health)
       this.sessionAccount = { id: accountId, providerId: 'openai', providerName: 'OpenAI', label, model, isActive: true, sessionOnly: true, baseUrl: null }
       this.registerAndSelect(accountId, provider)
       return this.getStatus()
     }
     const accountId = crypto.randomUUID()
+    this.healthByAccount.set(accountId, health)
     const secretReference = `${OPENAI_SECRET_REFERENCE}-${accountId}`
     await this.vault.set(secretReference, apiKey)
     const now = this.now()
@@ -115,8 +127,9 @@ export class ProviderConfigurationService {
     return this.exclusive(async () => {
       if (persistence === 'secure-vault' && !this.vault.isAvailable()) throw new Error('Secure operating-system credential storage is unavailable')
       const provider = this.createCompatibleProvider(label, baseUrl, apiKey, model)
-      await provider.testConnection()
+      const health = await this.verifyConnection(provider)
       const accountId = crypto.randomUUID()
+      this.healthByAccount.set(accountId, health)
       if (persistence === 'session') {
         this.sessionAccount = { id: accountId, providerId: 'openai-compatible', providerName: label, label, model, isActive: true, sessionOnly: true, baseUrl }
         this.registerAndSelect(accountId, provider)
@@ -150,7 +163,14 @@ export class ProviderConfigurationService {
     const provider = configuration.providerId === 'openai'
       ? this.createOpenAIProvider(apiKey, configuration.model)
       : this.createCompatibleProvider(configuration.label, configuration.baseUrl ?? '', apiKey, configuration.model)
-    if (testConnection) await provider.testConnection()
+    if (testConnection) {
+      try {
+        this.healthByAccount.set(accountId, await this.verifyConnection(provider))
+      } catch (error) {
+        this.healthByAccount.set(accountId, failedHealth(error))
+        throw error
+      }
+    }
     await this.repository.activate(accountId, this.now())
     this.sessionAccount = null
     this.registerAndSelect(accountId, provider)
@@ -167,12 +187,14 @@ export class ProviderConfigurationService {
       if (this.sessionAccount?.id === accountId) {
         this.manager.remove(accountId)
         this.sessionAccount = null
+        this.healthByAccount.delete(accountId)
       }
       return this.getStatus()
     }
     if (configuration.isActive) this.manager.remove(accountId)
     await this.vault.delete(configuration.secretReference)
     const removed = await this.repository.remove(accountId)
+    this.healthByAccount.delete(accountId)
     if (!configuration.isActive) this.manager.remove(accountId)
     if (removed?.isActive && !this.sessionAccount) {
       await this.activateFirstUsable(await this.repository.list(), true)
@@ -189,18 +211,27 @@ export class ProviderConfigurationService {
         const provider = configuration.providerId === 'openai'
           ? this.createOpenAIProvider(apiKey, configuration.model)
           : this.createCompatibleProvider(configuration.label, configuration.baseUrl ?? '', apiKey, configuration.model)
-        if (testConnection) await provider.testConnection()
+        if (testConnection) this.healthByAccount.set(configuration.id, await this.verifyConnection(provider))
         await this.repository.activate(configuration.id, this.now())
         this.registerAndSelect(configuration.id, provider)
         return true
-      } catch {
+      } catch (error) {
+        this.healthByAccount.set(configuration.id, failedHealth(error))
         continue
       }
     }
     return false
   }
 
-  private activateLocalOmniRoute(id: string, label: string, baseUrl: string, model: string): void { this.sessionAccount = { id, providerId: 'openai-compatible', providerName: label, label, model, isActive: true, sessionOnly: true, baseUrl }; this.registerAndSelect(id, this.createCompatibleProvider(label, baseUrl, 'omniroute', model)) }
+  private activateLocalOmniRoute(id: string, label: string, baseUrl: string, model: string): void {
+    this.sessionAccount = { id, providerId: 'openai-compatible', providerName: label, label, model, isActive: true, sessionOnly: true, baseUrl }
+    this.registerAndSelect(id, this.createCompatibleProvider(label, baseUrl, 'omniroute', model))
+  }
+
+  private async verifyConnection(provider: AIProvider): Promise<ProviderHealth> {
+    await provider.testConnection()
+    return { connected: true, quota: 'available' }
+  }
 
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
     const previous = this.operationQueue

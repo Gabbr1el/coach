@@ -1,21 +1,38 @@
 import { ipcMain } from 'electron'
 import type { CoachDatabase } from '../database/connection'
 import { STUDY_PROGRESS_CHANNELS } from '../../shared/contracts/study-progress-channels'
-import { recordStudyEventSchema, studySelectionSchema, updateStudyPositionSchema, type StudyLessonPosition, type StudyProgressState } from '../../shared/contracts/study-progress-contract'
+import { recordStudyEventSchema, studyCheckpointStateSchema, studyLessonPositionSchema, studySelectionSchema, updateStudyPositionSchema, type StudyCheckpointState, type StudyLessonPosition, type StudyProgressState } from '../../shared/contracts/study-progress-contract'
+import { studyLessonContentSchema } from '../../shared/contracts/study-lesson-contract'
 import { workspaceConversationInputSchema } from '../../shared/contracts/conversation-contract'
 import { assertTrustedSender } from './trusted-sender'
 import { applyLearningEvidence, emptyTopicLearningState, shouldReplan, type TopicLearningState } from '../../application/study-progress/topic-learning'
 
-type ProgressRow = { workspaceId: string; roadmapId: string; currentModuleId: string; currentTopicId: string; currentLessonId: string; currentCheckpointId: string | null; topicStatusesJson: string; lessonPositionsJson: string; updatedAt: number }
+type ProgressRow = { workspaceId: string; roadmapId: string; currentModuleId: string; currentTopicId: string; currentLessonId: string; currentCheckpointId: string | null; topicStatusesJson: string; lessonPositionsJson: string; checkpointStatesJson?: string; updatedAt: number }
+type LessonBlockRow = { contentJson: string }
+type LessonCheckpoint = Extract<ReturnType<typeof studyLessonContentSchema.parse>['blocks'][number], { type: 'checkpoint' }>
+
+function lessonCheckpoints(database: CoachDatabase, state: StudyProgressState, lessonId: string): LessonCheckpoint[] {
+  const row = database.sqlite.prepare('SELECT content_json AS contentJson FROM study_lessons WHERE id = ? AND workspace_id = ? AND roadmap_id = ? AND module_id = ? AND topic_id = ?').get(lessonId, state.workspaceId, state.roadmapId, state.moduleId, state.topicId) as LessonBlockRow | undefined
+  if (!row) throw new Error('Study lesson not found for evidence')
+  return studyLessonContentSchema.parse(JSON.parse(row.contentJson)).blocks.filter((block): block is LessonCheckpoint => block.type === 'checkpoint')
+}
+
+export function assertTopicCompletionAllowed(database: CoachDatabase, state: StudyProgressState, lessonId: string): void {
+  const checkpoints = lessonCheckpoints(database, state, lessonId)
+  if (checkpoints.length < 2 || !checkpoints.every((checkpoint) => state.checkpointStates?.[checkpoint.id]?.correct === true)) throw new Error('Topic completion requires all lesson checkpoints to be correct')
+}
 
 export function mapStudyProgressState(row: ProgressRow): StudyProgressState {
-  const lessonPositions = JSON.parse(row.lessonPositionsJson) as Record<string, StudyLessonPosition>
-  return { ...row, moduleId: row.currentModuleId, topicId: row.currentTopicId, lessonId: row.currentLessonId, checkpointId: row.currentCheckpointId, topicStatuses: JSON.parse(row.topicStatusesJson) as StudyProgressState['topicStatuses'], lessonPositions, currentPosition: lessonPositions[row.currentLessonId] ?? null }
+  const positions = JSON.parse(row.lessonPositionsJson) as Record<string, StudyLessonPosition>
+  const rawCheckpointStates = row.checkpointStatesJson ? JSON.parse(row.checkpointStatesJson) as Record<string, unknown> : {}
+  const checkpointStates = Object.fromEntries(Object.entries(rawCheckpointStates).map(([id, state]) => [id, studyCheckpointStateSchema.parse(state)]))
+  for (const position of Object.values(positions)) studyLessonPositionSchema.parse(position)
+  return { ...row, moduleId: row.currentModuleId, topicId: row.currentTopicId, lessonId: row.currentLessonId, checkpointId: row.currentCheckpointId, topicStatuses: JSON.parse(row.topicStatusesJson) as StudyProgressState['topicStatuses'], lessonPositions: positions, checkpointStates, currentPosition: positions[row.currentLessonId] ?? null }
 }
 
 export function registerStudyProgressHandlers(database: CoachDatabase): void {
   const get = (workspaceId: string) => {
-    const row = database.sqlite.prepare('SELECT workspace_id AS workspaceId, roadmap_id AS roadmapId, current_module_id AS currentModuleId, current_topic_id AS currentTopicId, current_lesson_id AS currentLessonId, current_checkpoint_id AS currentCheckpointId, topic_statuses_json AS topicStatusesJson, lesson_positions_json AS lessonPositionsJson, updated_at AS updatedAt FROM study_progress WHERE workspace_id = ?').get(workspaceId) as ProgressRow | undefined
+    const row = database.sqlite.prepare('SELECT workspace_id AS workspaceId, roadmap_id AS roadmapId, current_module_id AS currentModuleId, current_topic_id AS currentTopicId, current_lesson_id AS currentLessonId, current_checkpoint_id AS currentCheckpointId, topic_statuses_json AS topicStatusesJson, lesson_positions_json AS lessonPositionsJson, checkpoint_states_json AS checkpointStatesJson, updated_at AS updatedAt FROM study_progress WHERE workspace_id = ?').get(workspaceId) as ProgressRow | undefined
     return row ? mapStudyProgressState(row) : null
   }
   ipcMain.handle(STUDY_PROGRESS_CHANNELS.get, (event, payload) => { assertTrustedSender(event); return get(workspaceConversationInputSchema.parse(payload).workspaceId) })
@@ -32,7 +49,7 @@ export function registerStudyProgressHandlers(database: CoachDatabase): void {
     const checkpointId = positions[input.lessonId]?.currentCheckpointId ?? input.checkpointId
     const now = Date.now()
     database.sqlite.transaction(() => {
-      database.sqlite.prepare(`INSERT INTO study_progress (workspace_id, roadmap_id, current_module_id, current_topic_id, current_lesson_id, current_checkpoint_id, topic_statuses_json, lesson_positions_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET roadmap_id=excluded.roadmap_id, current_module_id=excluded.current_module_id, current_topic_id=excluded.current_topic_id, current_lesson_id=excluded.current_lesson_id, current_checkpoint_id=excluded.current_checkpoint_id, topic_statuses_json=excluded.topic_statuses_json, lesson_positions_json=excluded.lesson_positions_json, updated_at=excluded.updated_at`).run(input.workspaceId, input.roadmapId, input.moduleId, input.topicId, input.lessonId, checkpointId, JSON.stringify(statuses), JSON.stringify(positions), now)
+      database.sqlite.prepare(`INSERT INTO study_progress (workspace_id, roadmap_id, current_module_id, current_topic_id, current_lesson_id, current_checkpoint_id, topic_statuses_json, lesson_positions_json, checkpoint_states_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET roadmap_id=excluded.roadmap_id, current_module_id=excluded.current_module_id, current_topic_id=excluded.current_topic_id, current_lesson_id=excluded.current_lesson_id, current_checkpoint_id=excluded.current_checkpoint_id, topic_statuses_json=excluded.topic_statuses_json, lesson_positions_json=excluded.lesson_positions_json, checkpoint_states_json=excluded.checkpoint_states_json, updated_at=excluded.updated_at`).run(input.workspaceId, input.roadmapId, input.moduleId, input.topicId, input.lessonId, checkpointId, JSON.stringify(statuses), JSON.stringify(positions), JSON.stringify(sameRoadmap ? existing?.checkpointStates ?? {} : {}), now)
       if (started) database.sqlite.prepare('INSERT INTO study_progress_events (id, workspace_id, type, module_id, topic_id, lesson_id, checkpoint_id, correct, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)').run(crypto.randomUUID(), input.workspaceId, 'TOPIC_STARTED', input.moduleId, input.topicId, input.lessonId, checkpointId, now)
     })()
     return get(input.workspaceId)
@@ -44,7 +61,7 @@ export function registerStudyProgressHandlers(database: CoachDatabase): void {
     if (!existing || existing.lessonId !== input.position.lessonId) throw new Error('Study lesson is not the active lesson')
     const positions = { ...existing.lessonPositions, [input.position.lessonId]: input.position }
     const now = Date.now()
-    database.sqlite.prepare('UPDATE study_progress SET current_checkpoint_id = ?, lesson_positions_json = ?, updated_at = ? WHERE workspace_id = ?').run(input.position.currentCheckpointId, JSON.stringify(positions), now, input.workspaceId)
+    database.sqlite.prepare('UPDATE study_progress SET current_checkpoint_id = ?, lesson_positions_json = ?, checkpoint_states_json = ?, updated_at = ? WHERE workspace_id = ?').run(input.position.currentCheckpointId, JSON.stringify(positions), JSON.stringify(input.checkpointStates ?? existing.checkpointStates ?? {}), now, input.workspaceId)
     return get(input.workspaceId)
   })
   ipcMain.handle(STUDY_PROGRESS_CHANNELS.record, (event, payload) => {
@@ -52,10 +69,20 @@ export function registerStudyProgressHandlers(database: CoachDatabase): void {
     const input = recordStudyEventSchema.parse(payload)
     const active = get(input.workspaceId)
     if (!active || active.moduleId !== input.moduleId || active.topicId !== input.topicId || active.lessonId !== input.lessonId) throw new Error('Study evidence does not match the active topic')
+    if (input.type === 'TOPIC_COMPLETED') assertTopicCompletionAllowed(database, active, input.lessonId)
+    let checkpointStates = active.checkpointStates ?? {}
+    if (input.type === 'CHECKPOINT_ANSWERED') {
+      const checkpoint = lessonCheckpoints(database, active, input.lessonId).find((item) => item.id === input.checkpointId)
+      if (!checkpoint || input.selectedAnswer === undefined || input.attempt === undefined || input.correct !== (input.selectedAnswer === checkpoint.correctIndex)) throw new Error('Checkpoint evidence does not match the authoritative lesson')
+      const previous = checkpointStates[checkpoint.id]
+      if (input.attempt !== (previous?.attempt ?? 0) + 1) throw new Error('Checkpoint attempt is not sequential')
+      checkpointStates = { ...checkpointStates, [checkpoint.id]: { selectedAnswer: input.selectedAnswer, attempt: input.attempt, correct: input.correct, feedback: previous?.feedback ?? null, reinforcementBlocks: previous?.reinforcementBlocks ?? [] } }
+    }
     const id = crypto.randomUUID()
     const now = Date.now()
     let replan = false
     database.sqlite.transaction(() => {
+      if (input.type === 'CHECKPOINT_ANSWERED') database.sqlite.prepare('UPDATE study_progress SET current_checkpoint_id = ?, checkpoint_states_json = ?, updated_at = ? WHERE workspace_id = ?').run(input.checkpointId, JSON.stringify(checkpointStates), now, input.workspaceId)
       database.sqlite.prepare('INSERT INTO study_progress_events (id, workspace_id, type, module_id, topic_id, lesson_id, checkpoint_id, correct, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, input.workspaceId, input.type, input.moduleId, input.topicId, input.lessonId, input.checkpointId, input.correct === undefined ? null : Number(input.correct), now)
       if (input.type === 'TOPIC_COMPLETED') { const state = get(input.workspaceId); if (state) database.sqlite.prepare('UPDATE study_progress SET topic_statuses_json = ?, updated_at = ? WHERE workspace_id = ?').run(JSON.stringify({ ...state.topicStatuses, [input.topicId]: 'COMPLETED' }), now, input.workspaceId) }
       const row = database.sqlite.prepare('SELECT workspace_id AS workspaceId, topic_id AS topicId, evidence_count AS evidenceCount, assessments, correct_first_try AS correctFirstTry, correct_after_help AS correctAfterHelp, incorrect, hints_used AS hintsUsed, reinforcement_events AS reinforcementEvents, exercises_completed AS exercisesCompleted, lessons_completed AS lessonsCompleted, difficulty_level AS difficultyLevel, mastery_estimate AS masteryEstimate, confidence, needs_review AS needsReview, last_practiced_at AS lastPracticedAt, last_assessed_at AS lastAssessedAt, reasons_json AS reasonsJson, updated_at AS updatedAt FROM topic_learning_states WHERE workspace_id = ? AND topic_id = ?').get(input.workspaceId, input.topicId) as (Omit<TopicLearningState, 'reasons'> & { reasonsJson: string }) | undefined

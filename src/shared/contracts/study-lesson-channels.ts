@@ -1,1 +1,1 @@
-export const STUDY_LESSON_CHANNELS = { getOrCreate: 'study-lesson:get-or-create', evaluate: 'study-lesson:evaluate' } as const
+export const STUDY_LESSON_CHANNELS = { getOrCreate: 'study-lesson:get-or-create', evaluate: 'study-lesson:evaluate', adaptSection: 'study-lesson:adapt-section', listAdaptations: 'study-lesson:list-adaptations', restoreOriginal: 'study-lesson:restore-original', activateAdaptation: 'study-lesson:activate-adaptation', getPreferences: 'study-lesson:get-preferences', updatePreferences: 'study-lesson:update-preferences' } as const

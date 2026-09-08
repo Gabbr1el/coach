@@ -12,6 +12,7 @@ export const studyProgress = sqliteTable('study_progress', {
   currentCheckpointId: text('current_checkpoint_id'),
   topicStatusesJson: text('topic_statuses_json').notNull().default('{}'),
   lessonPositionsJson: text('lesson_positions_json').notNull().default('{}'),
+  checkpointStatesJson: text('checkpoint_states_json').notNull().default('{}'),
   updatedAt: integer('updated_at').notNull(),
 })
 

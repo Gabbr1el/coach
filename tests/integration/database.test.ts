@@ -1,11 +1,10 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { cpSync, existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { resolve } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openCoachDatabase } from '../../src/main/database/connection'
-import { CURRENT_MIGRATION_COUNT, validateCoachDatabaseSchema } from '../../src/main/database/restore-recovery'
+import { CURRENT_MIGRATION_COUNT, finishPendingRestore, recoverPendingRestore, rollbackPendingRestore, validateCoachDatabaseSchema } from '../../src/main/database/restore-recovery'
 import { DrizzleWorkspaceRepository } from '../../src/main/repositories/drizzle-workspace-repository'
 import { DrizzleConversationRepository } from '../../src/main/repositories/drizzle-conversation-repository'
 import { DrizzleStudyWorkspaceRepository } from '../../src/main/repositories/drizzle-study-workspace-repository'
@@ -27,7 +26,36 @@ function createDatabasePath(): string {
   return join(directory, 'coach.sqlite')
 }
 
+function migrationsThrough0028(): string {
+  const directory = mkdtempSync(join(tmpdir(), 'coach-migrations-0028-'))
+  temporaryDirectories.push(directory)
+  cpSync(migrationsFolder, directory, { recursive: true })
+  const journalPath = join(directory, 'meta/_journal.json')
+  const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: Array<{ idx: number }> }
+  journal.entries = journal.entries.filter((entry) => entry.idx <= 28)
+  writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`)
+  rmSync(join(directory, '0029_adaptive_study_pages.sql'))
+  return directory
+}
+
 describe('Coach database migrations', () => {
+  it('upgrades a populated 0028 database through migration 0029 without losing data', () => {
+    const databasePath = createDatabasePath()
+    const oldMigrations = migrationsThrough0028()
+    let database = openCoachDatabase({ databasePath, migrationsFolder: oldMigrations })
+    database.sqlite.prepare("INSERT INTO workspaces (id, name, objective, status, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?)").run('workspace-0028', 'Sentinela 0028', 'Preservar no upgrade', 1, 1)
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: 29 })
+    database.close()
+
+    database = openCoachDatabase({ databasePath, migrationsFolder })
+    expect(database.sqlite.prepare("SELECT name, objective FROM workspaces WHERE id = 'workspace-0028'").get()).toEqual({ name: 'Sentinela 0028', objective: 'Preservar no upgrade' })
+    expect(database.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('study_lesson_adaptations', 'workspace_study_preferences') ORDER BY name").all()).toEqual([{ name: 'study_lesson_adaptations' }, { name: 'workspace_study_preferences' }])
+    expect((database.sqlite.pragma('table_info(study_progress)') as Array<{ name: string }>).some((column) => column.name === 'checkpoint_states_json')).toBe(true)
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: CURRENT_MIGRATION_COUNT })
+    expect(() => validateCoachDatabaseSchema(database.sqlite)).not.toThrow()
+    database.close()
+  })
+
   it('creates the current domain schema and migration history', () => {
     const databasePath = createDatabasePath()
     const database = openCoachDatabase({ databasePath, migrationsFolder })
@@ -60,6 +88,7 @@ describe('Coach database migrations', () => {
       { name: 'session_topics' },
       { name: 'student_memory' },
       { name: 'study_deadlines' },
+      { name: 'study_lesson_adaptations' },
       { name: 'study_lessons' },
       { name: 'study_plan_items' },
       { name: 'study_progress' },
@@ -69,11 +98,55 @@ describe('Coach database migrations', () => {
       { name: 'workspace_learning_path_state' },
       { name: 'workspace_memories' },
       { name: 'workspace_projects' },
+      { name: 'workspace_study_preferences' },
       { name: 'workspace_study_states' },
       { name: 'workspaces' },
     ])
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: CURRENT_MIGRATION_COUNT })
     expect(() => validateCoachDatabaseSchema(sqlite)).not.toThrow()
+    database.close()
+  })
+
+  it('preserves a valid restored database across interrupted recovery and finalization', () => {
+    const databasePath = createDatabasePath()
+    let database = openCoachDatabase({ databasePath, migrationsFolder })
+    database.sqlite.prepare('INSERT INTO workspaces (id, name, objective, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run('current', 'Atual', 'Banco anterior', 1, 1)
+    database.close()
+
+    const staging = `${databasePath}.restore-staging`
+    database = openCoachDatabase({ databasePath: staging, migrationsFolder })
+    database.sqlite.prepare('INSERT INTO workspaces (id, name, objective, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run('restored', 'Restaurado', 'Banco selecionado', 2, 2)
+    database.close()
+    writeFileSync(`${databasePath}.restore-pending`, 'pending\n')
+
+    recoverPendingRestore(databasePath)
+    recoverPendingRestore(databasePath)
+    database = openCoachDatabase({ databasePath, migrationsFolder })
+    expect(database.sqlite.prepare('SELECT id FROM workspaces ORDER BY id').all()).toEqual([{ id: 'restored' }])
+    expect(() => validateCoachDatabaseSchema(database.sqlite)).not.toThrow()
+    database.close()
+
+    finishPendingRestore(databasePath)
+    expect(existsSync(`${databasePath}.restore-pending`)).toBe(false)
+    expect(existsSync(`${databasePath}.restore-previous`)).toBe(false)
+  })
+
+  it('rolls back a restored database and removes stale WAL state after startup failure', () => {
+    const databasePath = createDatabasePath()
+    let database = openCoachDatabase({ databasePath, migrationsFolder })
+    database.sqlite.prepare('INSERT INTO workspaces (id, name, objective, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run('current', 'Atual', 'Banco anterior', 1, 1)
+    database.close()
+    renameSync(databasePath, `${databasePath}.restore-previous`)
+    writeFileSync(databasePath, 'not a sqlite database')
+    writeFileSync(`${databasePath}-wal`, 'stale wal')
+    writeFileSync(`${databasePath}-shm`, 'stale shm')
+    writeFileSync(`${databasePath}.restore-pending`, 'pending\n')
+
+    rollbackPendingRestore(databasePath)
+    expect(existsSync(`${databasePath}-wal`)).toBe(false)
+    expect(existsSync(`${databasePath}-shm`)).toBe(false)
+    database = openCoachDatabase({ databasePath, migrationsFolder })
+    expect(database.sqlite.prepare("SELECT name FROM workspaces WHERE id = 'current'").get()).toEqual({ name: 'Atual' })
     database.close()
   })
 
@@ -103,6 +176,18 @@ describe('Coach database migrations', () => {
     expect(sqlite.pragma('busy_timeout', { simple: true })).toBe(5000)
     database.close()
     expect(database.sqlite.open).toBe(false)
+  })
+
+  it('retains migration location and root cause when startup initialization fails', () => {
+    const databasePath = createDatabasePath()
+    const missingMigrations = join(dirname(databasePath), 'missing-migrations')
+    let thrown: unknown
+    try { openCoachDatabase({ databasePath, migrationsFolder: missingMigrations }) } catch (error) { thrown = error }
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toContain(databasePath)
+    expect((thrown as Error).message).toContain(missingMigrations)
+    expect((thrown as Error).cause).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toContain((thrown as Error & { cause: Error }).cause.message)
   })
 
   it('rejects invalid names and inconsistent archive state', () => {

@@ -58,7 +58,9 @@ export function openCoachDatabase(options: OpenCoachDatabaseOptions = {}): Coach
     }
   } catch (error) {
     if (sqlite.open) sqlite.close()
-    const message = error instanceof Error ? error.message : 'Unknown database initialization error'
-    throw new Error(`Could not initialize Coach database: ${message}`, { cause: error })
+    const detail = error instanceof Error
+      ? error.stack ?? `${error.name}: ${error.message}`
+      : String(error)
+    throw new Error(`Could not initialize Coach database at ${databasePath} using migrations from ${migrationsFolder}: ${detail}`, { cause: error })
   }
 }

@@ -2,7 +2,7 @@ import { closeSync, existsSync, fsyncSync, openSync, renameSync, rmSync } from '
 import { dirname } from 'node:path'
 import type Database from 'better-sqlite3'
 
-export const CURRENT_MIGRATION_COUNT = 29
+export const CURRENT_MIGRATION_COUNT = 30
 
 function syncDirectory(path: string): void {
   const descriptor = openSync(dirname(path), 'r')
@@ -20,9 +20,16 @@ export function recoverPendingRestore(databasePath: string): void {
     renameSync(databasePath, previous)
     syncDirectory(databasePath)
   }
+  if (existsSync(staging)) {
+    rmSync(`${databasePath}-wal`, { force: true })
+    rmSync(`${databasePath}-shm`, { force: true })
+    rmSync(databasePath, { force: true })
+    renameSync(staging, databasePath)
+    syncDirectory(databasePath)
+    return
+  }
   if (!existsSync(databasePath)) {
-    if (existsSync(staging)) renameSync(staging, databasePath)
-    else if (existsSync(previous)) renameSync(previous, databasePath)
+    if (existsSync(previous)) renameSync(previous, databasePath)
     else throw new Error('Coach restore recovery could not find a database copy')
     syncDirectory(databasePath)
   }
@@ -32,6 +39,8 @@ export function rollbackPendingRestore(databasePath: string): void {
   const marker = `${databasePath}.restore-pending`
   const previous = `${databasePath}.restore-previous`
   if (!existsSync(marker) || !existsSync(previous)) return
+  rmSync(`${databasePath}-wal`, { force: true })
+  rmSync(`${databasePath}-shm`, { force: true })
   rmSync(databasePath, { force: true })
   renameSync(previous, databasePath)
   rmSync(`${databasePath}.restore-staging`, { force: true })
@@ -41,25 +50,26 @@ export function rollbackPendingRestore(databasePath: string): void {
 
 export function validateCoachDatabaseSchema(sqlite: Database.Database): void {
   const integrity = sqlite.pragma('quick_check') as Array<{ quick_check: string }>
-  if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok') throw new Error('Coach database integrity check failed')
+  if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok') throw new Error(`Coach database integrity check failed: ${integrity.map((row) => row.quick_check).join('; ') || 'no result'}`)
   const foreignKeyErrors = sqlite.pragma('foreign_key_check') as unknown[]
-  if (foreignKeyErrors.length) throw new Error('Coach database contains invalid relationships')
+  if (foreignKeyErrors.length) throw new Error(`Coach database contains ${foreignKeyErrors.length} invalid relationship(s): ${JSON.stringify(foreignKeyErrors[0])}`)
   const migrationCount = (sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get() as { count: number }).count
-  if (migrationCount !== CURRENT_MIGRATION_COUNT) throw new Error('Coach backup version is incompatible with this application')
+  if (migrationCount !== CURRENT_MIGRATION_COUNT) throw new Error(`Coach backup version is incompatible with this application: expected ${CURRENT_MIGRATION_COUNT} migrations, found ${migrationCount}`)
   const requirements: Record<string, string[]> = {
     workspaces: ['id', 'name', 'objective'], conversation_threads: ['id', 'workspace_id'], conversation_messages: ['id', 'thread_id', 'content'],
     study_sessions: ['id', 'workspace_id', 'status'], workspace_study_states: ['workspace_id', 'active_session_id'], learning_events: ['id', 'session_id', 'type'],
     provider_configurations: ['id', 'provider_id', 'secret_reference'], materials: ['id', 'workspace_id', 'status', 'relevance'], material_chunks: ['id', 'material_id', 'content'],
     study_deadlines: ['id', 'workspace_id', 'due_at'], study_plan_items: ['id', 'session_id', 'status'], session_memories: ['id', 'session_id'], workspace_memories: ['id', 'workspace_id'], student_memory: ['id', 'summary'], saved_for_later: ['id', 'workspace_id'], session_topics: ['id', 'session_id'], routine_notes: ['id', 'content'],
     workspace_projects: ['id', 'workspace_id', 'language'], project_files: ['id', 'project_id', 'path', 'revision'], project_ui_states: ['project_id', 'active_file_id'], project_builds: ['id', 'project_id', 'diagnostics_json'],
-    roadmaps: ['id', 'workspace_id', 'status', 'generation_kind', 'version'], workspace_learning_path_state: ['workspace_id', 'status', 'active_roadmap_id', 'retry_after'], study_lessons: ['id', 'workspace_id', 'roadmap_id', 'topic_id', 'generation_kind', 'content_json'], roadmap_modules: ['id', 'roadmap_id', 'position', 'status', 'topics_json', 'practice', 'completion_criteria_json', 'resources_json'],
+    roadmaps: ['id', 'workspace_id', 'status', 'generation_kind', 'version'], workspace_learning_path_state: ['workspace_id', 'status', 'active_roadmap_id', 'retry_after'], study_lessons: ['id', 'workspace_id', 'roadmap_id', 'topic_id', 'generation_kind', 'content_json'], study_progress: ['workspace_id', 'checkpoint_states_json'], study_lesson_adaptations: ['id', 'workspace_id', 'lesson_id', 'source_block_id', 'revision', 'reason', 'mode', 'adapted_block_json', 'is_active'], workspace_study_preferences: ['workspace_id', 'preferences_json', 'updated_at'], roadmap_modules: ['id', 'roadmap_id', 'position', 'status', 'topics_json', 'practice', 'completion_criteria_json', 'resources_json'],
     topic_learning_states: ['workspace_id', 'topic_id', 'evidence_count', 'difficulty_level', 'mastery_estimate', 'confidence', 'needs_review', 'reasons_json'],
     roadmap_adaptations: ['id', 'roadmap_id', 'module_id', 'topic_id', 'kind', 'source', 'reason_json'],
     planner_actions: ['id', 'origin_message_id', 'label', 'context_version', 'idempotency_key', 'type', 'status', 'payload_json'],
   }
   for (const [table, requiredColumns] of Object.entries(requirements)) {
     const columns = new Set((sqlite.pragma(`table_info(${table})`) as Array<{ name: string }>).map((column) => column.name))
-    if (requiredColumns.some((column) => !columns.has(column))) throw new Error(`Coach database schema is missing ${table}`)
+    const missingColumns = requiredColumns.filter((column) => !columns.has(column))
+    if (missingColumns.length) throw new Error(`Coach database schema is missing ${table}.${missingColumns.join(`, ${table}.`)}`)
   }
 }
 

@@ -15,12 +15,18 @@ class MemoryProjectRepository implements ProjectRepository {
 }
 
 describe('ProjectService', () => {
-  it('creates a multi-file Java starter project', async () => {
+  it.each([
+    ['python', 'src/main.py', ['src/main.py'], 'print("Coach")'],
+    ['c', 'src/main.c', ['src/main.c'], '#include <stdio.h>'],
+    ['java', 'src/Main.java', ['src/Main.java', 'src/Pessoa.java'], 'public class Main'],
+  ] as const)('creates a semantically correct %s starter project', async (language, entryFilePath, paths, sourceMarker) => {
     const repository = new MemoryProjectRepository()
     let id = 0
     const service = new ProjectService(repository, async () => true, () => 10, () => `00000000-0000-4000-8000-${String(++id).padStart(12, '0')}`)
-    const project = await service.create('00000000-0000-4000-8000-000000000001', 'POO', 'java')
-    expect(project.entryFilePath).toBe('src/Main.java')
-    expect(project.files.map((file) => file.path)).toEqual(['src/Main.java', 'src/Pessoa.java'])
+    const project = await service.create('00000000-0000-4000-8000-000000000001', 'Prática', language)
+    expect(project.entryFilePath).toBe(entryFilePath)
+    expect(project.files.map((file) => file.path)).toEqual(paths)
+    expect(project.files[0]?.content).toContain(sourceMarker)
+    expect(project.files.some((file) => file.content.includes('LinkedList'))).toBe(false)
   })
 })

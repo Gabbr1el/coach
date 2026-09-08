@@ -18,27 +18,15 @@ export interface StudyWorkspaceServiceDependencies {
   readonly getPlanContext?: (workspaceId: string) => { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; learningStates: Map<string, import('../study-progress/topic-learning').TopicLearningState>; startMinutes: number; dayKey: string; lastPlannedDayKey: string | null }
 }
 
-const DEFAULT_CODE = `class Node:
-    def __init__(self, value):
-        self.value = value
-        self.next = None
+interface WorkspaceCodeProfile { fileName: string; language: string; editorContent: string }
 
-
-class LinkedList:
-    def __init__(self):
-        self.head = None
-
-    def append(self, value):
-        new_node = Node(value)
-        if not self.head:
-            self.head = new_node
-            return
-
-        current = self.head
-        while current.next:
-            current = current.next
-        current.next = new_node
-`
+export function workspaceCodeProfile(workspace: Pick<Workspace, 'name' | 'objective'>): WorkspaceCodeProfile {
+  const context = `${workspace.name} ${workspace.objective}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  if (/\bjava\b/.test(context)) return { fileName: 'Main.java', language: 'java', editorContent: 'public class Main {\n    public static void main(String[] args) {\n        System.out.println("Coach");\n    }\n}\n' }
+  if (/\blinguagem\s+c\b|\bprogramacao\s+(?:em\s+)?c\b|\bponteiros?\b|\bstructs?\b|^c\b/.test(context)) return { fileName: 'main.c', language: 'c', editorContent: '#include <stdio.h>\n\nint main(void) {\n    puts("Coach");\n    return 0;\n}\n' }
+  if (/\bpython\b/.test(context)) return { fileName: 'main.py', language: 'python', editorContent: 'print("Coach")\n' }
+  return { fileName: 'notes.txt', language: 'plaintext', editorContent: '' }
+}
 
 function createRoadmapPlan(workspaceId: string, roadmap: Roadmap | null, progress: StudyProgressState | null, existing: StudyPlanItem[], createId: () => string, context?: { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; learningStates: Map<string, import('../study-progress/topic-learning').TopicLearningState>; startMinutes: number }): StudyPlanItem[] { return roadmap ? deriveDailyPlan({ workspaceId, roadmap, progress, availableMinutes: context?.availableMinutes ?? 120, phase: context?.phase ?? null, learningStates: context?.learningStates ?? new Map(), startMinutes: context?.startMinutes ?? 18 * 60 }, existing, createId) : [] }
 
@@ -56,20 +44,21 @@ export class StudyWorkspaceService {
     const now = this.now()
     const existing = await this.dependencies.repository.findState(workspaceId, now)
     if (existing) return existing
+    const plan = createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, [], this.createId, this.dependencies.getPlanContext?.(workspaceId))
+    const activePlanItem = plan.find((item) => item.status === 'active') ?? null
+    const timerDurationSeconds = activePlanItem?.durationMinutes ? activePlanItem.durationMinutes * 60 : 60
     const initialState: StudyWorkspaceState = {
       workspaceId,
       sessionId: this.createId(),
       sessionStartedAt: now,
-      fileName: 'main.py',
-      language: 'python',
-      editorContent: DEFAULT_CODE,
+      ...workspaceCodeProfile(workspace),
       notes: '',
       shareContextWithAi: false,
-      timerDurationSeconds: 1500,
-      timerRemainingSeconds: 1500,
+      timerDurationSeconds,
+      timerRemainingSeconds: timerDurationSeconds,
       timerStatus: 'idle',
       timerStartedAt: null,
-       plan: createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, [], this.createId, this.dependencies.getPlanContext?.(workspaceId)),
+      plan,
       updatedAt: now,
       documentRevision: 0,
       notesRevision: 0,
@@ -118,15 +107,18 @@ export class StudyWorkspaceService {
         ? (candidate.status === 'completed' ? 'active' : 'completed') as StudyPlanItem['status']
         : candidate.status === 'active' ? 'pending' as const : candidate.status,
     }))
+    let nextActive: StudyPlanItem | null = null
     if (item.status !== 'completed') {
-      const next = state.plan.find((candidate) => candidate.position > item.position && candidate.status !== 'completed' && candidate.id !== itemId)
+      nextActive = state.plan.find((candidate) => candidate.position > item.position && candidate.status !== 'completed' && candidate.id !== itemId)
         ?? state.plan.find((candidate) => candidate.status !== 'completed' && candidate.id !== itemId)
-      if (next) {
-        const status = nextStatuses.find((candidate) => candidate.id === next.id)
+        ?? null
+      if (nextActive) {
+        const status = nextStatuses.find((candidate) => candidate.id === nextActive!.id)
         if (status) status.status = 'active'
       }
-    }
+    } else nextActive = item
     await this.dependencies.repository.replacePlanStatuses(workspaceId, state.sessionId, nextStatuses, this.now())
+    await this.dependencies.repository.setTimerDuration(workspaceId, state.sessionId, nextActive ? nextActive.durationMinutes * 60 : 60, this.now())
     const next = await this.getState(workspaceId)
     this.publish(next, 'plan.changed', { itemId, status: next.plan.find((candidate) => candidate.id === itemId)?.status })
     return next
@@ -137,6 +129,8 @@ export class StudyWorkspaceService {
     const plan = createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, state.plan, this.createId, this.dependencies.getPlanContext?.(workspaceId))
     const context = this.dependencies.getPlanContext?.(workspaceId)
     await this.dependencies.repository.replacePlan(workspaceId, state.sessionId, plan, this.now(), context?.dayKey)
+    const active = plan.find((item) => item.status === 'active') ?? null
+    await this.dependencies.repository.setTimerDuration(workspaceId, state.sessionId, active ? active.durationMinutes * 60 : 60, this.now())
     return this.getState(workspaceId)
   }
   async refreshLivePlan(workspaceId: string): Promise<StudyWorkspaceState> { const context = this.dependencies.getPlanContext?.(workspaceId); if (!context || context.lastPlannedDayKey === context.dayKey) return this.getState(workspaceId); return this.recalculatePlan(workspaceId) }
@@ -155,7 +149,10 @@ export class StudyWorkspaceService {
     const state = await this.getState(workspaceId)
     const now = this.now()
     const remaining = this.effectiveRemaining(state, now)
-    const timer = action === 'reset'
+    const hasActivePlanItem = state.plan.some((item) => item.status === 'active')
+    const timer = action === 'start' && !hasActivePlanItem
+      ? { timerStatus: 'idle' as const, timerRemainingSeconds: state.timerRemainingSeconds, timerStartedAt: null, accumulatedFocusSeconds: state.accumulatedFocusSeconds }
+      : action === 'reset'
       ? { timerStatus: 'idle' as const, timerRemainingSeconds: state.timerDurationSeconds, timerStartedAt: null, accumulatedFocusSeconds: state.accumulatedFocusSeconds + (state.timerDurationSeconds - remaining) }
       : action === 'pause'
         ? { timerStatus: 'paused' as const, timerRemainingSeconds: remaining, timerStartedAt: null, accumulatedFocusSeconds: state.accumulatedFocusSeconds }
@@ -170,6 +167,7 @@ export class StudyWorkspaceService {
 
   async setTimerDuration(workspaceId: string, durationSeconds: number): Promise<StudyWorkspaceState> {
     const state = await this.getState(workspaceId)
+    if (!state.plan.some((item) => item.status === 'active')) return state
     await this.dependencies.repository.setTimerDuration(workspaceId, state.sessionId, durationSeconds, this.now())
     const next = await this.getState(workspaceId)
     this.publish(next, 'timer.changed', { action: 'duration', durationSeconds })

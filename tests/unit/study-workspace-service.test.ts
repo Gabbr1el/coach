@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StudyWorkspaceRepository } from '../../src/application/study-workspaces/study-workspace-repository'
-import { StudyWorkspaceService } from '../../src/application/study-workspaces/study-workspace-service'
+import { StudyWorkspaceService, workspaceCodeProfile } from '../../src/application/study-workspaces/study-workspace-service'
 import type { StudyPlanItem, StudyWorkspaceState } from '../../src/shared/contracts/study-workspace-contract'
 
 class MemoryStudyWorkspaceRepository implements StudyWorkspaceRepository {
@@ -22,7 +22,19 @@ class MemoryStudyWorkspaceRepository implements StudyWorkspaceRepository {
 const workspace = { id: '00000000-0000-4000-8000-000000000321', name: 'Algoritmos', objective: 'Aprender listas', status: 'active' as const, createdAt: 1, updatedAt: 1, lastOpenedAt: null, archivedAt: null }
 
 describe('StudyWorkspaceService', () => {
-  it('creates and updates a valid state without roadmap or plan', async () => { const repository = new MemoryStudyWorkspaceRepository(); const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, getRoadmap: () => null, now: () => 100, createId: () => crypto.randomUUID() }); const initial = await service.getState(workspace.id); expect(initial.plan).toEqual([]); expect((await service.updateContextSharing(workspace.id, true)).shareContextWithAi).toBe(true); expect((await service.recalculatePlan(workspace.id)).plan).toEqual([]) })
+  it.each([
+    [{ name: 'Estruturas em C', objective: 'Praticar ponteiros' }, { fileName: 'main.c', language: 'c', marker: '#include <stdio.h>' }],
+    [{ name: 'POO Java', objective: 'Praticar classes' }, { fileName: 'Main.java', language: 'java', marker: 'public class Main' }],
+    [{ name: 'Python', objective: 'Praticar funções' }, { fileName: 'main.py', language: 'python', marker: 'print("Coach")' }],
+    [{ name: 'História', objective: 'Revisar conteúdo' }, { fileName: 'notes.txt', language: 'plaintext', marker: '' }],
+  ])('derives a neutral or language-correct initial document', (input, expected) => {
+    const profile = workspaceCodeProfile(input)
+    expect(profile).toMatchObject({ fileName: expected.fileName, language: expected.language })
+    expect(profile.editorContent).toContain(expected.marker)
+    expect(profile.editorContent).not.toContain('LinkedList')
+  })
+
+  it('does not start a focus timer when there is no daily plan', async () => { const repository = new MemoryStudyWorkspaceRepository(); const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, getRoadmap: () => null, now: () => 100, createId: () => crypto.randomUUID() }); const initial = await service.getState(workspace.id); expect(initial).toMatchObject({ plan: [], timerStatus: 'idle' }); expect((await service.updateTimer(workspace.id, 'start')).timerStatus).toBe('idle'); expect((await service.updateContextSharing(workspace.id, true)).shareContextWithAi).toBe(true); expect((await service.recalculatePlan(workspace.id)).plan).toEqual([]) })
   it('creates one durable initial study state with a guided plan', async () => {
     const repository = new MemoryStudyWorkspaceRepository()
     let id = 0
@@ -32,6 +44,7 @@ describe('StudyWorkspaceService', () => {
     expect(state.plan).toHaveLength(4)
     expect(state.shareContextWithAi).toBe(false)
     expect(state.plan[0]).toMatchObject({ status: 'active', durationMinutes: 30, title: 'Listas encadeadas / introdução' })
+    expect(state).toMatchObject({ timerDurationSeconds: 1800, timerRemainingSeconds: 1800, timerStatus: 'idle' })
     expect((await service.getState(workspace.id)).sessionId).toBe(state.sessionId)
   })
 
@@ -59,12 +72,13 @@ describe('StudyWorkspaceService', () => {
   it('accounts for elapsed running timer time before pausing', async () => {
     const repository = new MemoryStudyWorkspaceRepository()
     let now = 1_000
-    const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, now: () => now, createId: () => crypto.randomUUID() })
-    await service.getState(workspace.id)
+    const roadmap = { id: crypto.randomUUID(), workspaceId: workspace.id, title: 'Algoritmos', status: 'accepted' as const, generationKind: 'ai_generated' as const, version: 1, providerId: null, modelId: null, createdAt: 1, updatedAt: 1, modules: [{ id: crypto.randomUUID(), title: 'Listas', objective: 'Aprender listas', estimatedMinutes: 120, position: 1, status: 'active' as const, topics: ['Listas'], outcomes: [], practice: 'Implementar', completionCriteria: [], resources: [] }] }
+    const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, getRoadmap: () => roadmap, now: () => now, createId: () => crypto.randomUUID() })
+    const initial = await service.getState(workspace.id)
     await service.updateTimer(workspace.id, 'start')
     now += 10_000
     const paused = await service.updateTimer(workspace.id, 'pause')
-    expect(paused.timerRemainingSeconds).toBe(1490)
+    expect(paused.timerRemainingSeconds).toBe(initial.timerDurationSeconds - 10)
     expect(paused.timerStatus).toBe('paused')
   })
 })

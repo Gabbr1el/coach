@@ -6,9 +6,15 @@ import { assertTrustedSender } from './trusted-sender'
 import type { ObserverService } from '../../application/observer/observer-service'
 import type { DrizzleProjectRepository } from '../repositories/drizzle-project-repository'
 import type { CoachDatabase } from '../database/connection'
+import { createHash } from 'node:crypto'
 import { ToolchainManager } from '../code-execution/toolchain-manager'
 
 const activeSenders = new Set<number>()
+
+function sourceRevision(project: { entryFilePath: string; files: Array<{ path: string; content: string }> }): string {
+  const source = project.files.map((file) => `${file.path}\0${file.content}`).sort().join('\0')
+  return createHash('sha256').update(`${project.entryFilePath}\0${source}`).digest('hex').slice(0, 16)
+}
 
 export function registerCodeExecutionHandlers(workspaceExists: (id: string) => Promise<boolean>, observer: ObserverService, projects?: DrizzleProjectRepository, database?: CoachDatabase, toolchains = new ToolchainManager()): void {
   ipcMain.handle(CODE_EXECUTION_CHANNELS.execute, async (event, payload: unknown) => {
@@ -44,7 +50,7 @@ export function registerCodeExecutionHandlers(workspaceExists: (id: string) => P
     try {
       const result = await toolchains.execute(project, controller.signal)
       let observerState
-      try { observerState = observer.recordExecution(input.workspaceId, result) } catch (error) { console.error('Could not persist local execution event:', error) }
+      try { observerState = observer.recordExecution(input.workspaceId, { ...result, sourceRevision: sourceRevision(project) }) } catch (error) { console.error('Could not persist local execution event:', error) }
       if (database) database.sqlite.prepare('INSERT INTO project_builds (id, project_id, command, exit_code, timed_out, duration_ms, stdout, stderr, diagnostics_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(crypto.randomUUID(), project.id, result.command, result.exitCode, Number(result.timedOut), result.durationMs, result.stdout, result.stderr, JSON.stringify(result.diagnostics ?? []), Date.now())
       return { ...result, observerState }
     } finally { event.sender.removeListener('destroyed', destroyed); activeSenders.delete(event.sender.id) }

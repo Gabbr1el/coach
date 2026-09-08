@@ -72,7 +72,7 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
       if (plan.length > 0) this.database.orm.insert(studyPlanItems).values(plan.map((item) => ({ ...item, workspaceId, sessionId: nextSessionId, createdAt: now, updatedAt: now }))).run()
       const changed = this.database.orm.update(workspaceStudyStates).set({ activeSessionId: nextSessionId, timerStatus: 'idle', timerStartedAt: null, timerRemainingSeconds: timerDurationSeconds, accumulatedFocusSeconds: 0, updatedAt: now }).where(and(eq(workspaceStudyStates.workspaceId, workspaceId), eq(workspaceStudyStates.activeSessionId, currentSessionId))).run()
       if (changed.changes !== 1) throw new Error('Study session changed while completing')
-      const metrics = this.database.sqlite.prepare("SELECT SUM(type = 'execution_error') AS errors, SUM(type = 'code_executed') AS successes, SUM(type = 'possible_learning_loop') AS loops, SUM(type = 'window_blurred') AS exits FROM learning_events WHERE session_id = ?").get(currentSessionId) as { errors: number | null; successes: number | null; loops: number | null; exits: number | null }
+      const metrics = this.database.sqlite.prepare("SELECT SUM(type = 'execution_error') AS errors, SUM(type = 'code_executed') AS successes, SUM(type = 'possible_learning_loop') AS loops, SUM(type = 'window_focused' AND json_extract(payload_json, '$.focusExit') = 1) AS exits FROM learning_events WHERE session_id = ?").get(currentSessionId) as { errors: number | null; successes: number | null; loops: number | null; exits: number | null }
       const summary = `Sessão de ${Math.floor(focusSeconds / 60)} minutos focados; ${metrics.successes ?? 0} execuções bem-sucedidas; ${metrics.errors ?? 0} erros; ${metrics.loops ?? 0} loops; ${metrics.exits ?? 0} saídas de foco.`
       this.database.sqlite.prepare('INSERT INTO session_memories (id, session_id, summary, created_at) VALUES (?, ?, ?, ?)').run(crypto.randomUUID(), currentSessionId, summary, now)
       const recent = this.database.sqlite.prepare('SELECT summary FROM session_memories sm JOIN study_sessions s ON s.id = sm.session_id WHERE s.workspace_id = ? ORDER BY s.ended_at DESC, s.started_at DESC, sm.rowid DESC LIMIT 8').all(workspaceId) as Array<{ summary: string }>
@@ -85,7 +85,7 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
       SUM(CASE WHEN e.type IN ('code_executed','execution_error') THEN 1 ELSE 0 END) AS executions,
       SUM(CASE WHEN e.type = 'execution_error' THEN 1 ELSE 0 END) AS errors,
       SUM(CASE WHEN e.type = 'possible_learning_loop' THEN 1 ELSE 0 END) AS interventions,
-      SUM(CASE WHEN e.type = 'window_blurred' THEN 1 ELSE 0 END) AS focusExits,
+      SUM(CASE WHEN e.type = 'window_focused' AND json_extract(e.payload_json, '$.focusExit') = 1 THEN 1 ELSE 0 END) AS focusExits,
       (SELECT COUNT(*) FROM study_plan_items p WHERE p.session_id = s.id AND p.status = 'completed') AS completedPlanItems
       FROM study_sessions s LEFT JOIN learning_events e ON e.session_id = s.id
       WHERE s.workspace_id = ? GROUP BY s.id ORDER BY s.started_at DESC LIMIT ?`).all(workspaceId, limit) as StudySessionSummary[]

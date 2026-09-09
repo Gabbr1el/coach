@@ -108,6 +108,17 @@ describe('WorkspaceCoachService', () => {
     expect(providerRequest!.messages[0]?.content).toContain('Somente afirme que código foi executado quando o contexto autorizado contiver lastExecution')
   })
 
+  it('routes the active inline code block and authoritative validation to the Tutor', async () => {
+    const manager = new AIProviderManager()
+    let providerRequest: AIRequest | null = null
+    manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: JSON.stringify({ kind: 'final_response' }), providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Revise a saída.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
+    manager.select('stream')
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(true), contextHub: { immediate: async () => ({}), read: async () => null } as any })
+    const activeInteractiveCode = { lessonId: 'lesson', blockId: 'run', interactionType: 'FIX_AND_RUN' as const, instruction: 'Corrija a soma', language: 'python' as const, code: 'print(1 + 1)', prediction: null, attempts: 2, lastExecution: { stdout: '2\n', stderr: '', exitCode: 0, timedOut: false }, validationResult: { status: 'passed' as const, message: 'Saída validada.' } }
+    for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Explique o resultado', activePage: 'studies', activeInteractiveCode }, new AbortController().signal)) {}
+    expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ activeInteractiveCode })
+  })
+
   it.each([
     ['simplifique esta parte', 'SIMPLIFY'],
     ['use uma analogia', 'ANALOGY'],

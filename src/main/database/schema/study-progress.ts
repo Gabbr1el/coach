@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm'
 import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import { workspaces } from './workspaces'
 import { roadmapModules, roadmaps } from './roadmaps'
+import { studyLessons } from './study-lessons'
 
 export const studyProgress = sqliteTable('study_progress', {
   workspaceId: text('workspace_id').primaryKey().references(() => workspaces.id, { onDelete: 'cascade' }),
@@ -22,7 +23,7 @@ export const studyProgressEvents = sqliteTable('study_progress_events', {
   type: text('type', { enum: ['TOPIC_STARTED', 'TOPIC_COMPLETED', 'CHECKPOINT_ANSWERED', 'HELP_USED'] }).notNull(),
   moduleId: text('module_id').notNull(),
   topicId: text('topic_id').notNull(),
-  lessonId: text('lesson_id').notNull(),
+  lessonId: text('lesson_id').notNull().references(() => studyLessons.id, { onDelete: 'cascade' }),
   checkpointId: text('checkpoint_id'),
   correct: integer('correct', { mode: 'boolean' }),
   createdAt: integer('created_at').notNull(),
@@ -30,6 +31,22 @@ export const studyProgressEvents = sqliteTable('study_progress_events', {
   check('study_progress_events_type_check', sql`${table.type} in ('TOPIC_STARTED','TOPIC_COMPLETED','CHECKPOINT_ANSWERED','HELP_USED')`),
   index('study_progress_events_workspace_created_idx').on(table.workspaceId, table.createdAt),
   index('study_progress_events_topic_type_idx').on(table.topicId, table.type),
+])
+
+export const studyInteractiveCodeStates = sqliteTable('study_interactive_code_states', {
+  workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }),
+  lessonId: text('lesson_id').notNull(),
+  blockId: text('block_id').notNull(),
+  currentCode: text('current_code').notNull(),
+  prediction: text('prediction'),
+  attempts: integer('attempts').notNull().default(0),
+  lastExecutionJson: text('last_execution_json'),
+  validationResultJson: text('validation_result_json'),
+  evidenceGrantedAt: integer('evidence_granted_at'),
+  updatedAt: integer('updated_at').notNull(),
+}, (table) => [
+  uniqueIndex('study_interactive_code_states_workspace_lesson_block_idx').on(table.workspaceId, table.lessonId, table.blockId),
+  index('study_interactive_code_states_lesson_idx').on(table.lessonId),
 ])
 
 export const topicLearningStates = sqliteTable('topic_learning_states', {

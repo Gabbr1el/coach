@@ -41,6 +41,7 @@ function generated(topicId: string, topic: string, language = 'python', code = '
     { id: `${topicId}:mechanism`, type: 'explanation', title: `Mecanismo de ${topic}`, content: `O mecanismo de ${topic} transforma entradas concretas em resultados verificáveis.` },
     { id: `${topicId}:analogy`, type: 'analogy', title: `Analogia de ${topic}`, content: `Compare ${topic} a uma camada que preserva um contrato.` },
     { id: `${topicId}:code`, type: 'codeExample', title: `${topic} em código`, language, code, expectedOutput: null, walkthrough: [`Identifique ${topic}.`, `Observe o resultado de ${topic}.`] },
+    { id: `${topicId}:interactive`, type: 'interactiveCode', title: `Execute ${topic}`, interactionType: 'EDIT_AND_RUN', language: language === 'c' ? 'c' : 'python', instruction: `Edite e execute ${topic}.`, initialCode: code, predictionPrompt: null, evidenceMode: 'observation', expectedOutput: null },
     { id: `${topicId}:error`, type: 'commonError', title: `Erro em ${topic}`, content: `Confundir o mecanismo de ${topic} quebra o contrato esperado.` },
     { id: `${topicId}:compare`, type: 'comparison', title: `Compare ${topic}`, content: `${topic} não equivale a apenas repetir código.` },
     { id: `${topicId}:check-model`, type: 'checkpoint', questionType: 'multiple_choice', title: `Verifique o modelo de ${topic}`, question: `Qual opção descreve o modelo de ${topic}?`, options: [{ id: 'correct', text: 'Preservar o contrato', rationale: 'Mantém o comportamento definido pelo tópico.' }, { id: 'ignore', text: 'Ignorar o mecanismo', rationale: `Ignora o modelo de ${topic}.`, misconceptionTag: 'ignored-mechanism' }, { id: 'similar', text: 'Aplicar um conceito apenas parecido', rationale: 'Confunde conceitos próximos.', misconceptionTag: 'similar-concept' }, { id: 'partial', text: 'Preservar somente parte do contrato', rationale: 'É parcialmente correto, mas deixa garantias de fora.', misconceptionTag: 'partial-contract' }, { id: 'plausible', text: 'Trocar o contrato por convenção', rationale: 'Parece plausível, mas convenção não substitui o contrato.', misconceptionTag: 'convention' }], correctOptionId: 'correct', requiresJustification: true, hint: `Observe o contrato de ${topic}.`, reinforcement: `Revise como ${topic} preserva o contrato.` },
@@ -56,6 +57,12 @@ describe('StudyLessonService', () => {
     const result = studyLessonBlockSchema.safeParse(checkpoint)
     expect(result.success).toBe(false)
     if (!result.success) expect(result.error.issues.map((issue) => issue.path.join('.'))).toEqual(expect.arrayContaining(['options']))
+  })
+
+  it('enforces executable block prediction and validation contracts', () => {
+    const base = { id: 'run', type: 'interactiveCode' as const, title: 'Execute', interactionType: 'PREDICT_AND_RUN' as const, language: 'python' as const, instruction: 'Preveja e execute', initialCode: 'print(1)', predictionPrompt: null, evidenceMode: 'validated' as const, expectedOutput: null }
+    expect(studyLessonBlockSchema.safeParse(base).success).toBe(false)
+    expect(studyLessonBlockSchema.safeParse({ ...base, predictionPrompt: 'Qual saída?', expectedOutput: '1' }).success).toBe(true)
   })
 
   it('keeps only the two genuinely specific local lessons', () => {
@@ -302,9 +309,9 @@ describe('StudyLessonService', () => {
     expect(repository.adaptations).toEqual([])
   })
 
-  it.each(['checkpoint', 'miniExercise'] as const)('refuses direct adaptation of %s blocks without calling the provider', async (type) => {
+  it.each(['checkpoint', 'miniExercise', 'interactiveCode'] as const)('refuses direct adaptation of %s blocks without calling the provider', async (type) => {
     const item = module(['decorators']); const ws = workspace('Python Avançado'); const path = roadmap(ws.id, item); const topicId = `${item.id}:decorators`; const repository = new MemoryLessons(); const original = localLesson(ws, item, 'decorators', topicId)!; repository.create({ ...original, id: 'lesson', generationKind: 'ai_generated', workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId, providerId: 'old', modelId: 'old', createdAt: 1 }); const send = vi.fn<AIProvider['sendMessage']>(); const service = new StudyLessonService(repository, providerManager(send), async () => ws, () => path); const block = original.blocks.find((item) => item.type === type)!
-    await expect(service.adaptSection({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId, lessonId: 'lesson', blockId: block.id, instruction: 'Simplifique' })).rejects.toThrow('Assessment blocks cannot be adapted directly')
+    await expect(service.adaptSection({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId, lessonId: 'lesson', blockId: block.id, instruction: 'Simplifique' })).rejects.toThrow('cannot be adapted directly')
     expect(send).not.toHaveBeenCalled()
   })
 })

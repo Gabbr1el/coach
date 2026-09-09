@@ -4,6 +4,10 @@ import { roadmapResourceSchema } from './roadmap-contract'
 
 const textBlock = z.object({ id: z.string().min(1), type: z.enum(['explanation', 'analogy', 'warning', 'commonError', 'comparison']), title: z.string().min(1).max(160), content: z.string().min(1).max(4000) }).strict()
 const codeBlock = z.object({ id: z.string().min(1), type: z.literal('codeExample'), title: z.string().min(1).max(160), code: z.string().min(1).max(8000), language: z.string().min(1).max(40), expectedOutput: z.string().max(2000).nullable(), walkthrough: z.array(z.string().min(1).max(500)).max(12) }).strict()
+export const interactiveCodeBlockSchema = z.object({ id: z.string().min(1), type: z.literal('interactiveCode'), title: z.string().min(1).max(160), interactionType: z.enum(['PREDICT_AND_RUN', 'EDIT_AND_RUN', 'FIX_AND_RUN']), language: z.enum(['python', 'c']), instruction: z.string().min(1).max(2000), initialCode: z.string().min(1).max(20_000), predictionPrompt: z.string().min(1).max(1000).nullable(), evidenceMode: z.enum(['none', 'observation', 'validated']), expectedOutput: z.string().max(4000).nullable() }).strict().superRefine((value, context) => {
+  if (value.interactionType === 'PREDICT_AND_RUN' && !value.predictionPrompt) context.addIssue({ code: 'custom', path: ['predictionPrompt'], message: 'Prediction blocks require a prediction prompt' })
+  if (value.evidenceMode === 'validated' && value.expectedOutput === null) context.addIssue({ code: 'custom', path: ['expectedOutput'], message: 'Validated blocks require an expected output' })
+})
 export const checkpointOptionSchema = z.object({ id: z.string().min(1).max(120), text: z.string().min(1).max(500), rationale: z.string().min(1).max(1000), misconceptionTag: z.string().min(1).max(120).optional() }).strict()
 const checkpointBlock = z.object({ id: z.string().min(1), type: z.literal('checkpoint'), title: z.string().min(1).max(160), questionType: z.literal('multiple_choice').default('multiple_choice'), question: z.string().min(1).max(1000), options: z.array(checkpointOptionSchema).length(5), correctOptionId: z.string().min(1).max(120), requiresJustification: z.boolean().default(true), hint: z.string().min(1).max(1000), reinforcement: z.string().min(1).max(2000) }).strict().superRefine((value, context) => {
   const optionIds = value.options.map((option) => option.id)
@@ -13,7 +17,7 @@ const checkpointBlock = z.object({ id: z.string().min(1), type: z.literal('check
   if (new Set(texts).size !== 5) context.addIssue({ code: 'custom', path: ['options'], message: 'Checkpoint options must be distinct' })
 })
 const exerciseBlock = z.object({ id: z.string().min(1), type: z.literal('miniExercise'), title: z.string().min(1).max(160), instruction: z.string().min(1).max(2000), nextAction: z.enum(['NEXT_TOPIC', 'RETRY', 'REVIEW', 'PRACTICE', 'WATCH_VIDEO', 'CONTINUE']) }).strict()
-export const studyLessonBlockSchema = z.discriminatedUnion('type', [textBlock, codeBlock, checkpointBlock, exerciseBlock])
+export const studyLessonBlockSchema = z.discriminatedUnion('type', [textBlock, codeBlock, interactiveCodeBlockSchema, checkpointBlock, exerciseBlock])
 export const studyLessonContentSchema = z.object({ title: z.string().min(1).max(200), level: z.enum(['basic', 'intermediate', 'advanced']), objective: z.string().min(1).max(600), blocks: z.array(studyLessonBlockSchema).min(4).max(16), sources: z.array(roadmapResourceSchema).max(24).default([]) }).strict()
 export const getStudyLessonSchema = z.object({ workspaceId: workspaceIdSchema, roadmapId: z.uuid(), moduleId: z.uuid(), topicId: z.string().min(1).max(300) }).strict()
 export const evaluateStudyCheckpointSchema = getStudyLessonSchema.extend({ lessonId: z.string().min(1).max(360), checkpointId: z.string().min(1).max(420), selectedOptionId: z.string().min(1).max(120), studentJustification: z.string().trim().min(3).max(1000) }).strict()

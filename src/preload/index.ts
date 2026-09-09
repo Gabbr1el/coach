@@ -133,6 +133,9 @@ const api: CoachDesktopApi = {
   codeExecution: {
     execute: (input) => ipcRenderer.invoke(CODE_EXECUTION_CHANNELS.execute, input),
     executeProject: (input) => ipcRenderer.invoke(CODE_EXECUTION_CHANNELS.executeProject, input),
+    executeInteractive: (input) => ipcRenderer.invoke(CODE_EXECUTION_CHANNELS.executeInteractive, input),
+    saveInteractiveState: (input) => ipcRenderer.invoke(CODE_EXECUTION_CHANNELS.saveInteractiveState, input),
+    listInteractiveStates: (input) => ipcRenderer.invoke(CODE_EXECUTION_CHANNELS.listInteractiveStates, input),
     getToolchains: () => ipcRenderer.invoke(CODE_EXECUTION_CHANNELS.getToolchains),
   },
   observer: {

@@ -1,12 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import { ToolchainManager } from '../../src/main/code-execution/toolchain-manager'
 import type { WorkspaceProject } from '../../src/shared/contracts/project-contract'
+import { validateInteractiveExecution } from '../../src/main/ipc/code-execution-handlers'
 
 function project(language: 'python' | 'c' | 'java', files: Array<[string, string]>, entryFilePath: string): WorkspaceProject {
   return { id: crypto.randomUUID(), workspaceId: crypto.randomUUID(), name: 'Teste', language, entryFilePath, files: files.map(([path, content]) => ({ id: crypto.randomUUID(), path, content, revision: 0, updatedAt: 1 })), activeFileId: '', openFileIds: [], updatedAt: 1 }
 }
 
 describe('ToolchainManager', () => {
+  it('requires real output validation instead of treating exit code zero as correctness', () => {
+    const block = { id: 'block', type: 'interactiveCode' as const, title: 'Validar', interactionType: 'EDIT_AND_RUN' as const, language: 'python' as const, instruction: 'Execute', initialCode: 'print(2)', predictionPrompt: null, evidenceMode: 'validated' as const, expectedOutput: '2' }
+    const execution = { command: 'python3 main.py', stdout: '3\n', stderr: '', exitCode: 0, timedOut: false, durationMs: 1, errorSignature: null }
+    expect(validateInteractiveExecution(block, execution, 10)).toMatchObject({ status: 'failed' })
+    expect(validateInteractiveExecution(block, { ...execution, stdout: '2\n' }, 11)).toMatchObject({ status: 'passed' })
+    expect(validateInteractiveExecution({ ...block, evidenceMode: 'observation' }, { ...execution, stdout: '2\n' }, 12)).toMatchObject({ status: 'not_applicable' })
+  })
+
   it('runs Python and returns structured runtime diagnostics', async () => {
     const manager = new ToolchainManager()
     const success = await manager.execute(project('python', [['src/app.py', 'print("python-ok")']], 'src/app.py'))

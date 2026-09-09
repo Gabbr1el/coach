@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Roadmap, RoadmapModule } from '../../shared/contracts/roadmap-contract'
 import type { PersistedStudyLesson, StudyCheckpointEvaluation, StudyLessonAdaptation, StudyLessonBlock } from '../../shared/contracts/study-lesson-contract'
 import type { StudyCheckpointState, StudyLessonPosition, StudyProgressState } from '../../shared/contracts/study-progress-contract'
+import type { InteractiveCodeBlock, InteractiveCodeState } from '../../shared/contracts/code-execution-contract'
 
-const labels: Record<StudyLessonBlock['type'], string> = { explanation: 'Explicação', codeExample: 'Exemplo de código', analogy: 'Analogia', warning: 'Atenção', commonError: 'Erro comum', comparison: 'Comparação', checkpoint: 'Verificação', miniExercise: 'Prática' }
-const reviewTypes = new Set<StudyLessonBlock['type']>(['commonError', 'warning', 'comparison', 'checkpoint', 'miniExercise'])
+const labels: Record<StudyLessonBlock['type'], string> = { explanation: 'Explicação', codeExample: 'Exemplo de código', interactiveCode: 'Laboratório inline', analogy: 'Analogia', warning: 'Atenção', commonError: 'Erro comum', comparison: 'Comparação', checkpoint: 'Verificação', miniExercise: 'Prática' }
+const reviewTypes = new Set<StudyLessonBlock['type']>(['commonError', 'warning', 'comparison', 'interactiveCode', 'checkpoint', 'miniExercise'])
 const blockStyles: Record<StudyLessonBlock['type'], string> = {
   explanation: 'border-coach-line bg-[#111217]',
   codeExample: 'border-[#315b4f] bg-[#0d1715]',
+  interactiveCode: 'border-[#3b7767] bg-[#0a1714]',
   analogy: 'border-[#49406a] bg-[#181622]',
   warning: 'border-coach-yellow/60 bg-coach-yellow/[.06]',
   commonError: 'border-red-400/40 bg-red-500/[.06]',
@@ -20,6 +22,7 @@ export function studyLessonBlockExcerpt(block: StudyLessonBlock | undefined): st
   if (!block) return null
   if ('content' in block) return block.content
   if (block.type === 'codeExample') return block.code
+  if (block.type === 'interactiveCode') return block.instruction
   if (block.type === 'checkpoint') return block.question
   return block.instruction
 }
@@ -36,22 +39,25 @@ type Props = {
   onLessonChanged(lesson: PersistedStudyLesson): void
   onComplete(): void
   onPractice(): void
+  onInteractiveContext(block: InteractiveCodeBlock, state: InteractiveCodeState): void
 }
 
 function stageFor(block: StudyLessonBlock): StudyLessonPosition['currentStage'] {
   if (block.type === 'checkpoint') return 'verification'
   if (block.type === 'miniExercise') return 'exercise'
-  if (block.type === 'codeExample') return 'example'
+  if (block.type === 'codeExample' || block.type === 'interactiveCode') return 'example'
   return 'explanation'
 }
 
-export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress, reviewMode, onPosition, onCheckpoint, onLessonChanged, onComplete, onPractice }: Props) {
+export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress, reviewMode, onPosition, onCheckpoint, onLessonChanged, onComplete, onPractice, onInteractiveContext }: Props) {
   const [checkpointStates, setCheckpointStates] = useState<Record<string, StudyCheckpointState>>(progress.checkpointStates ?? {})
   const [adaptations, setAdaptations] = useState<Record<string, StudyLessonAdaptation[]>>({})
   const [displayedBlocks, setDisplayedBlocks] = useState(lesson.blocks)
   const [adaptationBusy, setAdaptationBusy] = useState<string | null>(null)
   const [answeringCheckpointId, setAnsweringCheckpointId] = useState<string | null>(null)
   const [checkpointDrafts, setCheckpointDrafts] = useState<Record<string, { optionId: string | null; justification: string }>>({})
+  const [interactiveStates, setInteractiveStates] = useState<Record<string, InteractiveCodeState>>({})
+  const [interactiveBusy, setInteractiveBusy] = useState<string | null>(null)
   const scrollPaneRef = useRef<HTMLElement | null>(null)
   const blockRefs = useRef(new Map<string, HTMLElement>())
   const visibility = useRef(new Map<string, number>())
@@ -59,18 +65,32 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
   const positionTimer = useRef<number | null>(null)
   const pendingBlock = useRef<StudyLessonBlock | null>(null)
   const checkpointStatesRef = useRef(checkpointStates)
+  const interactiveStatesRef = useRef(interactiveStates)
+  const interactiveSaveTimers = useRef<Record<string, number>>({})
   const positionRef = useRef(progress.currentPosition)
   const topic = module.topics.find((item) => `${module.id}:${item}` === progress.topicId) ?? module.title
   const checkpoints = displayedBlocks.reduce<Array<Extract<StudyLessonBlock, { type: 'checkpoint' }>>>((items, block) => block.type === 'checkpoint' ? [...items, block] : items, [])
   const canComplete = checkpoints.length > 0 && checkpoints.every((block) => checkpointStates[block.id]?.correct === true)
 
   useEffect(() => { checkpointStatesRef.current = checkpointStates }, [checkpointStates])
+  useEffect(() => { interactiveStatesRef.current = interactiveStates }, [interactiveStates])
   useEffect(() => { positionRef.current = progress.currentPosition }, [progress.currentPosition])
   useEffect(() => { setCheckpointStates(progress.checkpointStates ?? {}) }, [lesson.id, progress.checkpointStates])
   useEffect(() => {
     setDisplayedBlocks(lesson.blocks)
     let cancelled = false
     void Promise.all(lesson.blocks.map(async (block) => [block.id, await window.coach.studyLesson.listAdaptations({ workspaceId, lessonId: lesson.id, blockId: block.id })] as const)).then((entries) => { if (!cancelled) setAdaptations(Object.fromEntries(entries)) })
+    return () => { cancelled = true }
+  }, [workspaceId, lesson.id, lesson.blocks])
+  useEffect(() => {
+    let cancelled = false
+    void window.coach.codeExecution.listInteractiveStates({ workspaceId, lessonId: lesson.id }).then((states) => {
+      if (cancelled) return
+      const persisted = Object.fromEntries(states.map((state) => [state.blockId, state]))
+      const initial: Record<string, InteractiveCodeState> = {}
+      for (const block of lesson.blocks) if (block.type === 'interactiveCode') initial[block.id] = persisted[block.id] ?? { lessonId: lesson.id, blockId: block.id, currentCode: block.initialCode, prediction: null, attempts: 0, lastExecution: null, validationResult: null, updatedAt: 0 }
+      setInteractiveStates(initial)
+    })
     return () => { cancelled = true }
   }, [workspaceId, lesson.id, lesson.blocks])
 
@@ -148,6 +168,24 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
   }, [lesson.id, progress.currentPosition])
 
   useEffect(() => () => { if (positionTimer.current !== null) window.clearTimeout(positionTimer.current) }, [])
+  useEffect(() => () => {
+    for (const timer of Object.values(interactiveSaveTimers.current)) window.clearTimeout(timer)
+    for (const block of lesson.blocks) {
+      if (block.type !== 'interactiveCode') continue
+      const state = interactiveStatesRef.current[block.id]
+      if (state) void window.coach.codeExecution.saveInteractiveState({ workspaceId, lessonId: lesson.id, blockId: block.id, currentCode: state.currentCode, prediction: state.prediction })
+    }
+  }, [workspaceId, lesson.id, lesson.blocks])
+
+  function updateInteractiveDraft(block: InteractiveCodeBlock, state: InteractiveCodeState) {
+    interactiveStatesRef.current = { ...interactiveStatesRef.current, [block.id]: state }
+    setInteractiveStates(interactiveStatesRef.current)
+    onInteractiveContext(block, state)
+    if (interactiveSaveTimers.current[block.id]) window.clearTimeout(interactiveSaveTimers.current[block.id])
+    interactiveSaveTimers.current[block.id] = window.setTimeout(() => {
+      void window.coach.codeExecution.saveInteractiveState({ workspaceId, lessonId: lesson.id, blockId: block.id, currentCode: state.currentCode, prediction: state.prediction })
+    }, 350)
+  }
 
   async function answer(checkpoint: Extract<StudyLessonBlock, { type: 'checkpoint' }>) {
     const draft = checkpointDrafts[checkpoint.id]
@@ -168,6 +206,17 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
     positionRef.current = position
     onPosition(position, checkpointStatesRef.current)
     onPractice()
+  }
+
+  async function executeInteractive(block: InteractiveCodeBlock) {
+    const current = interactiveStates[block.id] ?? { lessonId: lesson.id, blockId: block.id, currentCode: block.initialCode, prediction: null, attempts: 0, lastExecution: null, validationResult: null, updatedAt: 0 }
+    if (interactiveBusy || (block.interactionType === 'PREDICT_AND_RUN' && !current.prediction?.trim())) return
+    setInteractiveBusy(block.id)
+    try {
+      const state = await window.coach.codeExecution.executeInteractive({ workspaceId, lessonId: lesson.id, blockId: block.id, currentCode: current.currentCode, prediction: current.prediction })
+      setInteractiveStates((values) => ({ ...values, [block.id]: state }))
+      onInteractiveContext(block, state)
+    } finally { setInteractiveBusy(null) }
   }
 
   return <article ref={scrollPaneRef} className="coach-scroll-pane h-full px-5 py-7 lg:px-12">
@@ -204,6 +253,19 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
               {block.expectedOutput && <div className="mt-3 rounded-lg border border-coach-line bg-black/10 p-3 text-xs"><strong>Saída esperada</strong><pre className="mt-2 whitespace-pre-wrap text-coach-muted">{block.expectedOutput}</pre></div>}
               <ol className="mt-4 space-y-2">{block.walkthrough.map((step, index) => <li key={`${block.id}:${index}`} className="text-sm leading-6 text-coach-muted"><strong className="mr-2 text-coach-green">{index + 1}.</strong>{step}</li>)}</ol>
             </>}
+            {block.type === 'interactiveCode' && (() => {
+              const interactive = interactiveStates[block.id] ?? { lessonId: lesson.id, blockId: block.id, currentCode: block.initialCode, prediction: null, attempts: 0, lastExecution: null, validationResult: null, updatedAt: 0 }
+              const running = interactiveBusy === block.id
+              return <div onFocus={() => onInteractiveContext(block, interactive)}>
+                <p className="mt-4 text-sm leading-7 text-coach-muted">{block.instruction}</p>
+                <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wider"><span className="rounded-full border border-coach-green/30 px-2 py-1 text-coach-green">{block.language}</span><span className="rounded-full border border-white/10 px-2 py-1 text-white/55">{block.interactionType.replaceAll('_', ' ')}</span><span className="rounded-full border border-white/10 px-2 py-1 text-white/55">Evidência: {block.evidenceMode}</span></div>
+                {block.predictionPrompt && <label className="mt-4 block text-xs font-black uppercase text-coach-muted">{block.predictionPrompt}<textarea value={interactive.prediction ?? ''} disabled={running} onChange={(event) => updateInteractiveDraft(block, { ...interactive, prediction: event.target.value })} className="mt-2 min-h-16 w-full rounded-lg border border-coach-line bg-[#0b0c10] p-3 text-sm font-normal normal-case text-coach-ink" /></label>}
+                <textarea aria-label={`Código de ${block.title}`} spellCheck={false} value={interactive.currentCode} disabled={running} onChange={(event) => updateInteractiveDraft(block, { ...interactive, currentCode: event.target.value })} className="mt-4 min-h-52 w-full resize-y rounded-lg border border-white/10 bg-[#060a09] p-4 font-mono text-xs leading-6 text-[#d7f5e8] outline-none focus:border-coach-green" />
+                <div className="mt-3 flex items-center justify-between gap-3"><p className="text-xs text-coach-muted">{interactive.attempts ? `${interactive.attempts} execução(ões) persistida(s)` : 'Ainda não executado'}</p><button type="button" disabled={running || (block.interactionType === 'PREDICT_AND_RUN' && !interactive.prediction?.trim())} onClick={() => void executeInteractive(block)} className="rounded-lg bg-coach-green px-4 py-2 text-xs font-black text-white disabled:opacity-50">{running ? 'Executando...' : 'Executar aqui'}</button></div>
+                {interactive.lastExecution && <div className="mt-4 grid gap-3 sm:grid-cols-2"><div className="rounded-lg border border-white/10 bg-black/20 p-3"><strong className="text-xs">Saída</strong><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-xs text-coach-muted">{interactive.lastExecution.stdout || '(sem saída)'}</pre></div><div className="rounded-lg border border-white/10 bg-black/20 p-3"><strong className="text-xs">Erros · {interactive.lastExecution.phase ?? 'run'} · exit {interactive.lastExecution.exitCode ?? 'null'}</strong><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-xs text-red-200/75">{interactive.lastExecution.stderr || '(sem erros)'}</pre></div></div>}
+                {interactive.validationResult && <p className={`mt-3 rounded-lg border p-3 text-xs font-bold ${interactive.validationResult.status === 'passed' ? 'border-coach-green/40 bg-coach-green/10 text-coach-green' : interactive.validationResult.status === 'failed' ? 'border-coach-orange/40 bg-coach-orange/10 text-coach-orange' : 'border-white/10 text-coach-muted'}`}>{interactive.validationResult.message}</p>}
+              </div>
+            })()}
             {block.type === 'checkpoint' && <>
               <p className="mt-4 text-sm leading-6 text-coach-muted">{block.question}</p>
               <div className="mt-4 grid gap-2">{block.options.map((option, index) => { const selected = (checkpointDrafts[block.id]?.optionId ?? state?.selectedOptionId) === option.id; return <button key={option.id} type="button" disabled={answeringCheckpointId === block.id} onClick={() => setCheckpointDrafts((current) => ({ ...current, [block.id]: { optionId: option.id, justification: current[block.id]?.justification ?? '' } }))} className={`rounded-lg border p-3 text-left text-xs transition disabled:opacity-60 ${selected ? 'border-coach-orange bg-coach-orange/10' : 'border-coach-line hover:border-coach-orange/60'}`}>{String.fromCharCode(65 + index)}. {option.text}</button> })}</div>

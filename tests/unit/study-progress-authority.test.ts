@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { openCoachDatabase } from '../../src/main/database/connection'
 import { assertTopicCompletionAllowed, mapStudyProgressState, nextTopicTarget } from '../../src/main/ipc/study-progress-handlers'
 import { resolve } from 'node:path'
+import { applyLearningEvidence, emptyTopicLearningState } from '../../src/application/study-progress/topic-learning'
 
 const migrationsFolder = resolve('drizzle/migrations')
 
@@ -20,6 +21,12 @@ function databaseWithLesson(checkpointCount: number) {
 }
 
 describe('authoritative topic completion gate', () => {
+  it('counts only validated inline work as evidence and never an observation', () => {
+    const initial = emptyTopicLearningState('workspace', 'topic', 1)
+    const validated = applyLearningEvidence(initial, { type: 'INTERACTIVE_CODE_VALIDATED', occurredAt: 2 })
+    expect(validated).toMatchObject({ evidenceCount: 1, exercisesCompleted: 1, assessments: 0, masteryEstimate: null })
+    expect(initial).toMatchObject({ evidenceCount: 0, exercisesCompleted: 0 })
+  })
   it('advances within a module and unlocks the next module after its last topic', () => { const modules = [{ id: '00000000-0000-4000-8000-000000000003', topics: ['1.1', '1.2'] }, { id: '00000000-0000-4000-8000-000000000004', topics: ['2.1'] }]; expect(nextTopicTarget(modules, modules[0]!.id, `${modules[0]!.id}:1.1`)).toMatchObject({ topicId: `${modules[0]!.id}:1.2`, completedModule: false }); expect(nextTopicTarget(modules, modules[0]!.id, `${modules[0]!.id}:1.2`)).toMatchObject({ moduleId: modules[1]!.id, topicId: `${modules[1]!.id}:2.1`, completedModule: true }) })
   it('rejects lessons with fewer than two checkpoints even when the renderer state says correct', () => {
     const database = databaseWithLesson(1)

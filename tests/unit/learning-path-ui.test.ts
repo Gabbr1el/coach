@@ -7,8 +7,13 @@ const appSource = readFileSync(new URL('../../src/renderer/app/App.tsx', import.
 const drawerSource = readFileSync(new URL('../../src/renderer/app/LearningPathDrawer.tsx', import.meta.url), 'utf8')
 const lessonSource = readFileSync(new URL('../../src/renderer/app/StudyLessonView.tsx', import.meta.url), 'utf8')
 const preparationSource = readFileSync(new URL('../../src/renderer/app/studies-preparation.ts', import.meta.url), 'utf8')
+const revisionSource = readFileSync(new URL('../../src/shared/interactive-source-revision.ts', import.meta.url), 'utf8')
 
 describe('learning path UI integration', () => {
+  it('keeps interactive source revisions browser-safe', () => {
+    expect(lessonSource).toContain("from '../../shared/interactive-source-revision'")
+    expect(revisionSource).not.toMatch(/node:|electron|from ['"](?:fs|path|crypto)['"]/)
+  })
   it('exposes a read-only lifecycle channel and never polls generation', () => {
     expect(ROADMAP_CHANNELS.getLearningPathState).toBe('roadmap:get-learning-path-state')
     expect(appSource).toContain('window.coach.roadmap.getLearningPathState(workspaceId)')

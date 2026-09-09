@@ -12,7 +12,7 @@ export const executeCodeInputSchema = z.object({
 
 export const executeProjectInputSchema = z.object({ workspaceId: workspaceIdSchema, projectId: projectIdSchema }).strict()
 export const executeInteractiveCodeInputSchema = z.object({ workspaceId: workspaceIdSchema, lessonId: z.string().min(1).max(360), blockId: z.string().min(1).max(420), currentCode: z.string().min(1).max(20_000), prediction: z.string().max(2000).nullable() }).strict()
-export const saveInteractiveCodeStateInputSchema = executeInteractiveCodeInputSchema.omit({}).extend({ currentCode: z.string().max(20_000) }).strict()
+export const saveInteractiveCodeStateInputSchema = executeInteractiveCodeInputSchema.omit({}).extend({ currentCode: z.string().max(20_000), previousSourceRevision: z.string().min(16).max(64).optional() }).strict()
 export const listInteractiveCodeStatesInputSchema = z.object({ workspaceId: workspaceIdSchema, lessonId: z.string().min(1).max(360) }).strict()
 
 export interface CodeDiagnostic {

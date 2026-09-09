@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { ToolchainManager } from '../../src/main/code-execution/toolchain-manager'
 import type { WorkspaceProject } from '../../src/shared/contracts/project-contract'
 import { validateInteractiveExecution } from '../../src/main/ipc/code-execution-handlers'
-import { interactiveSourceRevision } from '../../src/application/code-execution/interactive-code'
+import { interactiveSourceRevision } from '../../src/shared/interactive-source-revision'
 import { parseInteractiveValidation } from '../../src/shared/contracts/code-execution-contract'
 
 function project(language: 'python' | 'c' | 'java', files: Array<[string, string]>, entryFilePath: string): WorkspaceProject {

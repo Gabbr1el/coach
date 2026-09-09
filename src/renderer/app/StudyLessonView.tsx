@@ -4,7 +4,7 @@ import type { PersistedStudyLesson, StudyCheckpointEvaluation, StudyLessonAdapta
 import type { StudyCheckpointState, StudyLessonPosition, StudyProgressState } from '../../shared/contracts/study-progress-contract'
 import type { InteractiveCodeBlock, InteractiveCodeState } from '../../shared/contracts/code-execution-contract'
 import { EmbeddedCodeEditor } from './EmbeddedCodeEditor'
-import { interactiveSourceRevision } from '../../application/code-execution/interactive-code'
+import { interactiveSourceRevision } from '../../shared/interactive-source-revision'
 
 const labels: Record<StudyLessonBlock['type'], string> = { explanation: 'Explicação', codeExample: 'Exemplo de código', interactiveCode: 'Laboratório inline', analogy: 'Analogia', warning: 'Atenção', commonError: 'Erro comum', comparison: 'Comparação', checkpoint: 'Verificação', miniExercise: 'Prática' }
 const reviewTypes = new Set<StudyLessonBlock['type']>(['commonError', 'warning', 'comparison', 'interactiveCode', 'checkpoint', 'miniExercise'])
@@ -180,7 +180,7 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
     for (const block of lesson.blocks) {
       if (block.type !== 'interactiveCode') continue
       const state = interactiveStatesRef.current[block.id]
-      if (state) void window.coach.codeExecution.saveInteractiveState({ workspaceId, lessonId: lesson.id, blockId: block.id, currentCode: state.currentCode, prediction: state.prediction })
+      if (state) void window.coach.codeExecution.saveInteractiveState({ workspaceId, lessonId: lesson.id, blockId: block.id, currentCode: state.currentCode, prediction: state.prediction, previousSourceRevision: state.currentSourceRevision })
     }
   }, [workspaceId, lesson.id, lesson.blocks])
 
@@ -190,7 +190,7 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
     onInteractiveContext(block, state)
     if (interactiveSaveTimers.current[block.id]) window.clearTimeout(interactiveSaveTimers.current[block.id])
     interactiveSaveTimers.current[block.id] = window.setTimeout(() => {
-      void window.coach.codeExecution.saveInteractiveState({ workspaceId, lessonId: lesson.id, blockId: block.id, currentCode: state.currentCode, prediction: state.prediction })
+      void window.coach.codeExecution.saveInteractiveState({ workspaceId, lessonId: lesson.id, blockId: block.id, currentCode: state.currentCode, prediction: state.prediction, previousSourceRevision: state.currentSourceRevision })
     }, 350)
   }
 

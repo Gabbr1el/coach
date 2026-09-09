@@ -11,7 +11,7 @@ import { ToolchainManager } from '../code-execution/toolchain-manager'
 import { studyLessonContentSchema } from '../../shared/contracts/study-lesson-contract'
 import type { WorkspaceProject } from '../../shared/contracts/project-contract'
 import { applyLearningEvidence, emptyTopicLearningState, type TopicLearningState } from '../../application/study-progress/topic-learning'
-import { interactiveSourceRevision, normalizeInteractiveOutput } from '../../application/code-execution/interactive-code'
+import { interactiveSourceRevision, normalizeInteractiveOutput } from '../../shared/interactive-source-revision'
 
 const activeSenders = new Set<number>()
 
@@ -99,9 +99,10 @@ export function registerCodeExecutionHandlers(workspaceExists: (id: string) => P
     const input = saveInteractiveCodeStateInputSchema.parse(payload)
     if (!await workspaceExists(input.workspaceId)) throw new Error('Workspace not found')
     workspaceInteractiveBlock(database, input)
-    const previous = database.sqlite.prepare('SELECT attempts, last_execution_json AS lastExecutionJson, validation_result_json AS validationResultJson FROM study_interactive_code_states WHERE workspace_id = ? AND lesson_id = ? AND block_id = ?').get(input.workspaceId, input.lessonId, input.blockId) as { attempts: number; lastExecutionJson: string | null; validationResultJson: string | null } | undefined
+    const previous = database.sqlite.prepare('SELECT current_code AS currentCode, prediction, current_source_revision AS currentSourceRevision, attempts, last_execution_json AS lastExecutionJson, validation_result_json AS validationResultJson FROM study_interactive_code_states WHERE workspace_id = ? AND lesson_id = ? AND block_id = ?').get(input.workspaceId, input.lessonId, input.blockId) as { currentCode: string; prediction: string | null; currentSourceRevision: string; attempts: number; lastExecutionJson: string | null; validationResultJson: string | null } | undefined
     const now = Date.now()
-    const currentSourceRevision = interactiveSourceRevision(input.currentCode, input.prediction)
+    const contentUnchanged = previous?.currentCode === input.currentCode && previous.prediction === input.prediction && (!input.previousSourceRevision || input.previousSourceRevision === previous.currentSourceRevision)
+    const currentSourceRevision = contentUnchanged ? previous.currentSourceRevision : interactiveSourceRevision(input.currentCode, input.prediction)
     const validationResult = previous?.validationResultJson ? parseInteractiveValidation(JSON.parse(previous.validationResultJson), currentSourceRevision) : null
     const status = toolchainStatus(workspaceInteractiveBlock(database, input).language)
     const state = interactiveCodeStateSchema.parse({ lessonId: input.lessonId, blockId: input.blockId, currentCode: input.currentCode, prediction: input.prediction, currentSourceRevision, attempts: previous?.attempts ?? 0, lastExecution: previous?.lastExecutionJson ? JSON.parse(previous.lastExecutionJson) : null, validationResult, applicable: status.available, unavailableReason: status.available ? null : status.detail ?? 'Toolchain não encontrado', updatedAt: now })

@@ -1,1 +1,1 @@
-export const STUDY_PROGRESS_CHANNELS = { get: 'study-progress:get', select: 'study-progress:select', updatePosition: 'study-progress:update-position', record: 'study-progress:record' } as const
+export const STUDY_PROGRESS_CHANNELS = { get: 'study-progress:get', select: 'study-progress:select', updatePosition: 'study-progress:update-position', answerCheckpoint: 'study-progress:answer-checkpoint', completeTopic: 'study-progress:complete-topic', record: 'study-progress:record' } as const

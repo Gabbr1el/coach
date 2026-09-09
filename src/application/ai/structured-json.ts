@@ -32,6 +32,18 @@ export function normalizeGeneratedLessonJson(value: unknown): unknown {
       if (!['NEXT_TOPIC', 'RETRY', 'REVIEW', 'PRACTICE', 'WATCH_VIDEO', 'CONTINUE'].includes(String(block.nextAction))) block.nextAction = 'PRACTICE'
       for (const key of ['language', 'prompt', 'starterCode', 'solution', 'walkthrough']) delete block[key]
     }
+    if (block.type === 'checkpoint' && Array.isArray(block.options) && block.options.every((option) => typeof option === 'string')) {
+      const correctIndex = typeof block.correctIndex === 'number' ? block.correctIndex : -1
+      const difficulties = Array.isArray(block.difficultyByOption) ? block.difficultyByOption : []
+      const options = block.options.map((text, index) => ({ id: `option-${index}`, text, rationale: String(difficulties[index] ?? (index === correctIndex ? 'Corresponde ao conceito avaliado.' : 'Não corresponde ao conceito avaliado.')), ...(index === correctIndex ? {} : { misconceptionTag: `legacy-distractor-${index}` }) }))
+      while (options.length < 5) { const index = options.length; options.push({ id: `option-${index}`, text: index === 3 ? 'Uma condição diferente seria necessária' : 'Nenhuma mudança seria observada', rationale: 'Esta alternativa não corresponde ao comportamento específico avaliado.', misconceptionTag: `legacy-distractor-${index}` }) }
+      block.options = options.slice(0, 5)
+      block.correctOptionId = `option-${correctIndex}`
+      block.questionType = 'multiple_choice'
+      block.requiresJustification = true
+      delete block.correctIndex
+      delete block.difficultyByOption
+    }
     return block
   }) }
 }

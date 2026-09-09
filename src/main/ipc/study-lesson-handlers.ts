@@ -7,7 +7,7 @@ import { assertTrustedSender } from './trusted-sender'
 
 export function registerStudyLessonHandlers(service: StudyLessonService): void {
   ipcMain.handle(STUDY_LESSON_CHANNELS.getOrCreate, (event, payload) => { assertTrustedSender(event); return service.getOrCreate(getStudyLessonSchema.parse(payload)) })
-  ipcMain.handle(STUDY_LESSON_CHANNELS.evaluate, async (event, payload) => { assertTrustedSender(event); const input = evaluateStudyCheckpointSchema.parse(payload); const lesson = await service.getOrCreate(input); return service.evaluate(lesson, input.checkpointId, input.selectedIndex, input.attempt) })
+  ipcMain.handle(STUDY_LESSON_CHANNELS.evaluate, async (event, payload) => { assertTrustedSender(event); const input = evaluateStudyCheckpointSchema.parse(payload); const lesson = await service.getOrCreate(input); return service.evaluate(lesson, input.checkpointId, input.selectedOptionId, 1, input.studentJustification) })
   ipcMain.handle(STUDY_LESSON_CHANNELS.adaptSection, (event, payload) => { assertTrustedSender(event); return service.adaptSection(adaptStudyLessonSectionSchema.parse(payload)) })
   ipcMain.handle(STUDY_LESSON_CHANNELS.listAdaptations, (event, payload) => { assertTrustedSender(event); return service.listAdaptations(studyLessonAdaptationSelectionSchema.parse(payload)) })
   ipcMain.handle(STUDY_LESSON_CHANNELS.restoreOriginal, (event, payload) => { assertTrustedSender(event); return service.restoreOriginal(studyLessonAdaptationSelectionSchema.parse(payload)) })

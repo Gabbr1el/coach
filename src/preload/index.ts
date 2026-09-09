@@ -29,6 +29,8 @@ const api: CoachDesktopApi = {
     get: (workspaceId) => ipcRenderer.invoke(STUDY_PROGRESS_CHANNELS.get, { workspaceId }),
     select: (input) => ipcRenderer.invoke(STUDY_PROGRESS_CHANNELS.select, input),
     updatePosition: (input) => ipcRenderer.invoke(STUDY_PROGRESS_CHANNELS.updatePosition, input),
+    answerCheckpoint: (input) => ipcRenderer.invoke(STUDY_PROGRESS_CHANNELS.answerCheckpoint, input),
+    completeTopic: (input) => ipcRenderer.invoke(STUDY_PROGRESS_CHANNELS.completeTopic, input),
     record: (input) => ipcRenderer.invoke(STUDY_PROGRESS_CHANNELS.record, input),
   },
   studyLesson: {

@@ -50,6 +50,8 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
   const [adaptations, setAdaptations] = useState<Record<string, StudyLessonAdaptation[]>>({})
   const [displayedBlocks, setDisplayedBlocks] = useState(lesson.blocks)
   const [adaptationBusy, setAdaptationBusy] = useState<string | null>(null)
+  const [answeringCheckpointId, setAnsweringCheckpointId] = useState<string | null>(null)
+  const [checkpointDrafts, setCheckpointDrafts] = useState<Record<string, { optionId: string | null; justification: string }>>({})
   const scrollPaneRef = useRef<HTMLElement | null>(null)
   const blockRefs = useRef(new Map<string, HTMLElement>())
   const visibility = useRef(new Map<string, number>())
@@ -104,10 +106,10 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
       currentCheckpointId: block.type === 'checkpoint' ? block.id : previous?.currentCheckpointId ?? null,
       currentExerciseId: block.type === 'miniExercise' ? block.id : previous?.currentExerciseId ?? null,
       completedBlockIds: previous?.completedBlockIds ?? [],
-      selectedAnswer: checkpoint?.selectedAnswer ?? null,
+      selectedAnswer: checkpoint && block.type === 'checkpoint' ? (() => { const index = block.options.findIndex((option) => option.id === checkpoint.selectedOptionId); return index >= 0 ? index : null })() : null,
       attempt: checkpoint?.attempt ?? 0,
-      feedback: checkpoint?.feedback ?? null,
-      reinforcementBlocks: checkpoint?.reinforcementBlocks ?? [],
+      feedback: checkpoint?.currentFeedback ?? null,
+      reinforcementBlocks: checkpoint?.currentReinforcement ? [checkpoint.currentReinforcement] : [],
     }
   }, [lesson.id])
 
@@ -147,19 +149,18 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
 
   useEffect(() => () => { if (positionTimer.current !== null) window.clearTimeout(positionTimer.current) }, [])
 
-  async function answer(checkpoint: Extract<StudyLessonBlock, { type: 'checkpoint' }>, selectedAnswer: number) {
-    const previous = checkpointStatesRef.current[checkpoint.id]
-    const attempt = (previous?.attempt ?? 0) + 1
-    const evaluation = await window.coach.studyLesson.evaluate({ workspaceId, roadmapId: roadmap.id, moduleId: module.id, topicId: progress.topicId, lessonId: lesson.id, checkpointId: checkpoint.id, selectedIndex: selectedAnswer, attempt })
-    const reinforcementBlocks = evaluation.reinforcement ? [...(previous?.reinforcementBlocks ?? []), evaluation.reinforcement] : previous?.reinforcementBlocks ?? []
-    const state: StudyCheckpointState = { selectedAnswer, attempt, correct: evaluation.correct, feedback: evaluation.feedback, reinforcementBlocks }
-    const nextStates = { ...checkpointStatesRef.current, [checkpoint.id]: state }
+  async function answer(checkpoint: Extract<StudyLessonBlock, { type: 'checkpoint' }>) {
+    const draft = checkpointDrafts[checkpoint.id]
+    if (answeringCheckpointId || !draft?.optionId || draft.justification.trim().length < 3) return
+    setAnsweringCheckpointId(checkpoint.id)
+    const result = await window.coach.studyProgress.answerCheckpoint({ workspaceId, lessonId: lesson.id, checkpointId: checkpoint.id, selectedOptionId: draft.optionId, studentJustification: draft.justification }).finally(() => setAnsweringCheckpointId(null))
+    const nextStates = result.state.checkpointStates ?? {}
     checkpointStatesRef.current = nextStates
     setCheckpointStates(nextStates)
     const position = positionFor(checkpoint, nextStates)
     positionRef.current = position
     onPosition(position, nextStates)
-    onCheckpoint(checkpoint.id, evaluation, selectedAnswer, attempt)
+    onCheckpoint(checkpoint.id, result.evaluation, checkpoint.options.findIndex((option) => option.id === draft.optionId), result.evaluation.attempt)
   }
 
   function openPractice(block: Extract<StudyLessonBlock, { type: 'miniExercise' }>) {
@@ -205,9 +206,11 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
             </>}
             {block.type === 'checkpoint' && <>
               <p className="mt-4 text-sm leading-6 text-coach-muted">{block.question}</p>
-              <div className="mt-4 grid gap-2">{block.options.map((option, index) => <button key={`${block.id}:${index}`} type="button" onClick={() => void answer(block, index)} className={`rounded-lg border p-3 text-left text-xs transition ${state?.selectedAnswer === index ? state.correct ? 'border-coach-green bg-coach-green/10' : 'border-coach-orange bg-coach-orange/10' : 'border-coach-line hover:border-coach-orange/60'}`}>{String.fromCharCode(65 + index)}. {option}</button>)}</div>
-              {state?.feedback && <div className={`mt-4 rounded-lg border p-4 text-sm leading-6 ${state.correct ? 'border-coach-green/40 bg-coach-green/10' : 'border-coach-orange/40 bg-coach-orange/10'}`}><strong>{state.correct ? 'Compreensão confirmada' : `Tentativa ${state.attempt}`}</strong><p className="mt-1 text-coach-muted">{state.feedback}</p>{!state.correct && <p className="mt-2 text-xs text-coach-muted">Dica: {block.hint}</p>}</div>}
-              {state?.reinforcementBlocks.map((reinforcement, index) => <div key={`${block.id}:reinforcement:${index}`} role="note" className="mt-3 rounded-lg border-l-4 border-coach-yellow bg-coach-yellow/[.08] p-4 text-sm leading-6"><strong className="text-coach-yellow">Reforço</strong><p className="mt-1 text-coach-muted">{reinforcement}</p></div>)}
+              <div className="mt-4 grid gap-2">{block.options.map((option, index) => { const selected = (checkpointDrafts[block.id]?.optionId ?? state?.selectedOptionId) === option.id; return <button key={option.id} type="button" disabled={answeringCheckpointId === block.id} onClick={() => setCheckpointDrafts((current) => ({ ...current, [block.id]: { optionId: option.id, justification: current[block.id]?.justification ?? '' } }))} className={`rounded-lg border p-3 text-left text-xs transition disabled:opacity-60 ${selected ? 'border-coach-orange bg-coach-orange/10' : 'border-coach-line hover:border-coach-orange/60'}`}>{String.fromCharCode(65 + index)}. {option.text}</button> })}</div>
+              <label className="mt-4 block text-xs font-black uppercase text-coach-muted">Por que você escolheu essa alternativa?<textarea value={checkpointDrafts[block.id]?.justification ?? ''} disabled={answeringCheckpointId === block.id} onChange={(event) => setCheckpointDrafts((current) => ({ ...current, [block.id]: { optionId: current[block.id]?.optionId ?? null, justification: event.target.value } }))} className="mt-2 min-h-20 w-full rounded-lg border border-coach-line bg-[#0b0c10] p-3 text-sm font-normal normal-case text-coach-ink" /></label>
+              <button type="button" disabled={answeringCheckpointId === block.id || !checkpointDrafts[block.id]?.optionId || (checkpointDrafts[block.id]?.justification.trim().length ?? 0) < 3} onClick={() => void answer(block)} className="mt-3 rounded-lg bg-coach-orange px-4 py-2 text-xs font-black text-white disabled:opacity-50">{answeringCheckpointId === block.id ? 'Avaliando...' : 'Responder'}</button>
+              {state?.currentFeedback && <div className={`mt-4 rounded-lg border p-4 text-sm leading-6 ${state.correct ? 'border-coach-green/40 bg-coach-green/10' : 'border-coach-orange/40 bg-coach-orange/10'}`}><strong>Sua resposta: {String.fromCharCode(65 + Math.max(0, block.options.findIndex((option) => option.id === state.selectedOptionId)))}</strong><p className="mt-1 font-bold">{state.correct ? 'Correto' : `Incorreto · tentativa ${state.attempt}`}</p><p className="mt-2 text-coach-muted">Por quê: {state.rationale}</p><p className="mt-2 text-coach-muted">{state.currentFeedback}</p>{!state.correct && <p className="mt-2 text-xs text-coach-muted">Orientação: {block.hint}</p>}</div>}
+              {state?.currentReinforcement && <div role="note" className="mt-3 rounded-lg border-l-4 border-coach-yellow bg-coach-yellow/[.08] p-4 text-sm leading-6"><strong className="text-coach-yellow">Reforço</strong><p className="mt-1 text-coach-muted">{state.currentReinforcement}</p></div>}
             </>}
             {block.type === 'miniExercise' && <><p className="mt-4 text-sm leading-7 text-coach-muted">{block.instruction}</p><button type="button" onClick={() => openPractice(block)} className="mt-4 rounded-xl bg-coach-green px-5 py-3 text-xs font-black text-white">Abrir Prática</button></>}
           </section>

@@ -18,7 +18,7 @@ describe('study progress contract', () => {
   })
 
   it('records checkpoint result and help as pedagogical events', () => {
-    expect(recordStudyEventSchema.parse({ workspaceId, type: 'CHECKPOINT_ANSWERED', moduleId, topicId: `${moduleId}:print`, lessonId: `${moduleId}:print:lesson`, checkpointId: `${moduleId}:print:lesson:checkpoint`, correct: false, selectedAnswer: 1, attempt: 1 }).correct).toBe(false)
+    expect(recordStudyEventSchema.parse({ workspaceId, type: 'CHECKPOINT_ANSWERED', moduleId, topicId: `${moduleId}:print`, lessonId: `${moduleId}:print:lesson`, checkpointId: `${moduleId}:print:lesson:checkpoint`, correct: false, selectedOptionId: 'option-1', attempt: 1 }).correct).toBe(false)
     expect(recordStudyEventSchema.parse({ workspaceId, type: 'HELP_USED', moduleId, topicId: `${moduleId}:print`, lessonId: `${moduleId}:print:lesson`, checkpointId: null }).type).toBe('HELP_USED')
   })
 

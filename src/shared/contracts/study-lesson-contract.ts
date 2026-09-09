@@ -4,15 +4,19 @@ import { roadmapResourceSchema } from './roadmap-contract'
 
 const textBlock = z.object({ id: z.string().min(1), type: z.enum(['explanation', 'analogy', 'warning', 'commonError', 'comparison']), title: z.string().min(1).max(160), content: z.string().min(1).max(4000) }).strict()
 const codeBlock = z.object({ id: z.string().min(1), type: z.literal('codeExample'), title: z.string().min(1).max(160), code: z.string().min(1).max(8000), language: z.string().min(1).max(40), expectedOutput: z.string().max(2000).nullable(), walkthrough: z.array(z.string().min(1).max(500)).max(12) }).strict()
-const checkpointBlock = z.object({ id: z.string().min(1), type: z.literal('checkpoint'), title: z.string().min(1).max(160), question: z.string().min(1).max(1000), options: z.array(z.string().min(1).max(500)).min(2).max(6), correctIndex: z.number().int().min(0).max(5), difficultyByOption: z.array(z.string().min(1).max(500)).min(2).max(6), hint: z.string().min(1).max(1000), reinforcement: z.string().min(1).max(2000) }).strict().superRefine((value, context) => {
-  if (value.correctIndex >= value.options.length) context.addIssue({ code: 'custom', path: ['correctIndex'], message: 'Correct index must reference an available option' })
-  if (value.difficultyByOption.length !== value.options.length) context.addIssue({ code: 'custom', path: ['difficultyByOption'], message: 'Difficulty entries must match options' })
+export const checkpointOptionSchema = z.object({ id: z.string().min(1).max(120), text: z.string().min(1).max(500), rationale: z.string().min(1).max(1000), misconceptionTag: z.string().min(1).max(120).optional() }).strict()
+const checkpointBlock = z.object({ id: z.string().min(1), type: z.literal('checkpoint'), title: z.string().min(1).max(160), questionType: z.literal('multiple_choice').default('multiple_choice'), question: z.string().min(1).max(1000), options: z.array(checkpointOptionSchema).length(5), correctOptionId: z.string().min(1).max(120), requiresJustification: z.boolean().default(true), hint: z.string().min(1).max(1000), reinforcement: z.string().min(1).max(2000) }).strict().superRefine((value, context) => {
+  const optionIds = value.options.map((option) => option.id)
+  if (new Set(optionIds).size !== 5) context.addIssue({ code: 'custom', path: ['options'], message: 'Checkpoint option ids must be unique' })
+  if (!optionIds.includes(value.correctOptionId)) context.addIssue({ code: 'custom', path: ['correctOptionId'], message: 'Correct option must reference an available option' })
+  const texts = value.options.map((option) => option.text.trim().toLocaleLowerCase('pt-BR'))
+  if (new Set(texts).size !== 5) context.addIssue({ code: 'custom', path: ['options'], message: 'Checkpoint options must be distinct' })
 })
 const exerciseBlock = z.object({ id: z.string().min(1), type: z.literal('miniExercise'), title: z.string().min(1).max(160), instruction: z.string().min(1).max(2000), nextAction: z.enum(['NEXT_TOPIC', 'RETRY', 'REVIEW', 'PRACTICE', 'WATCH_VIDEO', 'CONTINUE']) }).strict()
 export const studyLessonBlockSchema = z.discriminatedUnion('type', [textBlock, codeBlock, checkpointBlock, exerciseBlock])
 export const studyLessonContentSchema = z.object({ title: z.string().min(1).max(200), level: z.enum(['basic', 'intermediate', 'advanced']), objective: z.string().min(1).max(600), blocks: z.array(studyLessonBlockSchema).min(4).max(16), sources: z.array(roadmapResourceSchema).max(24).default([]) }).strict()
 export const getStudyLessonSchema = z.object({ workspaceId: workspaceIdSchema, roadmapId: z.uuid(), moduleId: z.uuid(), topicId: z.string().min(1).max(300) }).strict()
-export const evaluateStudyCheckpointSchema = getStudyLessonSchema.extend({ lessonId: z.string().min(1).max(360), checkpointId: z.string().min(1).max(420), selectedIndex: z.number().int().min(0).max(5), attempt: z.number().int().min(1).max(1000) }).strict()
+export const evaluateStudyCheckpointSchema = getStudyLessonSchema.extend({ lessonId: z.string().min(1).max(360), checkpointId: z.string().min(1).max(420), selectedOptionId: z.string().min(1).max(120), studentJustification: z.string().trim().min(3).max(1000) }).strict()
 export const studyPresentationIntentSchema = z.enum(['SIMPLIFY', 'ANALOGY', 'CODE_FIRST', 'MORE_EXAMPLES', 'STEP_BY_STEP', 'MORE_DEPTH', 'MORE_CONCISE'])
 export const studyLessonAdaptationModeSchema = z.enum(['CUSTOM', 'SIMPLIFY', 'ANALOGY', 'CODE_FIRST', 'MORE_EXAMPLES', 'STEP_BY_STEP', 'MORE_DEPTH', 'MORE_CONCISE'])
 const emptyRecurringPresentationEvidence = { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }
@@ -26,7 +30,7 @@ export const activateStudyLessonAdaptationSchema = studyLessonAdaptationSelectio
 
 export type StudyLessonBlock = z.infer<typeof studyLessonBlockSchema>
 export interface PersistedStudyLesson extends z.infer<typeof studyLessonContentSchema> { readonly id: string; readonly generationKind: 'ai_generated' | 'provisional_fallback'; readonly workspaceId: string; readonly roadmapId: string; readonly moduleId: string; readonly topicId: string; readonly providerId: string | null; readonly modelId: string | null; readonly createdAt: number }
-export interface StudyCheckpointEvaluation { readonly correct: boolean; readonly difficulty: string | null; readonly feedback: string; readonly hint: string | null; readonly reinforcement: string | null }
+export interface StudyCheckpointEvaluation { readonly correct: boolean; readonly selectedOptionId: string; readonly attempt: number; readonly studentJustification: string; readonly rationale: string; readonly misconceptionTag: string | null; readonly feedback: string; readonly hint: string | null; readonly reinforcement: string | null }
 export type StudyLessonLoadResult =
   | { readonly status: 'ready'; readonly lesson: PersistedStudyLesson; readonly sources: PersistedStudyLesson['sources'] }
   | { readonly status: 'waiting_for_provider'; readonly errorCode: 'PROVIDER_UNAVAILABLE' }

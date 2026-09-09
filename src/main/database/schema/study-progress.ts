@@ -2,7 +2,6 @@ import { sql } from 'drizzle-orm'
 import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import { workspaces } from './workspaces'
 import { roadmapModules, roadmaps } from './roadmaps'
-import { studyLessons } from './study-lessons'
 
 export const studyProgress = sqliteTable('study_progress', {
   workspaceId: text('workspace_id').primaryKey().references(() => workspaces.id, { onDelete: 'cascade' }),
@@ -23,7 +22,7 @@ export const studyProgressEvents = sqliteTable('study_progress_events', {
   type: text('type', { enum: ['TOPIC_STARTED', 'TOPIC_COMPLETED', 'CHECKPOINT_ANSWERED', 'HELP_USED'] }).notNull(),
   moduleId: text('module_id').notNull(),
   topicId: text('topic_id').notNull(),
-  lessonId: text('lesson_id').notNull().references(() => studyLessons.id, { onDelete: 'cascade' }),
+  lessonId: text('lesson_id').notNull(),
   checkpointId: text('checkpoint_id'),
   correct: integer('correct', { mode: 'boolean' }),
   createdAt: integer('created_at').notNull(),
@@ -39,6 +38,7 @@ export const studyInteractiveCodeStates = sqliteTable('study_interactive_code_st
   blockId: text('block_id').notNull(),
   currentCode: text('current_code').notNull(),
   prediction: text('prediction'),
+  currentSourceRevision: text('current_source_revision').notNull().default('legacy-unvalidated'),
   attempts: integer('attempts').notNull().default(0),
   lastExecutionJson: text('last_execution_json'),
   validationResultJson: text('validation_result_json'),

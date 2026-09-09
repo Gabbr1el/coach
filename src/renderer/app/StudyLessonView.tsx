@@ -3,6 +3,8 @@ import type { Roadmap, RoadmapModule } from '../../shared/contracts/roadmap-cont
 import type { PersistedStudyLesson, StudyCheckpointEvaluation, StudyLessonAdaptation, StudyLessonBlock } from '../../shared/contracts/study-lesson-contract'
 import type { StudyCheckpointState, StudyLessonPosition, StudyProgressState } from '../../shared/contracts/study-progress-contract'
 import type { InteractiveCodeBlock, InteractiveCodeState } from '../../shared/contracts/code-execution-contract'
+import { EmbeddedCodeEditor } from './EmbeddedCodeEditor'
+import { interactiveSourceRevision } from '../../application/code-execution/interactive-code'
 
 const labels: Record<StudyLessonBlock['type'], string> = { explanation: 'Explicação', codeExample: 'Exemplo de código', interactiveCode: 'Laboratório inline', analogy: 'Analogia', warning: 'Atenção', commonError: 'Erro comum', comparison: 'Comparação', checkpoint: 'Verificação', miniExercise: 'Prática' }
 const reviewTypes = new Set<StudyLessonBlock['type']>(['commonError', 'warning', 'comparison', 'interactiveCode', 'checkpoint', 'miniExercise'])
@@ -71,6 +73,11 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
   const topic = module.topics.find((item) => `${module.id}:${item}` === progress.topicId) ?? module.title
   const checkpoints = displayedBlocks.reduce<Array<Extract<StudyLessonBlock, { type: 'checkpoint' }>>>((items, block) => block.type === 'checkpoint' ? [...items, block] : items, [])
   const canComplete = checkpoints.length > 0 && checkpoints.every((block) => checkpointStates[block.id]?.correct === true)
+  const requiredInteractive: InteractiveCodeBlock[] = []
+  for (const block of lesson.blocks) if (block.type === 'interactiveCode' && block.requiredForTopicCompletion) requiredInteractive.push(block)
+  const pendingRequiredInteractive: InteractiveCodeBlock[] = []
+  for (const block of requiredInteractive) { const state = interactiveStates[block.id]; if (state?.applicable !== false && (state?.validationResult?.status !== 'passed' || state.validationResult.sourceRevision !== state.currentSourceRevision)) pendingRequiredInteractive.push(block) }
+  const canCompleteTopic = canComplete && pendingRequiredInteractive.length === 0
 
   useEffect(() => { checkpointStatesRef.current = checkpointStates }, [checkpointStates])
   useEffect(() => { interactiveStatesRef.current = interactiveStates }, [interactiveStates])
@@ -88,7 +95,7 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
       if (cancelled) return
       const persisted = Object.fromEntries(states.map((state) => [state.blockId, state]))
       const initial: Record<string, InteractiveCodeState> = {}
-      for (const block of lesson.blocks) if (block.type === 'interactiveCode') initial[block.id] = persisted[block.id] ?? { lessonId: lesson.id, blockId: block.id, currentCode: block.initialCode, prediction: null, attempts: 0, lastExecution: null, validationResult: null, updatedAt: 0 }
+      for (const block of lesson.blocks) if (block.type === 'interactiveCode') initial[block.id] = persisted[block.id] ?? { lessonId: lesson.id, blockId: block.id, currentCode: block.initialCode, prediction: null, currentSourceRevision: interactiveSourceRevision(block.initialCode, null), attempts: 0, lastExecution: null, validationResult: null, applicable: true, unavailableReason: null, updatedAt: 0 }
       setInteractiveStates(initial)
     })
     return () => { cancelled = true }
@@ -209,7 +216,7 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
   }
 
   async function executeInteractive(block: InteractiveCodeBlock) {
-    const current = interactiveStates[block.id] ?? { lessonId: lesson.id, blockId: block.id, currentCode: block.initialCode, prediction: null, attempts: 0, lastExecution: null, validationResult: null, updatedAt: 0 }
+    const current = interactiveStates[block.id] ?? { lessonId: lesson.id, blockId: block.id, currentCode: block.initialCode, prediction: null, currentSourceRevision: interactiveSourceRevision(block.initialCode, null), attempts: 0, lastExecution: null, validationResult: null, applicable: true, unavailableReason: null, updatedAt: 0 }
     if (interactiveBusy || (block.interactionType === 'PREDICT_AND_RUN' && !current.prediction?.trim())) return
     setInteractiveBusy(block.id)
     try {
@@ -254,16 +261,18 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
               <ol className="mt-4 space-y-2">{block.walkthrough.map((step, index) => <li key={`${block.id}:${index}`} className="text-sm leading-6 text-coach-muted"><strong className="mr-2 text-coach-green">{index + 1}.</strong>{step}</li>)}</ol>
             </>}
             {block.type === 'interactiveCode' && (() => {
-              const interactive = interactiveStates[block.id] ?? { lessonId: lesson.id, blockId: block.id, currentCode: block.initialCode, prediction: null, attempts: 0, lastExecution: null, validationResult: null, updatedAt: 0 }
+              const interactive = interactiveStates[block.id] ?? { lessonId: lesson.id, blockId: block.id, currentCode: block.initialCode, prediction: null, currentSourceRevision: interactiveSourceRevision(block.initialCode, null), attempts: 0, lastExecution: null, validationResult: null, applicable: true, unavailableReason: null, updatedAt: 0 }
               const running = interactiveBusy === block.id
               return <div onFocus={() => onInteractiveContext(block, interactive)}>
                 <p className="mt-4 text-sm leading-7 text-coach-muted">{block.instruction}</p>
-                <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wider"><span className="rounded-full border border-coach-green/30 px-2 py-1 text-coach-green">{block.language}</span><span className="rounded-full border border-white/10 px-2 py-1 text-white/55">{block.interactionType.replaceAll('_', ' ')}</span><span className="rounded-full border border-white/10 px-2 py-1 text-white/55">Evidência: {block.evidenceMode}</span></div>
-                {block.predictionPrompt && <label className="mt-4 block text-xs font-black uppercase text-coach-muted">{block.predictionPrompt}<textarea value={interactive.prediction ?? ''} disabled={running} onChange={(event) => updateInteractiveDraft(block, { ...interactive, prediction: event.target.value })} className="mt-2 min-h-16 w-full rounded-lg border border-coach-line bg-[#0b0c10] p-3 text-sm font-normal normal-case text-coach-ink" /></label>}
-                <textarea aria-label={`Código de ${block.title}`} spellCheck={false} value={interactive.currentCode} disabled={running} onChange={(event) => updateInteractiveDraft(block, { ...interactive, currentCode: event.target.value })} className="mt-4 min-h-52 w-full resize-y rounded-lg border border-white/10 bg-[#060a09] p-4 font-mono text-xs leading-6 text-[#d7f5e8] outline-none focus:border-coach-green" />
-                <div className="mt-3 flex items-center justify-between gap-3"><p className="text-xs text-coach-muted">{interactive.attempts ? `${interactive.attempts} execução(ões) persistida(s)` : 'Ainda não executado'}</p><button type="button" disabled={running || (block.interactionType === 'PREDICT_AND_RUN' && !interactive.prediction?.trim())} onClick={() => void executeInteractive(block)} className="rounded-lg bg-coach-green px-4 py-2 text-xs font-black text-white disabled:opacity-50">{running ? 'Executando...' : 'Executar aqui'}</button></div>
+                <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wider"><span className="rounded-full border border-coach-green/30 px-2 py-1 text-coach-green">{block.language}</span><span className="rounded-full border border-white/10 px-2 py-1 text-white/55">{block.interactionType.replaceAll('_', ' ')}</span><span className="rounded-full border border-white/10 px-2 py-1 text-white/55">Evidência: {block.evidenceMode}</span>{block.requiredForTopicCompletion && <span className="rounded-full border border-coach-orange/30 px-2 py-1 text-coach-orange">Necessário para concluir este tópico</span>}</div>
+                {block.predictionPrompt && <label className="mt-4 block text-xs font-black uppercase text-coach-muted">{block.predictionPrompt}<textarea value={interactive.prediction ?? ''} disabled={running} onChange={(event) => { const prediction = event.target.value; updateInteractiveDraft(block, { ...interactive, prediction, currentSourceRevision: interactiveSourceRevision(interactive.currentCode, prediction) }) }} className="mt-2 min-h-16 w-full rounded-lg border border-coach-line bg-[#0b0c10] p-3 text-sm font-normal normal-case text-coach-ink" /></label>}
+                <div className="mt-4 h-64 overflow-hidden rounded-lg border border-white/10 bg-[#060a09]"><EmbeddedCodeEditor value={interactive.currentCode} language={block.language} path={block.language === 'java' ? `${block.id}.Main.java` : `${block.id}.${block.language === 'python' ? 'py' : 'c'}`} disabled={running || !interactive.applicable} maxLength={20_000} onChange={(currentCode) => updateInteractiveDraft(block, { ...interactive, currentCode, currentSourceRevision: interactiveSourceRevision(currentCode, interactive.prediction) })} /></div>
+                {!interactive.applicable && <p className="mt-3 rounded-lg border border-coach-orange/40 bg-coach-orange/10 p-3 text-xs font-bold text-coach-orange">Ambiente {block.language} não disponível neste computador.</p>}
+                <div className="mt-3 flex items-center justify-between gap-3"><p className="text-xs text-coach-muted">{interactive.attempts ? `${interactive.attempts} execução(ões) persistida(s)` : 'Ainda não executado'}</p><button type="button" disabled={running || !interactive.applicable || (block.interactionType === 'PREDICT_AND_RUN' && !interactive.prediction?.trim())} onClick={() => void executeInteractive(block)} className="rounded-lg bg-coach-green px-4 py-2 text-xs font-black text-white disabled:opacity-50">{running ? 'Executando...' : 'Executar aqui'}</button></div>
                 {interactive.lastExecution && <div className="mt-4 grid gap-3 sm:grid-cols-2"><div className="rounded-lg border border-white/10 bg-black/20 p-3"><strong className="text-xs">Saída</strong><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-xs text-coach-muted">{interactive.lastExecution.stdout || '(sem saída)'}</pre></div><div className="rounded-lg border border-white/10 bg-black/20 p-3"><strong className="text-xs">Erros · {interactive.lastExecution.phase ?? 'run'} · exit {interactive.lastExecution.exitCode ?? 'null'}</strong><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-xs text-red-200/75">{interactive.lastExecution.stderr || '(sem erros)'}</pre></div></div>}
-                {interactive.validationResult && <p className={`mt-3 rounded-lg border p-3 text-xs font-bold ${interactive.validationResult.status === 'passed' ? 'border-coach-green/40 bg-coach-green/10 text-coach-green' : interactive.validationResult.status === 'failed' ? 'border-coach-orange/40 bg-coach-orange/10 text-coach-orange' : 'border-white/10 text-coach-muted'}`}>{interactive.validationResult.message}</p>}
+                {interactive.validationResult?.predictionCorrect !== null && interactive.validationResult?.predictionCorrect !== undefined && <p className="mt-3 text-xs text-coach-muted">Previsão {interactive.validationResult.predictionCorrect ? 'correta' : 'diferente da saída real'}.</p>}
+                {interactive.validationResult && <p className={`mt-3 rounded-lg border p-3 text-xs font-bold ${interactive.validationResult.status === 'passed' ? 'border-coach-green/40 bg-coach-green/10 text-coach-green' : interactive.validationResult.status === 'failed' || interactive.validationResult.status === 'stale' ? 'border-coach-orange/40 bg-coach-orange/10 text-coach-orange' : 'border-white/10 text-coach-muted'}`}>{interactive.validationResult.status === 'passed' ? '✓ Experimento concluído.' : interactive.validationResult.message}</p>}
               </div>
             })()}
             {block.type === 'checkpoint' && <>
@@ -280,7 +289,7 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
       </div>
 
       <footer className="mt-8 rounded-xl border border-coach-line bg-[#111217] p-5">
-        {canComplete ? <div className="flex flex-wrap items-center justify-between gap-4"><p className="text-sm text-coach-muted">Todos os checkpoints foram respondidos corretamente.</p><button type="button" onClick={onComplete} className="rounded-xl bg-coach-orange px-5 py-3 text-sm font-black text-white">Concluir tópico</button></div> : <p className="text-sm text-coach-muted">Responda corretamente {checkpoints.length === 0 ? 'ao menos um checkpoint para habilitar a conclusão' : `os ${checkpoints.length} checkpoints para concluir o tópico`}.</p>}
+        {canCompleteTopic ? <div className="flex flex-wrap items-center justify-between gap-4"><p className="text-sm text-coach-muted">Verificações e experimentos obrigatórios concluídos.</p><button type="button" onClick={onComplete} className="rounded-xl bg-coach-orange px-5 py-3 text-sm font-black text-white">Concluir tópico</button></div> : canComplete && pendingRequiredInteractive.length > 0 ? <p className="text-sm text-coach-muted">Verificações concluídas. Falta validar {pendingRequiredInteractive.length} experimento{pendingRequiredInteractive.length === 1 ? '' : 's'} obrigatório{pendingRequiredInteractive.length === 1 ? '' : 's'}.</p> : <p className="text-sm text-coach-muted">Responda corretamente {checkpoints.length === 0 ? 'ao menos um checkpoint para habilitar a conclusão' : `os ${checkpoints.length} checkpoints para concluir o tópico`}.</p>}
       </footer>
       {lesson.sources.length > 0 && <footer className="mt-5 border-t border-coach-line pt-6"><p className="text-[10px] font-black uppercase tracking-[.16em] text-coach-muted">Fontes consultadas</p><div className="mt-3 flex flex-wrap gap-2">{lesson.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="rounded-lg border border-coach-line px-3 py-2 text-xs font-bold text-coach-green hover:bg-white/[.03]">{source.title}</a>)}</div></footer>}
     </div>

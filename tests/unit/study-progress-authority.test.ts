@@ -6,7 +6,7 @@ import { applyLearningEvidence, emptyTopicLearningState } from '../../src/applic
 
 const migrationsFolder = resolve('drizzle/migrations')
 
-function state(checkpointStates: Record<string, { selectedAnswer: number | null; attempt: number; correct: boolean; feedback: string | null; reinforcementBlocks: string[] }>) {
+function state(checkpointStates: Record<string, unknown>) {
   return mapStudyProgressState({ workspaceId: '00000000-0000-4000-8000-000000000001', roadmapId: '00000000-0000-4000-8000-000000000002', currentModuleId: '00000000-0000-4000-8000-000000000003', currentTopicId: 'topic', currentLessonId: 'lesson', currentCheckpointId: null, topicStatusesJson: '{}', lessonPositionsJson: '{}', checkpointStatesJson: JSON.stringify(checkpointStates), updatedAt: 1 })
 }
 const correctState = { selectedOptionId: 'option-0', studentJustification: 'Corresponde ao comportamento explicado', attempt: 1, correct: true, currentFeedback: 'Correto', currentReinforcement: null, rationale: 'Corresponde ao comportamento descrito', history: [] }
@@ -20,7 +20,37 @@ function databaseWithLesson(checkpointCount: number) {
   return database
 }
 
+const availableToolchains = [{ language: 'python' as const, available: true, command: '/usr/bin/python3', version: 'test', detail: null }, { language: 'c' as const, available: true, command: '/usr/bin/gcc', version: 'test', detail: null }, { language: 'java' as const, available: true, command: '/usr/bin/javac', version: 'test', detail: null }]
+
+function addRequiredInteractive(database: ReturnType<typeof openCoachDatabase>, code = 'print(1)') {
+  const row = database.sqlite.prepare('SELECT content_json AS contentJson FROM study_lessons WHERE id = ?').get('lesson') as { contentJson: string }
+  const content = JSON.parse(row.contentJson) as { blocks: unknown[] }
+  content.blocks.push({ id: 'required-run', type: 'interactiveCode', title: 'Execute', interactionType: 'EDIT_AND_RUN', language: 'python', instruction: 'Execute', initialCode: code, predictionPrompt: null, evidenceMode: 'validated', requiredForTopicCompletion: true, expectedOutput: '1' })
+  database.sqlite.prepare('UPDATE study_lessons SET content_json = ? WHERE id = ?').run(JSON.stringify(content), 'lesson')
+}
+
 describe('authoritative topic completion gate', () => {
+  it('blocks required interactive work until its current revision is passed', () => {
+    const database = databaseWithLesson(2)
+    addRequiredInteractive(database)
+    const progress = state({ 'check-0': correctState, 'check-1': correctState })
+    expect(() => assertTopicCompletionAllowed(database, progress, 'lesson', availableToolchains)).toThrow('must be validated')
+    database.sqlite.prepare("INSERT INTO study_interactive_code_states (workspace_id, lesson_id, block_id, current_code, prediction, current_source_revision, attempts, validation_result_json, updated_at) VALUES (?, ?, ?, ?, NULL, ?, 1, ?, 1)").run(progress.workspaceId, 'lesson', 'required-run', 'print(1)', 'revision-a-000000', JSON.stringify({ status: 'passed', message: 'ok', sourceRevision: 'revision-a-000000', actualOutput: '1', predictionCorrect: null, validatedAt: 1 }))
+    expect(() => assertTopicCompletionAllowed(database, progress, 'lesson', availableToolchains)).not.toThrow()
+    database.sqlite.prepare("UPDATE study_interactive_code_states SET current_code = ?, current_source_revision = ? WHERE block_id = ?").run('print(2)', 'revision-b-000000', 'required-run')
+    expect(() => assertTopicCompletionAllowed(database, progress, 'lesson', availableToolchains)).toThrow('current source revision')
+    database.sqlite.prepare("UPDATE study_interactive_code_states SET validation_result_json = ? WHERE block_id = ?").run(JSON.stringify({ status: 'passed', message: 'ok', sourceRevision: 'revision-b-000000', actualOutput: '1', predictionCorrect: null, validatedAt: 2 }), 'required-run')
+    expect(() => assertTopicCompletionAllowed(database, progress, 'lesson', availableToolchains)).not.toThrow()
+    database.close()
+  })
+
+  it('does not deadlock completion when the required toolchain is unavailable', () => {
+    const database = databaseWithLesson(2)
+    addRequiredInteractive(database)
+    const progress = state({ 'check-0': correctState, 'check-1': correctState })
+    expect(() => assertTopicCompletionAllowed(database, progress, 'lesson', availableToolchains.map((status) => status.language === 'python' ? { ...status, available: false } : status))).not.toThrow()
+    database.close()
+  })
   it('counts only validated inline work as evidence and never an observation', () => {
     const initial = emptyTopicLearningState('workspace', 'topic', 1)
     const validated = applyLearningEvidence(initial, { type: 'INTERACTIVE_CODE_VALIDATED', occurredAt: 2 })

@@ -6,6 +6,7 @@ import { studyLessonContentSchema } from '../../shared/contracts/study-lesson-co
 import { workspaceConversationInputSchema } from '../../shared/contracts/conversation-contract'
 import { assertTrustedSender } from './trusted-sender'
 import { applyLearningEvidence, emptyTopicLearningState, shouldReplan, type TopicLearningState } from '../../application/study-progress/topic-learning'
+import { parseInteractiveValidation, type ToolchainStatus } from '../../shared/contracts/code-execution-contract'
 
 type ProgressRow = { workspaceId: string; roadmapId: string; currentModuleId: string; currentTopicId: string; currentLessonId: string; currentCheckpointId: string | null; topicStatusesJson: string; lessonPositionsJson: string; checkpointStatesJson?: string; updatedAt: number }
 type LessonBlockRow = { contentJson: string }
@@ -21,9 +22,21 @@ function lessonCheckpoints(database: CoachDatabase, state: StudyProgressState, l
   return studyLessonContentSchema.parse(JSON.parse(row.contentJson)).blocks.filter((block): block is LessonCheckpoint => block.type === 'checkpoint')
 }
 
-export function assertTopicCompletionAllowed(database: CoachDatabase, state: StudyProgressState, lessonId: string): void {
+export function assertTopicCompletionAllowed(database: CoachDatabase, state: StudyProgressState, lessonId: string, toolchains: ToolchainStatus[] = []): void {
   const checkpoints = lessonCheckpoints(database, state, lessonId)
   if (checkpoints.length < 2 || !checkpoints.every((checkpoint) => { const answer = state.checkpointStates?.[checkpoint.id]; return answer?.correct === true && answer.selectedOptionId === checkpoint.correctOptionId })) throw new Error('Topic completion requires all lesson checkpoints to be correct')
+  const lessonRow = database.sqlite.prepare('SELECT content_json AS contentJson FROM study_lessons WHERE id = ? AND workspace_id = ?').get(lessonId, state.workspaceId) as LessonBlockRow | undefined
+  if (!lessonRow) throw new Error('Study lesson not found for completion')
+  const available = new Map(toolchains.map((toolchain) => [toolchain.language, toolchain.available]))
+  const required = studyLessonContentSchema.parse(JSON.parse(lessonRow.contentJson)).blocks.filter((block) => block.type === 'interactiveCode' && block.requiredForTopicCompletion && available.get(block.language) === true)
+  const rows = database.sqlite.prepare('SELECT block_id AS blockId, current_source_revision AS currentSourceRevision, validation_result_json AS validationResultJson FROM study_interactive_code_states WHERE workspace_id = ? AND lesson_id = ?').all(state.workspaceId, lessonId) as Array<{ blockId: string; currentSourceRevision: string; validationResultJson: string | null }>
+  const states = new Map(rows.map((row) => [row.blockId, row]))
+  for (const block of required) {
+    const interactive = states.get(block.id)
+    if (!interactive?.validationResultJson) throw new Error('Required interactive experiments must be validated before topic completion')
+    const validation = parseInteractiveValidation(JSON.parse(interactive.validationResultJson), interactive.currentSourceRevision)
+    if (validation?.status !== 'passed' || validation.sourceRevision !== interactive.currentSourceRevision) throw new Error('Required interactive experiments must be valid for the current source revision')
+  }
 }
 
 export function nextTopicTarget(modules: Array<{ id: string; topics: string[] }>, moduleId: string, topicId: string): { moduleId: string; topicId: string; lessonId: string; completedModule: boolean } | null {
@@ -46,7 +59,7 @@ export function mapStudyProgressState(row: ProgressRow): StudyProgressState {
   return { ...row, moduleId: row.currentModuleId, topicId: row.currentTopicId, lessonId: row.currentLessonId, checkpointId: row.currentCheckpointId, topicStatuses: JSON.parse(row.topicStatusesJson) as StudyProgressState['topicStatuses'], lessonPositions: positions, checkpointStates, currentPosition: positions[row.currentLessonId] ?? null }
 }
 
-export function registerStudyProgressHandlers(database: CoachDatabase): void {
+export function registerStudyProgressHandlers(database: CoachDatabase, getToolchains: () => ToolchainStatus[] = () => []): void {
   const get = (workspaceId: string) => {
     const row = database.sqlite.prepare('SELECT workspace_id AS workspaceId, roadmap_id AS roadmapId, current_module_id AS currentModuleId, current_topic_id AS currentTopicId, current_lesson_id AS currentLessonId, current_checkpoint_id AS currentCheckpointId, topic_statuses_json AS topicStatusesJson, lesson_positions_json AS lessonPositionsJson, checkpoint_states_json AS checkpointStatesJson, updated_at AS updatedAt FROM study_progress WHERE workspace_id = ?').get(workspaceId) as ProgressRow | undefined
     return row ? mapStudyProgressState(row) : null
@@ -126,7 +139,7 @@ export function registerStudyProgressHandlers(database: CoachDatabase): void {
     const active = get(input.workspaceId)
     if (active?.topicStatuses[input.topicId] === 'COMPLETED') return { state: active, nextTarget: active.topicId === input.topicId ? null : { moduleId: active.moduleId, topicId: active.topicId, lessonId: active.lessonId }, shouldReplan: false }
     if (!active || active.topicId !== input.topicId) throw new Error('Topic is not the active study topic')
-    assertTopicCompletionAllowed(database, active, active.lessonId)
+    assertTopicCompletionAllowed(database, active, active.lessonId, getToolchains())
     const now = Date.now()
     const modules = database.sqlite.prepare('SELECT id, position, status, topics_json AS topicsJson FROM roadmap_modules WHERE roadmap_id = ? ORDER BY position').all(active.roadmapId) as Array<{ id: string; position: number; status: string; topicsJson: string }>
     const moduleIndex = modules.findIndex((module) => module.id === active.moduleId)

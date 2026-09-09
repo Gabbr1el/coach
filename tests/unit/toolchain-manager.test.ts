@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { ToolchainManager } from '../../src/main/code-execution/toolchain-manager'
 import type { WorkspaceProject } from '../../src/shared/contracts/project-contract'
 import { validateInteractiveExecution } from '../../src/main/ipc/code-execution-handlers'
+import { interactiveSourceRevision } from '../../src/application/code-execution/interactive-code'
+import { parseInteractiveValidation } from '../../src/shared/contracts/code-execution-contract'
 
 function project(language: 'python' | 'c' | 'java', files: Array<[string, string]>, entryFilePath: string): WorkspaceProject {
   return { id: crypto.randomUUID(), workspaceId: crypto.randomUUID(), name: 'Teste', language, entryFilePath, files: files.map(([path, content]) => ({ id: crypto.randomUUID(), path, content, revision: 0, updatedAt: 1 })), activeFileId: '', openFileIds: [], updatedAt: 1 }
@@ -9,11 +11,23 @@ function project(language: 'python' | 'c' | 'java', files: Array<[string, string
 
 describe('ToolchainManager', () => {
   it('requires real output validation instead of treating exit code zero as correctness', () => {
-    const block = { id: 'block', type: 'interactiveCode' as const, title: 'Validar', interactionType: 'EDIT_AND_RUN' as const, language: 'python' as const, instruction: 'Execute', initialCode: 'print(2)', predictionPrompt: null, evidenceMode: 'validated' as const, expectedOutput: '2' }
+    const block = { id: 'block', type: 'interactiveCode' as const, title: 'Validar', interactionType: 'EDIT_AND_RUN' as const, language: 'python' as const, instruction: 'Execute', initialCode: 'print(2)', predictionPrompt: null, evidenceMode: 'validated' as const, requiredForTopicCompletion: false, expectedOutput: '2' }
     const execution = { command: 'python3 main.py', stdout: '3\n', stderr: '', exitCode: 0, timedOut: false, durationMs: 1, errorSignature: null }
-    expect(validateInteractiveExecution(block, execution, 10)).toMatchObject({ status: 'failed' })
-    expect(validateInteractiveExecution(block, { ...execution, stdout: '2\n' }, 11)).toMatchObject({ status: 'passed' })
-    expect(validateInteractiveExecution({ ...block, evidenceMode: 'observation' }, { ...execution, stdout: '2\n' }, 12)).toMatchObject({ status: 'not_applicable' })
+    expect(validateInteractiveExecution(block, execution, 'revision-00000001', null, 10)).toMatchObject({ status: 'failed' })
+    expect(validateInteractiveExecution(block, { ...execution, stdout: '2\n' }, 'revision-00000002', null, 11)).toMatchObject({ status: 'passed' })
+    expect(validateInteractiveExecution({ ...block, evidenceMode: 'observation' }, { ...execution, stdout: '2\n' }, 'revision-00000003', null, 12)).toMatchObject({ status: 'not_applicable' })
+  })
+
+  it('records deterministic prediction correctness and source revision', () => {
+    const block = { id: 'predict', type: 'interactiveCode' as const, title: 'Prever', interactionType: 'PREDICT_AND_RUN' as const, language: 'python' as const, instruction: 'Preveja', initialCode: 'print(7)', predictionPrompt: 'Saída?', evidenceMode: 'observation' as const, requiredForTopicCompletion: false, expectedOutput: null }
+    const execution = { command: 'python3 main.py', stdout: '7\r\n', stderr: '', exitCode: 0, timedOut: false, durationMs: 1, errorSignature: null }
+    const revision = interactiveSourceRevision(block.initialCode, '7')
+    expect(validateInteractiveExecution(block, execution, revision, '7', 10)).toMatchObject({ sourceRevision: revision, actualOutput: '7', predictionCorrect: true })
+    expect(validateInteractiveExecution(block, execution, interactiveSourceRevision(block.initialCode, '8'), '8', 11)).toMatchObject({ predictionCorrect: false })
+  })
+
+  it('treats validation records from before source revisions as stale', () => {
+    expect(parseInteractiveValidation({ status: 'passed', message: 'Saída validada.', validatedAt: 1 }, 'current-revision-1')).toMatchObject({ status: 'stale', sourceRevision: 'legacy-unvalidated' })
   })
 
   it('runs Python and returns structured runtime diagnostics', async () => {
@@ -43,4 +57,9 @@ describe('ToolchainManager', () => {
     expect(failure.phase).toBe('compile')
     expect(failure.diagnostics?.[0]).toMatchObject({ filePath: 'src/Main.java', severity: 'error' })
   }, 20_000)
+
+  it('runs a self-contained inline Java Main program', async () => {
+    const result = await new ToolchainManager().execute(project('java', [['Main.java', 'public class Main { public static void main(String[] args) { System.out.println("java-inline-ok"); } }']], 'Main.java'))
+    expect(result).toMatchObject({ exitCode: 0, stdout: 'java-inline-ok\n', phase: 'run' })
+  }, 15_000)
 })

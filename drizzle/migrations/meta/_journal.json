@@ -239,6 +239,13 @@
       "when": 1788966717879,
       "tag": "0033_sharp_scarlet_spider",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1788972535198,
+      "tag": "0034_aberrant_korath",
+      "breakpoints": true
     }
   ]
 }

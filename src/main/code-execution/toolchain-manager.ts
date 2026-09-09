@@ -32,8 +32,8 @@ export class ToolchainManager {
   getStatuses(): ToolchainStatus[] {
     return (Object.keys(COMMANDS) as ProjectLanguage[]).map((language) => {
       const command = COMMANDS[language]
-      try { const flag = language === 'java' ? '-version' : '--version'; const output = execFileSync(command, [flag], { timeout: 2_000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); return { language, available: true, command, version: output.trim().split('\n')[0] || null, detail: null } }
-      catch (error) { const stderr = error && typeof error === 'object' && 'stderr' in error ? String(error.stderr).trim() : ''; if (stderr) return { language, available: true, command, version: stderr.split('\n')[0] ?? null, detail: null }; return { language, available: false, command, version: null, detail: 'Toolchain não encontrado' } }
+      try { execFileSync(BWRAP_PATH, ['--version'], { timeout: 2_000, stdio: 'ignore' }); execFileSync('/usr/bin/prlimit', ['--version'], { timeout: 2_000, stdio: 'ignore' }); if (language === 'java') execFileSync('/usr/bin/java', ['-version'], { timeout: 2_000, stdio: 'ignore' }); const flag = language === 'java' ? '-version' : '--version'; const output = execFileSync(command, [flag], { timeout: 2_000, encoding: 'utf8', stdio: ['ignore', 'pipe', language === 'java' ? 'pipe' : 'ignore'] }); return { language, available: true, command, version: output.trim().split('\n')[0] || null, detail: null } }
+      catch { return { language, available: false, command, version: null, detail: 'Toolchain ou sandbox não disponível' } }
     })
   }
 

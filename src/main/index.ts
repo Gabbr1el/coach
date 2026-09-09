@@ -59,6 +59,7 @@ import { AcademicSubjectContextService } from '../application/workspaces/academi
 import { SqliteAcademicSubjectContextRepository } from './repositories/sqlite-academic-subject-context-repository'
 import { registerWorkspaceOnboardingHandlers } from './ipc/workspace-onboarding-handlers'
 import { registerStudyProgressHandlers } from './ipc/study-progress-handlers'
+import { ToolchainManager } from './code-execution/toolchain-manager'
 import { mapStudyProgressState } from './ipc/study-progress-handlers'
 import { registerStudyLessonHandlers } from './ipc/study-lesson-handlers'
 import { StudyLessonService } from '../application/study-lessons/study-lesson-service'
@@ -132,12 +133,13 @@ void app.whenReady().then(async () => {
     const studyLessonService = new StudyLessonService(new SqliteStudyLessonRepository(database), providerManager, (id) => workspaceRepository.findById(id), (id) => roadmapRepository.findCurrent(id), Date.now, curriculumSourceService, { getTopicLearningState, getWorkspaceMemory, searchMaterials: (id, query) => materialService.search(id, query) })
     const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory, getCurrentContext: (id) => currentWorkspaceContext.get(id), contextHub: workspaceContextHub, workspaceActions, searchMaterials: (id, query) => materialService.search(id, query), studyLessonService })
     registerApplicationHandlers()
-    registerStudyProgressHandlers(database)
+    const toolchainManager = new ToolchainManager()
+    registerStudyProgressHandlers(database, () => toolchainManager.getStatuses())
     registerStudyLessonHandlers(studyLessonService)
     registerWorkspaceHandlers(workspaceService)
     registerStudyWorkspaceHandlers(studyWorkspaceService)
     const projectRepository = new DrizzleProjectRepository(database)
-    registerCodeExecutionHandlers(async (id) => Boolean(await workspaceRepository.findById(id)), observerService, projectRepository, database)
+    registerCodeExecutionHandlers(async (id) => Boolean(await workspaceRepository.findById(id)), observerService, projectRepository, database, toolchainManager)
     registerObserverHandlers(observerService)
     const planningService = new PlanningService(new DrizzlePlanningRepository(database))
     registerPlanningHandlers(planningService)

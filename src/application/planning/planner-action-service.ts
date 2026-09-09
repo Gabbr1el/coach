@@ -34,10 +34,8 @@ export class PlannerActionService {
   constructor(private readonly dependencies: PlannerActionDependencies) { this.now = dependencies.now ?? Date.now; this.createId = dependencies.createId ?? (() => crypto.randomUUID()) }
   listPending(): PlannerAction[] { return this.dependencies.repository.listPending() }
   propose(input: { type: PlannerActionType; payload: unknown; label: string; originMessageId: string; contextVersion: number }): PlannerAction {
-    const workspaceIntent = input.type === 'workspace.create' ? input.payload as WorkspaceCreateIntent : null
-    const parsed = plannerActionProposalSchema.parse({ type: input.type, payload: workspaceIntent ? { name: workspaceIntent.name, objective: workspaceIntent.objective, language: workspaceIntent.language } : input.payload })
-    const academicEvent = workspaceIntent?.academicEvent ? workspaceAcademicEventIntentSchema.parse(workspaceIntent.academicEvent) : undefined
-    const payload = workspaceIntent ? { ...parsed.payload, academicEvent } : parsed.payload
+    const parsed = plannerActionProposalSchema.parse({ type: input.type, payload: input.payload })
+    const payload = parsed.payload
     const key = createHash('sha256').update(JSON.stringify({ type: parsed.type, payload, originMessageId: input.originMessageId, contextVersion: input.contextVersion })).digest('hex')
     return this.dependencies.repository.create({ id: this.createId(), originMessageId: input.originMessageId, label: input.label, contextVersion: input.contextVersion, type: parsed.type, status: 'proposed', payload, result: null, createdAt: this.now(), resolvedAt: null }, key)
   }
@@ -50,11 +48,7 @@ export class PlannerActionService {
       if (action.type === 'workspace.prepare') {
         result = action.payload
       } else if (action.type === 'workspace.create') {
-        const payload = action.payload as WorkspaceCreateIntent
-        const workspace = await this.dependencies.createWorkspace(payload)
-        if (payload.language) await this.dependencies.createProject(workspace.id, workspace.name, payload.language)
-        if (payload.academicEvent) this.dependencies.createDeadline({ workspaceId: workspace.id, title: payload.academicEvent.title, dueAt: payload.academicEvent.dueAt, estimatedMinutes: payload.academicEvent.estimatedMinutes, masteryPercent: payload.academicEvent.masteryPercent })
-        result = workspace
+        throw new Error('Legacy workspace.create can no longer be executed; use workspace.prepare')
       } else if (action.type === 'deadline.create') {
         this.dependencies.createDeadline(action.payload as Parameters<PlannerActionDependencies['createDeadline']>[0])
         result = { ok: true }

@@ -40,6 +40,8 @@ export interface StudyLessonSourceProvider {
 }
 
 export interface StudyLessonGenerationContext {
+  /** @deprecated Context is always managed; retained for source compatibility. */
+  canShareContext?(workspaceId: string): boolean
   getTopicLearningState(workspaceId: string, topicId: string): {
     difficulty: LearningDifficulty
     needsReview: boolean
@@ -52,7 +54,6 @@ export interface StudyLessonGenerationContext {
   } | null
   getWorkspaceMemory?(workspaceId: string): string | null
   searchMaterials?(workspaceId: string, query: string): MaterialSearchResult[]
-  canShareContext?(workspaceId: string): boolean
 }
 
 export type StudyLessonGenerationResult = StudyLessonLoadResult

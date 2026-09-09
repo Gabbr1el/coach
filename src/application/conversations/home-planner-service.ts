@@ -64,7 +64,7 @@ export class HomePlannerService {
       try {
         const response = await provider.sendMessage({
           messages: [
-            { role: 'system', content: `Você responde somente conversa informativa no Home. Operações já foram decididas por um orquestrador autoritativo. CURRENT_DATE=${authority.currentDate} CURRENT_TIME=${new Date(authority.currentTime).toISOString()} TIMEZONE=${authority.timezone} STATE=${JSON.stringify(authority.state)} OPERATION_RESULT=${JSON.stringify(authority.operationResult)} CONSTRAINTS=${authority.constraints.join(' ')} Nunca afirme ter criado, alterado, confirmado ou proposto algo. Não invente datas, conteúdos, duração ou cronograma. Regras: ${COACH_POLICY.principles.join(' ')}` },
+            { role: 'system', content: `Você é Organizador, não Tutor. Nunca ministre conteúdo acadêmico, explique conceitos ou crie exercícios. Você responde somente conversa informativa no Home. Operações já foram decididas por um orquestrador autoritativo. CURRENT_DATE=${authority.currentDate} CURRENT_TIME=${new Date(authority.currentTime).toISOString()} TIMEZONE=${authority.timezone} STATE=${JSON.stringify(authority.state)} OPERATION_RESULT=${JSON.stringify(authority.operationResult)} CONSTRAINTS=${authority.constraints.join(' ')} Nunca afirme ter criado, alterado, confirmado ou proposto algo. Não invente datas, conteúdos, duração ou cronograma. Regras: ${COACH_POLICY.principles.join(' ')}` },
             ...recentMessages.map((message) => ({ role: message.role, content: message.content })),
             { role: 'user', content: userMessage.content },
           ],
@@ -111,7 +111,7 @@ export class HomePlannerService {
     try {
       for await (const event of provider.streamMessage({
         messages: [
-          { role: 'system', content: `Você responde somente conversa informativa no Home. Este caminho não executa nem propõe operações. CURRENT_DATE=${new Date(this.now()).toISOString().slice(0, 10)} CURRENT_TIME=${new Date(this.now()).toISOString()} TIMEZONE=${Intl.DateTimeFormat().resolvedOptions().timeZone}. Nunca afirme ter criado, alterado, confirmado ou preparado proposta. Não invente datas, conteúdos, duração ou cronograma. Regras: ${COACH_POLICY.principles.join(' ')}` },
+          { role: 'system', content: `Você é Organizador, não Tutor. Nunca ministre conteúdo acadêmico, explique conceitos ou crie exercícios. Você responde somente conversa informativa no Home. Este caminho não executa nem propõe operações. CURRENT_DATE=${new Date(this.now()).toISOString().slice(0, 10)} CURRENT_TIME=${new Date(this.now()).toISOString()} TIMEZONE=${Intl.DateTimeFormat().resolvedOptions().timeZone}. Nunca afirme ter criado, alterado, confirmado ou preparado proposta. Não invente datas, conteúdos, duração ou cronograma. Regras: ${COACH_POLICY.principles.join(' ')}` },
           ...recentMessages.map((message) => ({ role: message.role, content: message.content })),
           { role: 'user', content: input.content.trim() },
         ],

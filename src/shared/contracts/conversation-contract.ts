@@ -20,11 +20,13 @@ export const streamWorkspaceMessageInputSchema = sendHomeMessageInputSchema.exte
   workspaceId: workspaceIdSchema,
   activePage: z.enum(['overview', 'plan', 'studies', 'materials', 'practice', 'videos', 'reports']).optional(),
   activeStudy: z.object({ roadmapId: z.uuid(), moduleId: z.string().max(100), module: z.string().max(160), topicId: z.string().max(300), topic: z.string().max(240), lessonId: z.string().max(360), currentBlockId: z.string().max(420), checkpointId: z.string().max(420).nullable(), currentExcerpt: z.string().max(4000).nullable() }).optional(),
+  activeMaterial: z.object({ materialId: z.uuid(), name: z.string().max(500), pageOrSlide: z.number().int().min(1).max(500).nullable(), selectedText: z.string().max(2000).nullable() }).nullable().optional(),
   practiceContext: z.object({ fileName: z.string().max(500), language: z.string().max(40), code: z.string().max(200_000) }).optional(),
   lastExecution: z.object({ stdout: z.string().max(8000), stderr: z.string().max(8000), exitCode: z.number().int().nullable(), timedOut: z.boolean() }).nullable().optional(),
 }).strict()
 
 export const cancelWorkspaceStreamInputSchema = z.object({ requestId: z.uuid() }).strict()
+export const workspaceCoachDecisionSchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('final_response') }).strict(), z.object({ kind: z.literal('context_read'), requests: z.array(z.object({ resource: z.enum(['workspace', 'academic', 'roadmap', 'progress', 'lesson', 'materials', 'plan', 'notes']), id: z.string().max(500).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(6000).optional(), pageNumber: z.number().int().min(1).max(500).optional(), query: z.string().max(500).optional() }).strict()).min(1).max(3) }).strict(), z.object({ kind: z.literal('workspace_action'), action: z.object({ type: z.enum(['plan.recalculate', 'notes.add']), arguments: z.record(z.string(), z.unknown()) }).strict() }).strict()])
 
 export type SendHomeMessageInput = z.infer<typeof sendHomeMessageInputSchema>
 export type StreamHomeMessageInput = z.infer<typeof streamHomeMessageInputSchema>

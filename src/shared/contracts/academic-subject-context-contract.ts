@@ -13,6 +13,7 @@ export interface AcademicSubjectContext {
   readonly createdAt: number
   readonly updatedAt: number
 }
+export interface RelatedAcademicContext { readonly subject: string; readonly relation: 'implementation_language' | 'prerequisite' | 'user_selected' }
 
 export const academicSubjectDeclarationSchema = z.object({
   subject: z.string().trim().min(1).max(80),

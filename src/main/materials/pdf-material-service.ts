@@ -6,7 +6,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
 import type { CoachDatabase } from '../database/connection'
-import { materialSemanticAnalysisSchema, type MaterialSearchResult, type MaterialSemanticAnalysis, type MaterialSummary } from '../../shared/contracts/material-contract'
+import { materialSemanticAnalysisSchema, type MaterialReadResult, type MaterialSearchResult, type MaterialSemanticAnalysis, type MaterialSummary } from '../../shared/contracts/material-contract'
 
 const MAX_PDF_BYTES = 20_000_000
 const MAX_PAGES = 500
@@ -130,7 +130,7 @@ export class PdfMaterialService {
       this.persistExtraction(materialId, extracted)
       const assessment = assessLexicalRelevance(workspace, name, extracted)
       this.database.sqlite.prepare('UPDATE materials SET relevance = ? WHERE id = ?').run(assessment.relevance, materialId)
-      const request = { workspaceName: workspace.name, workspaceObjective: workspace.objective, fileName: name, excerpt: extracted.join('\n').slice(0, MAX_REVIEW_CHARACTERS), lexicalRelevance: assessment.relevance }
+      const request = { workspaceName: workspace.name, workspaceObjective: workspace.objective, fileName: name, excerpt: samplePages(extracted, MAX_REVIEW_CHARACTERS), lexicalRelevance: assessment.relevance }
       let semantic: MaterialSemanticAnalysis | null = null
       try { semantic = this.options.analyzeSemantic ? materialSemanticAnalysisSchema.parse(await this.options.analyzeSemantic(request)) : null } catch { semantic = null }
       if (semantic) this.database.sqlite.prepare('UPDATE materials SET semantic_analysis_json = ? WHERE id = ?').run(JSON.stringify(semantic), materialId)
@@ -161,12 +161,12 @@ export class PdfMaterialService {
     return this.getMaterial(materialId)
   }
 
-  search(workspaceId: string, query: string): MaterialSearchResult[] {
+  search(workspaceId: string, query: string, materialIds?: string[]): MaterialSearchResult[] {
     const searchTerms = [...new Set(tokens(query).filter((term) => term.length >= 2))].slice(0, 8)
     if (!searchTerms.length) return []
     const clauses = searchTerms.map(() => "lower(c.content) LIKE ? ESCAPE '\\'").join(' OR ')
     const escapeLike = (term: string) => term.replace(/[\\%_]/g, '\\$&')
-    const rows = this.database.sqlite.prepare(`SELECT c.id AS chunkId, m.id AS materialId, m.name AS materialName, m.relevance, c.page_number AS pageNumber, c.content FROM material_chunks c JOIN materials m ON m.id = c.material_id WHERE m.workspace_id = ? AND m.status = 'ready' AND m.relevance > 0 AND (${clauses}) ORDER BY m.relevance DESC LIMIT 100`).all(workspaceId, ...searchTerms.map((term) => `%${escapeLike(term)}%`)) as SearchRow[]
+    const allowed = materialIds?.length ? materialIds : null; const idClause = allowed ? `AND m.id IN (${allowed.map(() => '?').join(',')})` : ''; const rows = this.database.sqlite.prepare(`SELECT c.id AS chunkId, m.id AS materialId, m.name AS materialName, m.relevance, c.page_number AS pageNumber, c.content FROM material_chunks c JOIN materials m ON m.id = c.material_id WHERE m.workspace_id = ? AND m.status = 'ready' AND m.relevance > 0 ${idClause} AND (${clauses}) ORDER BY m.relevance DESC LIMIT 100`).all(workspaceId, ...(allowed ?? []), ...searchTerms.map((term) => `%${escapeLike(term)}%`)) as SearchRow[]
     const topics = this.topicCandidates(workspaceId)
     const bestByPage = new Map<string, { row: SearchRow; score: number }>()
     for (const row of rows) {
@@ -182,6 +182,9 @@ export class PdfMaterialService {
       return { chunkId: row.chunkId, materialId: row.materialId, materialName: row.materialName, pageNumber: row.pageNumber, topicId: reliableTopicId(row.content, topics), retrieval: 'lexical', content: row.content.slice(start, start + 1_600) }
     })
   }
+  read(workspaceId: string, materialId: string, offset = 0, limit = 4000): MaterialReadResult { const material = this.getReadyMaterial(workspaceId, materialId); const rows = this.database.sqlite.prepare('SELECT page_number AS pageNumber, content FROM material_chunks WHERE material_id = ? ORDER BY page_number, id').all(materialId) as Array<{ pageNumber: number; content: string }>; const full = rows.map((row) => `[Página/slide ${row.pageNumber}]\n${row.content.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')}`).join('\n\n'); const bounded = Math.min(6000, Math.max(1, limit)); const content = full.slice(offset, offset + bounded); return { material, content, offset, nextOffset: offset + content.length < full.length ? offset + content.length : null, pageNumbers: [...new Set(rows.map((row) => row.pageNumber))] } }
+  readPage(workspaceId: string, materialId: string, pageNumber: number): MaterialReadResult { const material = this.getReadyMaterial(workspaceId, materialId); if (pageNumber > material.pageCount) throw new Error('Material page out of bounds'); const rows = this.database.sqlite.prepare('SELECT content FROM material_chunks WHERE material_id = ? AND page_number = ? ORDER BY id').all(materialId, pageNumber) as Array<{ content: string }>; return { material, content: rows.map((row) => row.content.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')).join('\n').slice(0, 6000), offset: 0, nextOffset: null, pageNumbers: [pageNumber] } }
+  overview(workspaceId: string, materialId: string): MaterialReadResult { const material = this.getReadyMaterial(workspaceId, materialId); const pages = [...new Set([1, Math.max(1, Math.ceil(material.pageCount / 2)), material.pageCount])]; return { material, content: pages.map((page) => `[Amostra ${page}]\n${this.readPage(workspaceId, materialId, page).content.slice(0, 1200)}`).join('\n\n').slice(0, 5000), offset: 0, nextOffset: null, pageNumbers: pages } }
 
   private getWorkspace(workspaceId: string): WorkspaceContext {
     const workspace = this.database.sqlite.prepare('SELECT name, objective FROM workspaces WHERE id = ?').get(workspaceId) as WorkspaceContext | undefined
@@ -230,6 +233,7 @@ export class PdfMaterialService {
     if (!row) throw new Error('Material not found')
     return mapMaterial(row)
   }
+  private getReadyMaterial(workspaceId: string, materialId: string): MaterialSummary { const row = this.database.sqlite.prepare("SELECT id, name, media_type AS mediaType, page_count AS pageCount, status, relevance, role, semantic_analysis_json AS semanticAnalysisJson, source_url AS sourceUrl, error_message AS errorMessage, created_at AS createdAt FROM materials WHERE id = ? AND workspace_id = ? AND status = 'ready'").get(materialId, workspaceId) as MaterialRow | undefined; if (!row) throw new Error('Ready material not found'); return mapMaterial(row) }
 
   private topicCandidates(workspaceId: string): TopicCandidate[] {
     const rows = this.database.sqlite.prepare("SELECT m.id AS moduleId, m.topics_json AS topicsJson FROM roadmap_modules m JOIN roadmaps r ON r.id = m.roadmap_id WHERE r.workspace_id = ? AND r.status = 'accepted'").all(workspaceId) as Array<{ moduleId: string; topicsJson: string }>

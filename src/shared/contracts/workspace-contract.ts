@@ -10,6 +10,7 @@ export const createWorkspaceInputSchema = z.object({
   declaredKnowledge: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
   declaredDifficulties: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
   goals: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
+  relatedSubjects: z.array(z.object({ subject: z.string().trim().min(1).max(80), relation: z.enum(['implementation_language', 'prerequisite', 'user_selected']) }).strict()).max(20).optional(),
 }).strict()
 
 export type CreateWorkspaceInput = z.infer<typeof createWorkspaceInputSchema>

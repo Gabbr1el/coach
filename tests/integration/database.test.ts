@@ -51,6 +51,8 @@ function migrationsThrough0028(): string {
 
 describe('Coach database migrations', () => {
   it('persists academic declarations separately from observed evidence', () => { const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const service = new AcademicSubjectContextService(new SqliteAcademicSubjectContextRepository(database), () => 10); service.recordMessage('Sei bastante Python e já uso bibliotecas'); expect(service.get('python')).toMatchObject({ subject: 'Python', declaredLevel: 'advanced', declaredKnowledge: ['Sei bastante Python e já uso bibliotecas'] }); expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM topic_learning_states').get()).toEqual({ count: 0 }); database.close() })
+  it('keeps knowledge and goals separated across subjects in one HOME message', () => { const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const service = new AcademicSubjectContextService(new SqliteAcademicSubjectContextRepository(database), () => 10); service.recordMessage('Sei Python, mas quero aprender Java.'); expect(service.get('Python')?.declaredKnowledge).toEqual(['Sei Python']); expect(service.get('Python')?.goals).toEqual([]); expect(service.get('Java')?.goals).toEqual(['quero aprender Java']); expect(service.get('Java')?.declaredKnowledge).toEqual([]); database.close() })
+  it('separates coordinated knowledge and goal declarations by subject', () => { const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const service = new AcademicSubjectContextService(new SqliteAcademicSubjectContextRepository(database), () => 10); service.recordMessage('Sei Python e quero Java'); expect(service.get('Python')?.declaredKnowledge).toEqual(['Sei Python']); expect(service.get('Java')?.goals).toEqual(['quero Java']); database.close() })
   it('upgrades a populated 0028 database through the registered adaptive-page migration', () => {
     const databasePath = createDatabasePath()
     const oldMigrations = migrationsThrough0028()
@@ -119,6 +121,7 @@ describe('Coach database migrations', () => {
       { name: 'study_progress_events' },
       { name: 'study_sessions' },
       { name: 'topic_learning_states' },
+      { name: 'workspace_academic_contexts' },
       { name: 'workspace_learning_path_state' },
       { name: 'workspace_memories' },
       { name: 'workspace_projects' },

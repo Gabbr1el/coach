@@ -151,6 +151,9 @@ const api: CoachDesktopApi = {
     importFile: (workspaceId) => ipcRenderer.invoke(MATERIAL_CHANNELS.importFile, { workspaceId }),
     list: (workspaceId) => ipcRenderer.invoke(MATERIAL_CHANNELS.list, { workspaceId }),
     search: (input) => ipcRenderer.invoke(MATERIAL_CHANNELS.search, input),
+    read: (input) => ipcRenderer.invoke(MATERIAL_CHANNELS.read, input),
+    readPage: (input) => ipcRenderer.invoke(MATERIAL_CHANNELS.readPage, input),
+    overview: (input) => ipcRenderer.invoke(MATERIAL_CHANNELS.overview, input),
     updateRelevance: (input) => ipcRenderer.invoke(MATERIAL_CHANNELS.updateRelevance, input),
     decide: (input) => ipcRenderer.invoke(MATERIAL_CHANNELS.decide, input),
   },
@@ -183,7 +186,7 @@ const api: CoachDesktopApi = {
     resolve: (input) => ipcRenderer.invoke(PLANNER_ACTION_CHANNELS.resolve, input),
   },
   report: { getGlobalOverview: () => ipcRenderer.invoke(REPORT_CHANNELS.getGlobalOverview) },
-  workspaceOnboarding: { analyze: (input) => ipcRenderer.invoke(WORKSPACE_ONBOARDING_CHANNELS.analyze, input) },
+  workspaceOnboarding: { analyze: (input) => ipcRenderer.invoke(WORKSPACE_ONBOARDING_CHANNELS.analyze, input), replaceAcademicContext: (input) => ipcRenderer.invoke('workspace-onboarding:replace-academic-context', input) },
 }
 
 contextBridge.exposeInMainWorld('coach', Object.freeze(api))

@@ -9,6 +9,7 @@ export interface WorkspaceServiceDependencies {
   readonly createId?: () => string
   readonly ensureLearningPath?: (workspaceId: string) => Promise<unknown>
   readonly academicContext?: AcademicSubjectContextService
+  readonly createWithAcademicContexts?: (workspace: { id: string; name: string; objective: string; createdAt: number; updatedAt: number }, academic: { declaredLevel: CreateWorkspaceInput['declaredLevel']; declaredKnowledge: readonly string[]; declaredDifficulties: readonly string[]; goals: readonly string[] }, related: NonNullable<CreateWorkspaceInput['relatedSubjects']>) => Workspace
 }
 
 export class WorkspaceService {
@@ -17,13 +18,15 @@ export class WorkspaceService {
   private readonly createId: () => string
   private ensureLearningPath: ((workspaceId: string) => Promise<unknown>) | null
   private readonly academicContext: AcademicSubjectContextService | null
+  private readonly createWithAcademicContexts?: WorkspaceServiceDependencies['createWithAcademicContexts']
 
-  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), ensureLearningPath, academicContext }: WorkspaceServiceDependencies) {
+  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), ensureLearningPath, academicContext, createWithAcademicContexts }: WorkspaceServiceDependencies) {
     this.repository = repository
     this.now = now
     this.createId = createId
     this.ensureLearningPath = ensureLearningPath ?? null
     this.academicContext = academicContext ?? null
+    this.createWithAcademicContexts = createWithAcademicContexts
   }
 
   list(): Promise<WorkspaceSummary[]> {
@@ -35,14 +38,16 @@ export class WorkspaceService {
   async create(input: CreateWorkspaceInput): Promise<Workspace> {
     const now = this.now()
     const normalized = normalizeSubject(input.name)
-    this.academicContext?.record({ subject: normalized.subject, declaredLevel: input.declaredLevel ?? null, declaredKnowledge: input.declaredKnowledge ?? [], declaredDifficulties: input.declaredDifficulties ?? [], goals: [...(input.goals ?? []), input.objective].filter(Boolean), sourceEvidence: [] })
-    const workspace = await this.repository.create({
+    const record = {
       id: this.createId(),
       name: normalized.subject,
       objective: input.objective.trim(),
       createdAt: now,
       updatedAt: now,
-    })
+    }
+    const academic = { declaredLevel: input.declaredLevel, declaredKnowledge: input.declaredKnowledge ?? [], declaredDifficulties: input.declaredDifficulties ?? [], goals: [...(input.goals ?? []), input.objective].filter(Boolean) }
+    const workspace = this.createWithAcademicContexts ? this.createWithAcademicContexts(record, academic, input.relatedSubjects ?? []) : await this.repository.create(record)
+    if (!this.createWithAcademicContexts) this.academicContext?.record({ subject: normalized.subject, declaredLevel: academic.declaredLevel ?? null, declaredKnowledge: academic.declaredKnowledge, declaredDifficulties: academic.declaredDifficulties, goals: academic.goals, sourceEvidence: [] })
     void this.ensureLearningPath?.(workspace.id).catch(() => {})
     return workspace
   }

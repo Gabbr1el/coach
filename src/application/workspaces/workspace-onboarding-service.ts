@@ -16,14 +16,16 @@ export class WorkspaceOnboardingService {
     const fromHistory = recent.filter((message) => message.role === 'user').map((message) => declaredSubjectKnowledge(message.content, normalized.subject)).filter((value): value is string => Boolean(value))
     const declared = diagnosticAnswer ? [...fromTopic, ...fromHistory, diagnosticAnswer] : [...fromTopic, ...fromHistory]
     const observed = await this.dependencies.listObservedLearning?.(normalized.subject) ?? []
-    return createSubjectLearningContext(normalized.subject, declared, observed)
+    const context = createSubjectLearningContext(normalized.subject, declared, observed)
+    if (context.declared.length) this.dependencies.academicContext?.record({ subject: normalized.subject, declaredLevel: null, declaredKnowledge: [...context.declared], declaredDifficulties: [], goals: [], sourceEvidence: [...context.declared] })
+    return context
   }
   async analyze(topic: string, diagnosticAnswer?: string): Promise<WorkspaceTopicAnalysis> {
-    const normalized = normalizeSubject(topic); const persisted = this.dependencies.academicContext?.get(normalized.subject); const context = await this.getSubjectLearningContext(topic, diagnosticAnswer); const normalizedTopic = context.subject
+    const normalized = normalizeSubject(topic); let persisted = this.dependencies.academicContext?.get(normalized.subject); const context = await this.getSubjectLearningContext(topic, diagnosticAnswer); persisted ??= this.dependencies.academicContext?.get(normalized.subject) ?? null; const normalizedTopic = context.subject
     const provider = this.dependencies.providerManager.route('planner')
     const hasDeclaredKnowledge = context.declared.length > 0
     const objectiveContext = context.declared.at(-1)
-    const details = { declaredLevel: persisted?.declaredLevel ?? null, declaredKnowledge: persisted?.declaredKnowledge ?? context.declared, declaredDifficulties: persisted?.declaredDifficulties ?? [], goals: persisted?.goals ?? [] }
+    const details = { declaredLevel: persisted?.declaredLevel ?? null, declaredKnowledge: persisted?.declaredKnowledge ?? context.declared, declaredDifficulties: persisted?.declaredDifficulties ?? [], goals: persisted?.goals ?? [], relatedContexts: this.dependencies.academicContext?.list().filter((item) => item.subject !== normalizedTopic) ?? [] }
     if (!provider) return { topic: normalizedTopic, objective: persisted?.goals.at(-1) ?? (objectiveContext ? `Aprender ${normalizedTopic}. Contexto declarado: ${objectiveContext}` : `Aprender ${normalizedTopic}`), needsDiagnostic: !hasDeclaredKnowledge, question: hasDeclaredKnowledge ? null : `O que você já sabe sobre ${normalizedTopic}, e onde sente mais dificuldade?`, contextSource: persisted ? 'academic-context' : diagnosticAnswer ? 'diagnostic' : hasDeclaredKnowledge ? 'general-memory' : 'none', ...details }
     const response = await provider.sendMessage({ messages: [{ role: 'system', content: 'Você é o cérebro de onboarding do Coach. Receba memória acadêmica estruturada por assunto. Dados declared são alegações do estudante; dados observed são evidências do sistema e nunca devem ser confundidos. Apenas contexto declared concreto dispensa o diagnóstico inicial. Responda somente JSON válido com topic, objective, needsDiagnostic e question. Se diagnosticAnswer existir, needsDiagnostic deve ser false e objective deve refletir o nível. Caso contrário faça uma única pergunta curta que descubra nível, experiência e dificuldade.' }, { role: 'user', content: JSON.stringify({ requestedTopic: normalizedTopic, subjectLearningContext: context, diagnosticAnswer: diagnosticAnswer || null }) }], maxOutputTokens: 260 })
     try {

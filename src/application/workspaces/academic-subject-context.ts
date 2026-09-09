@@ -4,14 +4,16 @@ import { normalizeSubject } from './subject-normalizer'
 
 export interface AcademicSubjectContextRepository {
   find(subject: string): AcademicSubjectContext | null
+  list?(): AcademicSubjectContext[]
   upsert(input: AcademicSubjectDeclaration, now: number): AcademicSubjectContext
+  replace?(input: AcademicSubjectDeclaration, now: number): AcademicSubjectContext
 }
 
 function unique(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))]
 }
 
-export function academicDeclarationFromMessage(message: string): AcademicSubjectDeclaration | null {
+function declarationForMessage(message: string): AcademicSubjectDeclaration | null {
   const normalized = normalizeSubject(message)
   const subject = normalized.subject
   if (!subject || subject === message.trim().slice(0, 80)) return null
@@ -33,10 +35,17 @@ export function academicDeclarationFromMessage(message: string): AcademicSubject
     sourceEvidence: [message],
   })
 }
+export function academicDeclarationsFromMessage(message: string): AcademicSubjectDeclaration[] {
+  const segments = message.split(/\b(?:mas|porém|porem|e também|e tambem)\b|[.;]/i).map((item) => item.trim().replace(/^[,;:\s]+|[,;:\s]+$/g, '')).filter(Boolean)
+  const expanded = segments.flatMap((segment) => { const parts = segment.split(/\s+e\s+(?=(?:quero|preciso|sei|domino|conheço|conheco|entendo|uso)\b)/i).map((item) => item.trim()); return parts.length > 1 ? parts : [segment] })
+  return expanded.flatMap((item) => { const value = declarationForMessage(item); return value ? [value] : [] })
+}
+export function academicDeclarationFromMessage(message: string): AcademicSubjectDeclaration | null { return academicDeclarationsFromMessage(message)[0] ?? null }
 
 export class AcademicSubjectContextService {
   constructor(private readonly repository: AcademicSubjectContextRepository, private readonly now = Date.now) {}
   get(subject: string): AcademicSubjectContext | null { return this.repository.find(normalizeSubject(subject).subject) }
+  list(): AcademicSubjectContext[] { return this.repository.list?.() ?? [] }
   record(input: AcademicSubjectDeclaration): AcademicSubjectContext {
     const current = this.get(input.subject)
     return this.repository.upsert({
@@ -48,8 +57,6 @@ export class AcademicSubjectContextService {
       sourceEvidence: unique([...(current?.sourceEvidence ?? []), ...input.sourceEvidence]),
     }, this.now())
   }
-  recordMessage(message: string): AcademicSubjectContext | null {
-    const declaration = academicDeclarationFromMessage(message)
-    return declaration ? this.record(declaration) : null
-  }
+  replace(input: AcademicSubjectDeclaration): AcademicSubjectContext { const parsed = academicSubjectDeclarationSchema.parse(input); const normalized = { ...parsed, subject: normalizeSubject(parsed.subject).subject }; return this.repository.replace?.(normalized, this.now()) ?? this.repository.upsert(normalized, this.now()) }
+  recordMessage(message: string): AcademicSubjectContext | null { const results = academicDeclarationsFromMessage(message).map((declaration) => this.record(declaration)); return results[0] ?? null }
 }

@@ -56,6 +56,7 @@ export function validateCoachDatabaseSchema(sqlite: Database.Database): void {
     workspace_projects: ['id', 'workspace_id', 'language'], project_files: ['id', 'project_id', 'path', 'revision'], project_ui_states: ['project_id', 'active_file_id'], project_builds: ['id', 'project_id', 'diagnostics_json'],
     roadmaps: ['id', 'workspace_id', 'status', 'generation_kind', 'version'], workspace_learning_path_state: ['workspace_id', 'status', 'active_roadmap_id', 'retry_after'], study_lessons: ['id', 'workspace_id', 'roadmap_id', 'topic_id', 'generation_kind', 'content_json'], study_lesson_adaptations: ['id', 'workspace_id', 'lesson_id', 'source_block_id', 'revision', 'reason', 'mode', 'adapted_block_json', 'is_active'], workspace_study_preferences: ['workspace_id', 'preferences_json'], roadmap_modules: ['id', 'roadmap_id', 'position', 'status', 'topics_json', 'practice', 'completion_criteria_json', 'resources_json'],
     topic_learning_states: ['workspace_id', 'topic_id', 'evidence_count', 'difficulty_level', 'mastery_estimate', 'confidence', 'needs_review', 'reasons_json'],
+    study_interactive_code_states: ['workspace_id', 'lesson_id', 'block_id', 'current_code', 'prediction', 'attempts', 'last_execution_json', 'validation_result_json', 'evidence_granted_at', 'current_source_revision', 'updated_at'],
     roadmap_adaptations: ['id', 'roadmap_id', 'module_id', 'topic_id', 'kind', 'source', 'reason_json'],
     planner_actions: ['id', 'origin_message_id', 'label', 'context_version', 'idempotency_key', 'type', 'status', 'payload_json'],
   }

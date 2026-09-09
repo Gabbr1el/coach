@@ -7,7 +7,7 @@ import { CONVERSATION_CHANNELS } from '../../shared/contracts/conversation-chann
 import { assertTrustedSender } from './trusted-sender'
 import type { WorkspaceActionService } from '../../application/workspaces/workspace-action-service'
 import type { CoachDatabase } from '../database/connection'
-import { interactiveCodeStateSchema, parseInteractiveValidation, type InteractiveCodeBlock } from '../../shared/contracts/code-execution-contract'
+import { interactiveCodeStateSchema, parseInteractiveValidation, type InteractiveCodeBlock, type InteractiveCodeState } from '../../shared/contracts/code-execution-contract'
 import { studyLessonContentSchema } from '../../shared/contracts/study-lesson-contract'
 
 export function registerConversationHandlers(service: HomePlannerService, workspaceService: WorkspaceCoachService, organizer: HomeOrganizerService, workspaceActions?: WorkspaceActionService, database?: CoachDatabase): void {
@@ -82,8 +82,12 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
         const block = row ? studyLessonContentSchema.parse(JSON.parse(row.contentJson)).blocks.find((item): item is InteractiveCodeBlock => item.type === 'interactiveCode' && item.id === input.activeInteractiveCode!.blockId) : undefined
         if (!row || !block) input = { ...input, activeInteractiveCode: undefined }
         else {
-          const validationResult = row.validationResultJson ? parseInteractiveValidation(JSON.parse(row.validationResultJson), row.currentSourceRevision) : null
-          const state = interactiveCodeStateSchema.parse({ lessonId: input.activeStudy.lessonId, blockId: block.id, currentCode: row.currentCode, prediction: row.prediction, currentSourceRevision: row.currentSourceRevision, attempts: row.attempts, lastExecution: row.lastExecutionJson ? JSON.parse(row.lastExecutionJson) : null, validationResult, applicable: true, unavailableReason: null, updatedAt: row.updatedAt })
+          let lastExecution: InteractiveCodeState['lastExecution'] = null
+          let persistedValidation: unknown = null
+          try { const parsed = interactiveCodeStateSchema.shape.lastExecution.safeParse(row.lastExecutionJson ? JSON.parse(row.lastExecutionJson) : null); lastExecution = parsed.success ? parsed.data : null } catch { lastExecution = null }
+          try { persistedValidation = row.validationResultJson ? JSON.parse(row.validationResultJson) : null } catch { persistedValidation = null }
+          const validationResult = parseInteractiveValidation(persistedValidation, row.currentSourceRevision)
+          const state = interactiveCodeStateSchema.parse({ lessonId: input.activeStudy.lessonId, blockId: block.id, currentCode: row.currentCode, prediction: row.prediction, currentSourceRevision: row.currentSourceRevision, attempts: row.attempts, lastExecution, validationResult, applicable: true, unavailableReason: null, updatedAt: row.updatedAt })
           input = { ...input, activeInteractiveCode: { lessonId: state.lessonId, blockId: state.blockId, interactionType: block.interactionType, instruction: block.instruction, language: block.language, code: state.currentCode, prediction: state.prediction, attempts: state.attempts, lastExecution: state.lastExecution ? { stdout: state.lastExecution.stdout, stderr: state.lastExecution.stderr, exitCode: state.lastExecution.exitCode, timedOut: state.lastExecution.timedOut } : null, validationResult: state.validationResult ? { status: state.validationResult.status, message: state.validationResult.message } : null } }
         }
       }

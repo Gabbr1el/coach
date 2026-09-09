@@ -45,6 +45,13 @@ export function repairDraftAdaptiveStudyMigration(sqlite: Database.Database): vo
   })()
 }
 
+export function repairInteractiveCodeStateSchema(sqlite: Database.Database): void {
+  const table = sqlite.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'study_interactive_code_states'").get()
+  if (!table) return
+  const columns = new Set((sqlite.pragma('table_info(study_interactive_code_states)') as Array<{ name: string }>).map((column) => column.name))
+  if (!columns.has('evidence_granted_at')) sqlite.exec('ALTER TABLE study_interactive_code_states ADD COLUMN evidence_granted_at integer')
+}
+
 export function migrateDatabase<TSchema extends Record<string, unknown>>(
   database: BetterSQLite3Database<TSchema>,
   config: MigrationConfig,

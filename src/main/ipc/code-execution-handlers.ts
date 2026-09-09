@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 import { CODE_EXECUTION_CHANNELS } from '../../shared/contracts/code-execution-channels'
-import { executeCodeInputSchema, executeInteractiveCodeInputSchema, executeProjectInputSchema, interactiveCodeStateSchema, listInteractiveCodeStatesInputSchema, parseInteractiveValidation, saveInteractiveCodeStateInputSchema, type CodeExecutionResult, type InteractiveCodeBlock, type InteractiveCodeState } from '../../shared/contracts/code-execution-contract'
+import { codeExecutionResultSchema, executeCodeInputSchema, executeInteractiveCodeInputSchema, executeProjectInputSchema, interactiveCodeStateSchema, listInteractiveCodeStatesInputSchema, parseInteractiveValidation, saveInteractiveCodeStateInputSchema, type CodeExecutionResult, type InteractiveCodeBlock, type InteractiveCodeState } from '../../shared/contracts/code-execution-contract'
 import { runPython } from '../code-execution/python-runner'
 import { assertTrustedSender } from './trusted-sender'
 import type { ObserverService } from '../../application/observer/observer-service'
@@ -52,6 +52,25 @@ function workspaceInteractiveBlock(database: CoachDatabase, input: { workspaceId
   return block
 }
 
+type InteractiveStateRow = { lessonId: string; blockId: string; currentCode: string; prediction: string | null; currentSourceRevision: string; attempts: number; lastExecutionJson: string | null; validationResultJson: string | null; updatedAt: number }
+
+export function hydrateInteractiveState(row: InteractiveStateRow, applicable: boolean, unavailableReason: string | null): InteractiveCodeState {
+  let validationResult: InteractiveCodeState['validationResult'] = null
+  const lastExecution = parseStoredExecution(row.lastExecutionJson)
+  try { validationResult = row.validationResultJson ? parseInteractiveValidation(JSON.parse(row.validationResultJson), row.currentSourceRevision) : null } catch { validationResult = null }
+  return interactiveCodeStateSchema.parse({ lessonId: row.lessonId, blockId: row.blockId, currentCode: row.currentCode, prediction: row.prediction, currentSourceRevision: row.currentSourceRevision, attempts: row.attempts, lastExecution, validationResult, applicable, unavailableReason, updatedAt: row.updatedAt })
+}
+
+function parseStoredJson(value: string | null): unknown {
+  if (!value) return null
+  try { return JSON.parse(value) } catch { return null }
+}
+
+function parseStoredExecution(value: string | null): InteractiveCodeState['lastExecution'] {
+  const parsed = codeExecutionResultSchema.safeParse(parseStoredJson(value))
+  return parsed.success ? parsed.data : null
+}
+
 export function registerCodeExecutionHandlers(workspaceExists: (id: string) => Promise<boolean>, observer: ObserverService, projects?: DrizzleProjectRepository, database?: CoachDatabase, toolchains = new ToolchainManager()): void {
   const toolchainStatus = (language: InteractiveCodeBlock['language']) => toolchains.getStatuses().find((status) => status.language === language) ?? { available: false, detail: 'Toolchain não encontrado' }
   ipcMain.handle(CODE_EXECUTION_CHANNELS.execute, async (event, payload: unknown) => {
@@ -79,12 +98,11 @@ export function registerCodeExecutionHandlers(workspaceExists: (id: string) => P
     const input = listInteractiveCodeStatesInputSchema.parse(payload)
     const lessonRow = database.sqlite.prepare('SELECT content_json AS contentJson FROM study_lessons WHERE id = ? AND workspace_id = ?').get(input.lessonId, input.workspaceId) as { contentJson: string } | undefined
     const blocks = lessonRow ? studyLessonContentSchema.parse(JSON.parse(lessonRow.contentJson)).blocks : []
-    const rows = database.sqlite.prepare('SELECT lesson_id AS lessonId, block_id AS blockId, current_code AS currentCode, prediction, current_source_revision AS currentSourceRevision, attempts, last_execution_json AS lastExecutionJson, validation_result_json AS validationResultJson, updated_at AS updatedAt FROM study_interactive_code_states WHERE workspace_id = ? AND lesson_id = ? ORDER BY updated_at').all(input.workspaceId, input.lessonId) as Array<{ lessonId: string; blockId: string; currentCode: string; prediction: string | null; currentSourceRevision: string; attempts: number; lastExecutionJson: string | null; validationResultJson: string | null; updatedAt: number }>
+    const rows = database.sqlite.prepare('SELECT lesson_id AS lessonId, block_id AS blockId, current_code AS currentCode, prediction, current_source_revision AS currentSourceRevision, attempts, last_execution_json AS lastExecutionJson, validation_result_json AS validationResultJson, updated_at AS updatedAt FROM study_interactive_code_states WHERE workspace_id = ? AND lesson_id = ? ORDER BY updated_at').all(input.workspaceId, input.lessonId) as InteractiveStateRow[]
     const states = rows.map((row) => {
       const block = blocks.find((item): item is InteractiveCodeBlock => item.type === 'interactiveCode' && item.id === row.blockId)
       const status = block ? toolchainStatus(block.language) : { available: false, detail: 'Bloco não encontrado' }
-      const validationResult = row.validationResultJson ? parseInteractiveValidation(JSON.parse(row.validationResultJson), row.currentSourceRevision) : null
-      return interactiveCodeStateSchema.parse({ ...row, lastExecution: row.lastExecutionJson ? JSON.parse(row.lastExecutionJson) : null, validationResult, applicable: status.available, unavailableReason: status.available ? null : status.detail ?? 'Toolchain não encontrado' })
+      return hydrateInteractiveState(row, status.available, status.available ? null : status.detail ?? 'Toolchain não encontrado')
     })
     const known = new Set(states.map((state) => state.blockId))
     for (const block of blocks) if (block.type === 'interactiveCode' && !known.has(block.id)) {
@@ -103,9 +121,9 @@ export function registerCodeExecutionHandlers(workspaceExists: (id: string) => P
     const now = Date.now()
     const contentUnchanged = previous?.currentCode === input.currentCode && previous.prediction === input.prediction && (!input.previousSourceRevision || input.previousSourceRevision === previous.currentSourceRevision)
     const currentSourceRevision = contentUnchanged ? previous.currentSourceRevision : interactiveSourceRevision(input.currentCode, input.prediction)
-    const validationResult = previous?.validationResultJson ? parseInteractiveValidation(JSON.parse(previous.validationResultJson), currentSourceRevision) : null
+    const validationResult = previous?.validationResultJson ? parseInteractiveValidation(parseStoredJson(previous.validationResultJson), currentSourceRevision) : null
     const status = toolchainStatus(workspaceInteractiveBlock(database, input).language)
-    const state = interactiveCodeStateSchema.parse({ lessonId: input.lessonId, blockId: input.blockId, currentCode: input.currentCode, prediction: input.prediction, currentSourceRevision, attempts: previous?.attempts ?? 0, lastExecution: previous?.lastExecutionJson ? JSON.parse(previous.lastExecutionJson) : null, validationResult, applicable: status.available, unavailableReason: status.available ? null : status.detail ?? 'Toolchain não encontrado', updatedAt: now })
+    const state = interactiveCodeStateSchema.parse({ lessonId: input.lessonId, blockId: input.blockId, currentCode: input.currentCode, prediction: input.prediction, currentSourceRevision, attempts: previous?.attempts ?? 0, lastExecution: parseStoredExecution(previous?.lastExecutionJson ?? null), validationResult, applicable: status.available, unavailableReason: status.available ? null : status.detail ?? 'Toolchain não encontrado', updatedAt: now })
     database.sqlite.prepare(`INSERT INTO study_interactive_code_states (workspace_id, lesson_id, block_id, current_code, prediction, current_source_revision, attempts, last_execution_json, validation_result_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id, lesson_id, block_id) DO UPDATE SET current_code=excluded.current_code,prediction=excluded.prediction,current_source_revision=excluded.current_source_revision,updated_at=excluded.updated_at`).run(input.workspaceId, input.lessonId, input.blockId, input.currentCode, input.prediction, currentSourceRevision, state.attempts, previous?.lastExecutionJson ?? null, previous?.validationResultJson ?? null, now)
     return state
   })

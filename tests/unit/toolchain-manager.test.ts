@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ToolchainManager } from '../../src/main/code-execution/toolchain-manager'
 import type { WorkspaceProject } from '../../src/shared/contracts/project-contract'
-import { validateInteractiveExecution } from '../../src/main/ipc/code-execution-handlers'
+import { hydrateInteractiveState, validateInteractiveExecution } from '../../src/main/ipc/code-execution-handlers'
 import { interactiveSourceRevision } from '../../src/shared/interactive-source-revision'
 import { parseInteractiveValidation } from '../../src/shared/contracts/code-execution-contract'
 
@@ -10,6 +10,17 @@ function project(language: 'python' | 'c' | 'java', files: Array<[string, string
 }
 
 describe('ToolchainManager', () => {
+  it('hydrates persisted JSON without leaking storage-only keys', () => {
+    const state = hydrateInteractiveState({ lessonId: 'lesson', blockId: 'block', currentCode: 'print(1)', prediction: null, currentSourceRevision: 'revision-0000000', attempts: 1, lastExecutionJson: JSON.stringify({ command: 'python3 main.py', stdout: '1\n', stderr: '', exitCode: 0, timedOut: false, durationMs: 1, errorSignature: null }), validationResultJson: JSON.stringify({ status: 'passed', message: 'ok', sourceRevision: 'revision-0000000', actualOutput: '1', predictionCorrect: null, validatedAt: 1 }), updatedAt: 1 }, true, null)
+    expect(state).toMatchObject({ lastExecution: { stdout: '1\n' }, validationResult: { status: 'passed' } })
+    expect(state).not.toHaveProperty('lastExecutionJson')
+    expect(state).not.toHaveProperty('validationResultJson')
+  })
+
+  it('isolates malformed persisted JSON instead of rejecting all states', () => {
+    expect(hydrateInteractiveState({ lessonId: 'lesson', blockId: 'block', currentCode: 'print(1)', prediction: null, currentSourceRevision: 'revision-0000000', attempts: 1, lastExecutionJson: '{', validationResultJson: '{', updatedAt: 1 }, true, null)).toMatchObject({ lastExecution: null, validationResult: null })
+    expect(hydrateInteractiveState({ lessonId: 'lesson', blockId: 'block', currentCode: 'print(1)', prediction: null, currentSourceRevision: 'revision-0000000', attempts: 1, lastExecutionJson: '{}', validationResultJson: '{}', updatedAt: 1 }, true, null)).toMatchObject({ lastExecution: null, validationResult: null })
+  })
   it('requires real output validation instead of treating exit code zero as correctness', () => {
     const block = { id: 'block', type: 'interactiveCode' as const, title: 'Validar', interactionType: 'EDIT_AND_RUN' as const, language: 'python' as const, instruction: 'Execute', initialCode: 'print(2)', predictionPrompt: null, evidenceMode: 'validated' as const, requiredForTopicCompletion: false, expectedOutput: '2' }
     const execution = { command: 'python3 main.py', stdout: '3\n', stderr: '', exitCode: 0, timedOut: false, durationMs: 1, errorSignature: null }

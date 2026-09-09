@@ -34,7 +34,9 @@ export function assertTopicCompletionAllowed(database: CoachDatabase, state: Stu
   for (const block of required) {
     const interactive = states.get(block.id)
     if (!interactive?.validationResultJson) throw new Error('Required interactive experiments must be validated before topic completion')
-    const validation = parseInteractiveValidation(JSON.parse(interactive.validationResultJson), interactive.currentSourceRevision)
+    let persisted: unknown = null
+    try { persisted = JSON.parse(interactive.validationResultJson) } catch { persisted = null }
+    const validation = parseInteractiveValidation(persisted, interactive.currentSourceRevision)
     if (validation?.status !== 'passed' || validation.sourceRevision !== interactive.currentSourceRevision) throw new Error('Required interactive experiments must be valid for the current source revision')
   }
 }

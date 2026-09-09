@@ -6,6 +6,7 @@ import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openCoachDatabase } from '../../src/main/database/connection'
 import { CURRENT_MIGRATION_COUNT, validateCoachDatabaseSchema } from '../../src/main/database/restore-recovery'
+import { repairInteractiveCodeStateSchema } from '../../src/main/database/migrate'
 import { DrizzleWorkspaceRepository } from '../../src/main/repositories/drizzle-workspace-repository'
 import { DrizzleConversationRepository } from '../../src/main/repositories/drizzle-conversation-repository'
 import { DrizzleStudyWorkspaceRepository } from '../../src/main/repositories/drizzle-study-workspace-repository'
@@ -50,6 +51,28 @@ function migrationsThrough0028(): string {
 }
 
 describe('Coach database migrations', () => {
+  it('repairs a divergent interactive code table idempotently without losing rows', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    database.sqlite.exec('ALTER TABLE study_interactive_code_states DROP COLUMN evidence_granted_at')
+    database.sqlite.prepare("INSERT INTO workspaces (id, name, objective, status, created_at, updated_at) VALUES ('drift-workspace', 'Python', 'Executar', 'active', 1, 1)").run()
+    database.sqlite.prepare("INSERT INTO study_lessons (id, generation_kind, workspace_id, roadmap_id, module_id, topic_id, content_json, provider_id, model_id, created_at, updated_at) VALUES ('drift-lesson', 'provisional_fallback', 'drift-workspace', 'roadmap', 'module', 'topic', '{}', NULL, NULL, 1, 1)").run()
+    database.sqlite.prepare("INSERT INTO study_interactive_code_states (workspace_id, lesson_id, block_id, current_code, prediction, current_source_revision, attempts, updated_at) VALUES ('drift-workspace', 'drift-lesson', 'block', 'print(1)', NULL, 'revision-preserved', 2, 1)").run()
+    repairInteractiveCodeStateSchema(database.sqlite)
+    repairInteractiveCodeStateSchema(database.sqlite)
+    expect(database.sqlite.pragma('table_info(study_interactive_code_states)')).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'evidence_granted_at' })]))
+    expect(database.sqlite.prepare("SELECT current_code AS currentCode, attempts FROM study_interactive_code_states WHERE block_id = 'block'").get()).toEqual({ currentCode: 'print(1)', attempts: 2 })
+    validateCoachDatabaseSchema(database.sqlite)
+    database.close()
+  })
+
+  it('leaves the current interactive code schema unchanged across repeated opens', () => {
+    const databasePath = createDatabasePath()
+    openCoachDatabase({ databasePath, migrationsFolder }).close()
+    const reopened = openCoachDatabase({ databasePath, migrationsFolder })
+    const columns = reopened.sqlite.pragma('table_info(study_interactive_code_states)') as Array<{ name: string }>
+    expect(columns.filter((column) => column.name === 'evidence_granted_at')).toHaveLength(1)
+    reopened.close()
+  })
   it('persists academic declarations separately from observed evidence', () => { const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const service = new AcademicSubjectContextService(new SqliteAcademicSubjectContextRepository(database), () => 10); service.recordMessage('Sei bastante Python e já uso bibliotecas'); expect(service.get('python')).toMatchObject({ subject: 'Python', declaredLevel: 'advanced', declaredKnowledge: ['Sei bastante Python e já uso bibliotecas'] }); expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM topic_learning_states').get()).toEqual({ count: 0 }); database.close() })
   it('persists interactive source revisions across database restart', () => {
     const databasePath = createDatabasePath()
@@ -126,6 +149,7 @@ describe('Coach database migrations', () => {
       { name: 'session_topics' },
       { name: 'student_memory' },
       { name: 'study_deadlines' },
+      { name: 'study_interactive_code_states' },
       { name: 'study_lesson_adaptations' },
       { name: 'study_lessons' },
       { name: 'study_plan_items' },

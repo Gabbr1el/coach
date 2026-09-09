@@ -22,6 +22,7 @@ import type { AIProvider } from '../../src/application/ai/ai-provider'
 import { studyLessonContentSchema, studyPresentationPreferencesSchema, type StudyLessonBlock } from '../../src/shared/contracts/study-lesson-contract'
 import { AcademicSubjectContextService } from '../../src/application/workspaces/academic-subject-context'
 import { SqliteAcademicSubjectContextRepository } from '../../src/main/repositories/sqlite-academic-subject-context-repository'
+import { SqliteExerciseRepository } from '../../src/main/repositories/sqlite-exercise-repository'
 
 const temporaryDirectories: string[] = []
 const migrationsFolder = resolve('drizzle/migrations')
@@ -132,6 +133,10 @@ describe('Coach database migrations', () => {
       { name: 'academic_subject_contexts' },
       { name: 'conversation_messages' },
       { name: 'conversation_threads' },
+      { name: 'exercise_attempts' },
+      { name: 'exercise_progress' },
+      { name: 'exercise_sets' },
+      { name: 'exercises' },
       { name: 'learning_events' },
       { name: 'material_chunks' },
       { name: 'materials' },
@@ -167,6 +172,22 @@ describe('Coach database migrations', () => {
     ])
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: CURRENT_MIGRATION_COUNT })
     expect(() => validateCoachDatabaseSchema(sqlite)).not.toThrow()
+    database.close()
+  })
+
+  it('persists public exercise metadata and reloadable progress without private results', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    const workspaceId = crypto.randomUUID()
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,'Python','Laços','active',1,1)").run(workspaceId)
+    database.sqlite.prepare("INSERT INTO exercise_sets (id,workspace_id,roadmap_id,module_id,topic_id,lesson_id,status,generation_attempts,created_at,updated_at) VALUES ('set',?,'roadmap','module','module:loops','lesson','ready',1,1,1)").run(workspaceId)
+    database.sqlite.prepare("INSERT INTO exercises (id,set_id,position,kind,difficulty,title,statement,input_description,output_description,language,starter_code,prediction_prompt,code_to_observe,required_for_topic_completion,public_tests_json,private_tests_json,reference_solution,expected_prediction,hint,created_at) VALUES ('exercise','set',1,'COMPLETE_CODE','introductory','Somar','Some','Dois inteiros','Soma','python','print(0) # TODO',NULL,NULL,1,?,?,?,NULL,'Pense na operação',1)").run(JSON.stringify([{ id: 'public-1', input: '1 2', expectedOutput: '3' }]), JSON.stringify([{ id: 'hidden-secret', input: '99 1', expectedOutput: '100' }]), 'secret solution')
+    const lastSubmission = { status: 'failed', passedTests: 1, totalTests: 4, message: '1 de 4 testes passaram.', compileDiagnostics: [] }
+    database.sqlite.prepare("INSERT INTO exercise_progress (workspace_id,exercise_id,status,current_code,attempts,last_submission_json,passed_tests,total_tests,help_used,first_try_success,help_count,passed_at,updated_at) VALUES (?,'exercise','in_progress','print(3)',2,?,1,4,1,0,1,NULL,10)").run(workspaceId, JSON.stringify(lastSubmission))
+
+    const restored = new SqliteExerciseRepository(database).findSet(workspaceId, 'module:loops')!
+    expect(restored.exercises[0]).toMatchObject({ kind: 'COMPLETE_CODE', difficulty: 'introductory' })
+    expect(restored.progress[0]).toMatchObject({ currentCode: 'print(3)', attempts: 2, passedTests: 1, totalTests: 4, helpUsed: true, firstTrySuccess: false, lastSubmission })
+    expect(JSON.stringify(restored)).not.toMatch(/hidden-secret|99 1|secret solution/)
     database.close()
   })
 

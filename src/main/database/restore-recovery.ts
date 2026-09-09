@@ -2,7 +2,7 @@ import { closeSync, existsSync, fsyncSync, openSync, renameSync, rmSync } from '
 import { dirname } from 'node:path'
 import type Database from 'better-sqlite3'
 
-export const CURRENT_MIGRATION_COUNT = 35
+export const CURRENT_MIGRATION_COUNT = 36
 
 function syncDirectory(path: string): void {
   const descriptor = openSync(dirname(path), 'r')
@@ -59,6 +59,7 @@ export function validateCoachDatabaseSchema(sqlite: Database.Database): void {
     study_interactive_code_states: ['workspace_id', 'lesson_id', 'block_id', 'current_code', 'prediction', 'attempts', 'last_execution_json', 'validation_result_json', 'evidence_granted_at', 'current_source_revision', 'updated_at'],
     roadmap_adaptations: ['id', 'roadmap_id', 'module_id', 'topic_id', 'kind', 'source', 'reason_json'],
     planner_actions: ['id', 'origin_message_id', 'label', 'context_version', 'idempotency_key', 'type', 'status', 'payload_json'],
+    exercise_sets: ['id', 'workspace_id', 'topic_id', 'status', 'retry_after'], exercises: ['id', 'set_id', 'kind', 'difficulty', 'public_tests_json', 'private_tests_json', 'reference_solution', 'expected_prediction', 'prediction_prompt', 'code_to_observe', 'required_for_topic_completion'], exercise_progress: ['workspace_id', 'exercise_id', 'status', 'current_code', 'attempts', 'last_run_json', 'last_submission_json', 'passed_tests', 'total_tests', 'help_used', 'first_try_success', 'help_count', 'passed_at'], exercise_attempts: ['id', 'workspace_id', 'exercise_id', 'idempotency_key', 'prediction', 'private_result_json'],
   }
   for (const [table, requiredColumns] of Object.entries(requirements)) {
     const columns = new Set((sqlite.pragma(`table_info(${table})`) as Array<{ name: string }>).map((column) => column.name))

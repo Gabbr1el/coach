@@ -65,6 +65,9 @@ import { registerStudyLessonHandlers } from './ipc/study-lesson-handlers'
 import { StudyLessonService } from '../application/study-lessons/study-lesson-service'
 import { academicDayKey, academicEventPhase } from '../application/planning/academic-time'
 import { SqliteStudyLessonRepository } from './repositories/sqlite-study-lesson-repository'
+import { ExerciseService } from '../application/exercises/exercise-service'
+import { SqliteExerciseRepository } from './repositories/sqlite-exercise-repository'
+import { registerExerciseHandlers } from './ipc/exercise-handlers'
 
 let database: CoachDatabase | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -131,9 +134,11 @@ void app.whenReady().then(async () => {
       return row ? { ...row, needsReview: Boolean(row.needsReview) } : null
     }
     const studyLessonService = new StudyLessonService(new SqliteStudyLessonRepository(database), providerManager, (id) => workspaceRepository.findById(id), (id) => roadmapRepository.findCurrent(id), Date.now, curriculumSourceService, { getTopicLearningState, getWorkspaceMemory, searchMaterials: (id, query) => materialService.search(id, query) })
-    const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory, getCurrentContext: (id) => currentWorkspaceContext.get(id), contextHub: workspaceContextHub, workspaceActions, searchMaterials: (id, query) => materialService.search(id, query), studyLessonService })
-    registerApplicationHandlers()
     const toolchainManager = new ToolchainManager()
+    const exerciseService = new ExerciseService(new SqliteExerciseRepository(database), providerManager, toolchainManager, (id) => workspaceRepository.findById(id), (id) => roadmapRepository.findCurrent(id))
+    const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory, getCurrentContext: (id) => currentWorkspaceContext.get(id), contextHub: workspaceContextHub, workspaceActions, searchMaterials: (id, query) => materialService.search(id, query), studyLessonService, exerciseService })
+    registerApplicationHandlers()
+    registerExerciseHandlers(exerciseService)
     registerStudyProgressHandlers(database, () => toolchainManager.getStatuses())
     registerStudyLessonHandlers(studyLessonService)
     registerWorkspaceHandlers(workspaceService)

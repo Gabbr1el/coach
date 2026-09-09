@@ -17,10 +17,10 @@ export function errorSignature(stderr: string): string | null {
   return normalized ? createHash('sha256').update(normalized).digest('hex').slice(0, 16) : null
 }
 
-export async function spawnLimited(command: string, args: string[], displayCommand: string, timeoutMs: number, signal?: AbortSignal): Promise<CodeExecutionResult> {
+export async function spawnLimited(command: string, args: string[], displayCommand: string, timeoutMs: number, signal?: AbortSignal, stdin = ''): Promise<CodeExecutionResult> {
   const startedAt = Date.now()
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env: {}, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, detached: true })
+    const child = spawn(command, args, { env: {}, stdio: [stdin ? 'pipe' : 'ignore', 'pipe', 'pipe'], windowsHide: true, detached: true })
     let stdout = ''
     let stderr = ''
     let outputBytes = 0
@@ -32,8 +32,9 @@ export async function spawnLimited(command: string, args: string[], displayComma
       if (target === 'stdout') stdout += slice.toString('utf8'); else stderr += slice.toString('utf8')
       if (outputBytes >= MAX_OUTPUT_BYTES) kill()
     }
-    child.stdout.on('data', capture('stdout'))
-    child.stderr.on('data', capture('stderr'))
+    child.stdout!.on('data', capture('stdout'))
+    child.stderr!.on('data', capture('stderr'))
+    if (stdin && child.stdin) child.stdin.end(stdin)
     child.once('error', reject)
     const timeout = setTimeout(() => { timedOut = true; kill() }, timeoutMs)
     signal?.addEventListener('abort', kill, { once: true })

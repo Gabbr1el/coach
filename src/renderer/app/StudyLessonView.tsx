@@ -3,6 +3,7 @@ import type { Roadmap, RoadmapModule } from '../../shared/contracts/roadmap-cont
 import type { PersistedStudyLesson, StudyCheckpointEvaluation, StudyLessonAdaptation, StudyLessonBlock } from '../../shared/contracts/study-lesson-contract'
 import type { StudyCheckpointState, StudyLessonPosition, StudyProgressState } from '../../shared/contracts/study-progress-contract'
 import type { InteractiveCodeBlock, InteractiveCodeState } from '../../shared/contracts/code-execution-contract'
+import type { ExerciseSet } from '../../shared/contracts/exercise-contract'
 import { EmbeddedCodeEditor } from './EmbeddedCodeEditor'
 import { interactiveSourceRevision } from '../../shared/interactive-source-revision'
 
@@ -41,6 +42,7 @@ type Props = {
   onLessonChanged(lesson: PersistedStudyLesson): void
   onComplete(): void
   onPractice(): void
+  onExercises(): void
   onInteractiveContext(block: InteractiveCodeBlock, state: InteractiveCodeState): void
 }
 
@@ -51,7 +53,7 @@ function stageFor(block: StudyLessonBlock): StudyLessonPosition['currentStage'] 
   return 'explanation'
 }
 
-export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress, reviewMode, onPosition, onCheckpoint, onLessonChanged, onComplete, onPractice, onInteractiveContext }: Props) {
+export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress, reviewMode, onPosition, onCheckpoint, onLessonChanged, onComplete, onPractice, onExercises, onInteractiveContext }: Props) {
   const [checkpointStates, setCheckpointStates] = useState<Record<string, StudyCheckpointState>>(progress.checkpointStates ?? {})
   const [adaptations, setAdaptations] = useState<Record<string, StudyLessonAdaptation[]>>({})
   const [displayedBlocks, setDisplayedBlocks] = useState(lesson.blocks)
@@ -60,6 +62,7 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
   const [checkpointDrafts, setCheckpointDrafts] = useState<Record<string, { optionId: string | null; justification: string }>>({})
   const [interactiveStates, setInteractiveStates] = useState<Record<string, InteractiveCodeState>>({})
   const [interactiveBusy, setInteractiveBusy] = useState<string | null>(null)
+  const [exerciseSet, setExerciseSet] = useState<ExerciseSet | null>(null)
   const scrollPaneRef = useRef<HTMLElement | null>(null)
   const blockRefs = useRef(new Map<string, HTMLElement>())
   const visibility = useRef(new Map<string, number>())
@@ -77,7 +80,10 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
   for (const block of lesson.blocks) if (block.type === 'interactiveCode' && block.requiredForTopicCompletion) requiredInteractive.push(block)
   const pendingRequiredInteractive: InteractiveCodeBlock[] = []
   for (const block of requiredInteractive) { const state = interactiveStates[block.id]; if (state?.applicable !== false && (state?.validationResult?.status !== 'passed' || state.validationResult.sourceRevision !== state.currentSourceRevision)) pendingRequiredInteractive.push(block) }
-  const canCompleteTopic = canComplete && pendingRequiredInteractive.length === 0
+  const pendingRequiredExercises = exerciseSet?.status === 'ready' ? exerciseSet.exercises.filter((exercise) => exercise.requiredForTopicCompletion && exerciseSet.progress.find((item) => item.exerciseId === exercise.id)?.status !== 'passed') : []
+  const canCompleteTopic = canComplete && pendingRequiredInteractive.length === 0 && pendingRequiredExercises.length === 0
+
+  useEffect(() => { let current = true; void window.coach.exercise.getSet({ workspaceId, topicId: progress.topicId }).then((value) => { if (current) setExerciseSet(value) }); return () => { current = false } }, [workspaceId, progress.topicId])
 
   useEffect(() => { checkpointStatesRef.current = checkpointStates }, [checkpointStates])
   useEffect(() => { interactiveStatesRef.current = interactiveStates }, [interactiveStates])
@@ -289,8 +295,12 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
       </div>
 
       <footer className="mt-8 rounded-xl border border-coach-line bg-[#111217] p-5">
-        {canCompleteTopic ? <div className="flex flex-wrap items-center justify-between gap-4"><p className="text-sm text-coach-muted">Verificações e experimentos obrigatórios concluídos.</p><button type="button" onClick={onComplete} className="rounded-xl bg-coach-orange px-5 py-3 text-sm font-black text-white">Concluir tópico</button></div> : canComplete && pendingRequiredInteractive.length > 0 ? <p className="text-sm text-coach-muted">Verificações concluídas. Falta validar {pendingRequiredInteractive.length} experimento{pendingRequiredInteractive.length === 1 ? '' : 's'} obrigatório{pendingRequiredInteractive.length === 1 ? '' : 's'}.</p> : <p className="text-sm text-coach-muted">Responda corretamente {checkpoints.length === 0 ? 'ao menos um checkpoint para habilitar a conclusão' : `os ${checkpoints.length} checkpoints para concluir o tópico`}.</p>}
+        {canCompleteTopic ? <div className="flex flex-wrap items-center justify-between gap-4"><p className="text-sm text-coach-muted">Verificações e práticas obrigatórias concluídas.</p><button type="button" onClick={onComplete} className="rounded-xl bg-coach-orange px-5 py-3 text-sm font-black text-white">Concluir tópico</button></div> : canComplete && pendingRequiredInteractive.length > 0 ? <p className="text-sm text-coach-muted">Verificações concluídas. Falta validar {pendingRequiredInteractive.length} experimento{pendingRequiredInteractive.length === 1 ? '' : 's'} obrigatório{pendingRequiredInteractive.length === 1 ? '' : 's'}.</p> : canComplete && pendingRequiredExercises.length > 0 ? <div className="flex flex-wrap items-center justify-between gap-4"><p className="text-sm text-coach-muted">Parte teórica concluída. Faltam {pendingRequiredExercises.length} exercício{pendingRequiredExercises.length === 1 ? '' : 's'} obrigatório{pendingRequiredExercises.length === 1 ? '' : 's'}.</p><button type="button" onClick={onExercises} className="rounded-xl bg-coach-green px-5 py-3 text-xs font-black text-white">Praticar agora</button></div> : <p className="text-sm text-coach-muted">Responda corretamente {checkpoints.length === 0 ? 'ao menos um checkpoint para habilitar a conclusão' : `os ${checkpoints.length} checkpoints para concluir o tópico`}.</p>}
       </footer>
+      <section className="mt-5 rounded-xl border border-coach-green/35 bg-coach-green/[.06] p-5">
+        <p className="text-[10px] font-black uppercase tracking-[.16em] text-coach-green">Prática do tópico</p>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-4"><div><h3 className="font-display text-xl font-black">Resolva exercícios avaliativos</h3><p className="mt-1 text-sm text-coach-muted">Abra o conjunto ligado a {topic}. Os testes estruturados são separados da Prática livre.</p></div><button type="button" onClick={onExercises} className="rounded-xl bg-coach-green px-5 py-3 text-xs font-black text-white">Praticar este tópico</button></div>
+      </section>
       {lesson.sources.length > 0 && <footer className="mt-5 border-t border-coach-line pt-6"><p className="text-[10px] font-black uppercase tracking-[.16em] text-coach-muted">Fontes consultadas</p><div className="mt-3 flex flex-wrap gap-2">{lesson.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="rounded-lg border border-coach-line px-3 py-2 text-xs font-bold text-coach-green hover:bg-white/[.03]">{source.title}</a>)}</div></footer>}
     </div>
   </article>

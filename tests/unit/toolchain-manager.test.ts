@@ -49,6 +49,11 @@ describe('ToolchainManager', () => {
     expect(failure.diagnostics?.[0]).toMatchObject({ filePath: 'src/app.py', line: 1, severity: 'error', code: 'NameError' })
   }, 15_000)
 
+  it('feeds bounded stdin through the existing sandbox runner', async () => {
+    const result = await new ToolchainManager().execute(project('python', [['main.py', 'print(input().upper())']], 'main.py'), undefined, 'coach\n')
+    expect(result).toMatchObject({ exitCode: 0, stdout: 'COACH\n' })
+  }, 15_000)
+
   it('compiles and runs a multi-file C project', async () => {
     const result = await new ToolchainManager().execute(project('c', [['src/main.c', '#include "soma.h"\n#include <stdio.h>\nint main(void){printf("%d\\n", soma(2,3));}'], ['src/soma.h', 'int soma(int a,int b);'], ['src/soma.c', '#include "soma.h"\nint soma(int a,int b){return a+b;}']], 'src/main.c'))
     expect(result).toMatchObject({ exitCode: 0, stdout: '5\n', phase: 'run' })

@@ -119,6 +119,42 @@ describe('WorkspaceCoachService', () => {
     expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ activeInteractiveCode })
   })
 
+  it('routes only the public active exercise allowlist and records Tutor help once', async () => {
+    const manager = new AIProviderManager()
+    let providerRequest: AIRequest | null = null
+    manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Comece identificando o caso-base.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
+    manager.select('stream')
+    const requestHelp = vi.fn(() => ({ exerciseId: 'exercise-1', helpCount: 1, hint: 'PRIVATE_GENERATED_HINT' }))
+    const activeExercise = { exerciseId: 'exercise-1', kind: 'FIX_CODE' as const, title: 'Somar itens', statement: 'Some os itens da entrada.', language: 'python' as const, currentCode: 'print(sum(values))', attempts: 2, helpUsed: false, lastRun: { status: 'executed', passedTests: 0, totalTests: 0, message: 'Execução livre concluída.' }, lastSubmission: { status: 'failed', passedTests: 3, totalTests: 5, message: '3 de 5 testes passaram.' } }
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, exerciseService: { requestHelp } })
+
+    for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Me dê uma dica para continuar', activePage: 'exercises', activeExercise: { ...activeExercise, referenceSolution: 'PRIVATE_REFERENCE', hiddenTests: ['PRIVATE_HIDDEN'], expectedOutput: 'PRIVATE_EXPECTED' } as typeof activeExercise }, new AbortController().signal)) {}
+
+    expect(requestHelp).toHaveBeenCalledTimes(1)
+    expect(requestHelp).toHaveBeenCalledWith({ workspaceId: workspace.id, exerciseId: 'exercise-1' })
+    expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ activeExercise: { ...activeExercise, helpUsed: true } })
+    const serialized = JSON.stringify(providerRequest)
+    expect(serialized).not.toContain('PRIVATE_REFERENCE')
+    expect(serialized).not.toContain('PRIVATE_HIDDEN')
+    expect(serialized).not.toContain('PRIVATE_EXPECTED')
+    expect(serialized).not.toContain('PRIVATE_GENERATED_HINT')
+    expect(serialized).toContain('ajuda graduada')
+    expect(serialized).toContain('Não entregue código final')
+  })
+
+  it('does not record exercise help for unrelated or explicitly denied requests', async () => {
+    const manager = new AIProviderManager()
+    manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* () { yield { type: 'completed', response: { content: 'Tudo bem.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
+    manager.select('stream')
+    const requestHelp = vi.fn(() => ({ exerciseId: 'exercise-1', helpCount: 1, hint: 'hint' }))
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, exerciseService: { requestHelp } })
+    const activeExercise = { exerciseId: 'exercise-1', kind: 'PROGRAMMING_PROBLEM' as const, title: 'Soma', statement: 'Some.', language: 'python' as const, currentCode: '', attempts: 0, helpUsed: false, lastRun: null, lastSubmission: null }
+
+    for (const content of ['Vou tentar outra entrada.', 'Não quero ajuda, só registre minha mensagem.']) for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content, activePage: 'exercises', activeExercise }, new AbortController().signal)) {}
+
+    expect(requestHelp).not.toHaveBeenCalled()
+  })
+
   it.each([
     ['simplifique esta parte', 'SIMPLIFY'],
     ['use uma analogia', 'ANALOGY'],

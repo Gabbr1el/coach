@@ -3,12 +3,13 @@ import type { FormEvent, ReactNode, RefObject } from 'react'
 import type { ConversationMessage } from '../../shared/contracts/conversation-contract'
 import { ChatMessage } from './ChatMessage'
 
-export type WorkspacePage = 'overview' | 'plan' | 'studies' | 'materials' | 'practice' | 'videos' | 'reports'
+export type WorkspacePage = 'overview' | 'plan' | 'studies' | 'exercises' | 'materials' | 'practice' | 'videos' | 'reports'
 
 const PAGES = [
   { id: 'overview' as const, label: 'Visão geral', icon: LayoutDashboard },
   { id: 'plan' as const, label: 'Plano', icon: ListChecks },
   { id: 'studies' as const, label: 'Estudos', icon: BookOpen },
+  { id: 'exercises' as const, label: 'Exercícios', icon: Brain },
   { id: 'materials' as const, label: 'Materiais', icon: Library },
   { id: 'practice' as const, label: 'Prática', icon: TerminalSquare },
   { id: 'videos' as const, label: 'Vídeos', icon: FileText },

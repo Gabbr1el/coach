@@ -27,6 +27,7 @@ export function assertTopicCompletionAllowed(database: CoachDatabase, state: Stu
   if (checkpoints.length < 2 || !checkpoints.every((checkpoint) => { const answer = state.checkpointStates?.[checkpoint.id]; return answer?.correct === true && answer.selectedOptionId === checkpoint.correctOptionId })) throw new Error('Topic completion requires all lesson checkpoints to be correct')
   const lessonRow = database.sqlite.prepare('SELECT content_json AS contentJson FROM study_lessons WHERE id = ? AND workspace_id = ?').get(lessonId, state.workspaceId) as LessonBlockRow | undefined
   if (!lessonRow) throw new Error('Study lesson not found for completion')
+  // Missing local toolchains make their exercises non-applicable; progress is never rewritten as a fabricated pass.
   const available = new Map(toolchains.map((toolchain) => [toolchain.language, toolchain.available]))
   const required = studyLessonContentSchema.parse(JSON.parse(lessonRow.contentJson)).blocks.filter((block) => block.type === 'interactiveCode' && block.requiredForTopicCompletion && available.get(block.language) === true)
   const rows = database.sqlite.prepare('SELECT block_id AS blockId, current_source_revision AS currentSourceRevision, validation_result_json AS validationResultJson FROM study_interactive_code_states WHERE workspace_id = ? AND lesson_id = ?').all(state.workspaceId, lessonId) as Array<{ blockId: string; currentSourceRevision: string; validationResultJson: string | null }>
@@ -38,6 +39,12 @@ export function assertTopicCompletionAllowed(database: CoachDatabase, state: Stu
     try { persisted = JSON.parse(interactive.validationResultJson) } catch { persisted = null }
     const validation = parseInteractiveValidation(persisted, interactive.currentSourceRevision)
     if (validation?.status !== 'passed' || validation.sourceRevision !== interactive.currentSourceRevision) throw new Error('Required interactive experiments must be valid for the current source revision')
+  }
+  // Provider/generation failures must not deadlock study, so only a ready set contributes requirements.
+  const set = database.sqlite.prepare("SELECT id, status FROM exercise_sets WHERE workspace_id = ? AND topic_id = ?").get(state.workspaceId, state.topicId) as { id: string; status: string } | undefined
+  if (set?.status === 'ready') {
+    const requiredExercises = database.sqlite.prepare('SELECT e.id, e.language, p.status FROM exercises e LEFT JOIN exercise_progress p ON p.exercise_id=e.id AND p.workspace_id=? WHERE e.set_id=? AND e.required_for_topic_completion=1').all(state.workspaceId, set.id) as Array<{ id: string; language: ToolchainStatus['language']; status: string | null }>
+    for (const exercise of requiredExercises) if (available.get(exercise.language) === true && exercise.status !== 'passed') throw new Error('Required exercises must be passed before topic completion')
   }
 }
 

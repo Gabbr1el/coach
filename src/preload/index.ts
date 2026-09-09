@@ -20,6 +20,7 @@ import { REPORT_CHANNELS } from '../shared/contracts/report-channels'
 import { WORKSPACE_ONBOARDING_CHANNELS } from '../shared/contracts/workspace-onboarding-channels'
 import { STUDY_PROGRESS_CHANNELS } from '../shared/contracts/study-progress-channels'
 import { STUDY_LESSON_CHANNELS } from '../shared/contracts/study-lesson-channels'
+import { EXERCISE_CHANNELS } from '../shared/contracts/exercise-channels'
 
 const api: CoachDesktopApi = {
   application: {
@@ -42,6 +43,13 @@ const api: CoachDesktopApi = {
     activateAdaptation: (input) => ipcRenderer.invoke(STUDY_LESSON_CHANNELS.activateAdaptation, input),
     getPreferences: (workspaceId) => ipcRenderer.invoke(STUDY_LESSON_CHANNELS.getPreferences, { workspaceId }),
     updatePreferences: (input) => ipcRenderer.invoke(STUDY_LESSON_CHANNELS.updatePreferences, input),
+  },
+  exercise: {
+    ensureSet: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.ensureSet, input),
+    getSet: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.getSet, input),
+    run: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.run, input),
+    submit: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.submit, input),
+    requestHelp: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.requestHelp, input),
   },
   workspace: {
     list: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.list),

@@ -37,14 +37,14 @@ export class ToolchainManager {
     })
   }
 
-  async execute(project: WorkspaceProject, signal?: AbortSignal): Promise<CodeExecutionResult> {
+  async execute(project: WorkspaceProject, signal?: AbortSignal, stdin = ''): Promise<CodeExecutionResult> {
     if (process.platform !== 'linux') throw new Error('A execução segura está disponível somente no Linux nesta versão')
     execFileSync(BWRAP_PATH, ['--version'], { stdio: 'ignore', timeout: 2_000 })
     const directory = await mkdtemp(join(tmpdir(), 'coach-project-'))
     await materialize(directory, project.files)
     try {
       if (project.language === 'python') {
-        const result = await spawnLimited(BWRAP_PATH, sandboxArguments(['/usr/bin/python3', '-I', '-B', `/project/${project.entryFilePath}`], [{ source: directory, destination: '/project' }], '/project'), `python3 -I -B ${project.entryFilePath}`, 5_000, signal)
+        const result = await spawnLimited(BWRAP_PATH, sandboxArguments(['/usr/bin/python3', '-I', '-B', `/project/${project.entryFilePath}`], [{ source: directory, destination: '/project' }], '/project'), `python3 -I -B ${project.entryFilePath}`, 5_000, signal, stdin)
         return { ...result, phase: 'run', diagnostics: parseDiagnostics('python', result.stderr) }
       }
       if (project.language === 'c') {
@@ -52,14 +52,14 @@ export class ToolchainManager {
         const compile = await spawnLimited(BWRAP_PATH, sandboxArguments(['/usr/bin/gcc', '-std=c17', '-Wall', '-Wextra', '-pedantic', ...sources, '-o', '/project/.coach-program'], [{ source: directory, destination: '/project', writable: true }], '/project'), `gcc -std=c17 -Wall -Wextra -pedantic ${sources.map((path) => path.replace('/project/', '')).join(' ')} -o .coach-program`, 8_000, signal)
         const diagnostics = parseDiagnostics('c', compile.stderr)
         if (compile.exitCode !== 0) return { ...compile, phase: 'compile', diagnostics }
-        return { ...await spawnLimited(BWRAP_PATH, sandboxArguments(['/project/.coach-program'], [{ source: directory, destination: '/project' }], '/project'), './.coach-program', 5_000, signal), phase: 'run', diagnostics }
+        return { ...await spawnLimited(BWRAP_PATH, sandboxArguments(['/project/.coach-program'], [{ source: directory, destination: '/project' }], '/project'), './.coach-program', 5_000, signal, stdin), phase: 'run', diagnostics }
       }
       const sources = project.files.filter((file) => file.path.endsWith('.java')).map((file) => `/project/${file.path}`)
       const compile = await spawnLimited(BWRAP_PATH, sandboxArguments(['/usr/bin/javac', '-J-Xms16m', '-J-Xmx256m', '-J-XX:+UseSerialGC', '-J-XX:CompressedClassSpaceSize=64m', '-J-XX:MaxMetaspaceSize=192m', '-encoding', 'UTF-8', '-d', '/project/.coach-out', ...sources], [{ source: directory, destination: '/project', writable: true }], '/project', { JAVA_HOME: '/usr/lib/jvm/default-java' }, 2_147_483_648), `javac -encoding UTF-8 -d .coach-out ${sources.map((path) => path.replace('/project/', '')).join(' ')}`, 10_000, signal)
       const diagnostics = parseDiagnostics('java', compile.stderr)
       if (compile.exitCode !== 0) return { ...compile, phase: 'compile', diagnostics }
       const mainClass = project.entryFilePath.replace(/^src\//, '').replace(/\.java$/, '').replaceAll('/', '.')
-      return { ...await spawnLimited(BWRAP_PATH, sandboxArguments(['/usr/bin/java', '-Xms16m', '-Xmx256m', '-XX:+UseSerialGC', '-XX:CompressedClassSpaceSize=64m', '-XX:MaxMetaspaceSize=192m', '-cp', '/project/.coach-out', mainClass], [{ source: directory, destination: '/project' }], '/project', { JAVA_HOME: '/usr/lib/jvm/default-java' }, 2_147_483_648), `java -cp .coach-out ${mainClass}`, 5_000, signal), phase: 'run', diagnostics }
+      return { ...await spawnLimited(BWRAP_PATH, sandboxArguments(['/usr/bin/java', '-Xms16m', '-Xmx256m', '-XX:+UseSerialGC', '-XX:CompressedClassSpaceSize=64m', '-XX:MaxMetaspaceSize=192m', '-cp', '/project/.coach-out', mainClass], [{ source: directory, destination: '/project' }], '/project', { JAVA_HOME: '/usr/lib/jvm/default-java' }, 2_147_483_648), `java -cp .coach-out ${mainClass}`, 5_000, signal, stdin), phase: 'run', diagnostics }
     } finally { await rm(directory, { recursive: true, force: true }) }
   }
 }

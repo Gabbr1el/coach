@@ -1,6 +1,6 @@
 import type { CreateWorkspaceInput, Workspace, WorkspaceProvisioningState, WorkspaceSummary } from '../../shared/contracts/workspace-contract'
 import type { WorkspaceRepository } from './workspace-repository'
-import { isProgrammingSubject, normalizeSubject, semanticSubjectKey, workspaceAnalysisSignature } from './subject-normalizer'
+import { isProgrammingSubject, normalizeSubject, semanticSubjectKey } from './subject-normalizer'
 import type { AcademicSubjectContextService } from './academic-subject-context'
 
 export interface WorkspaceServiceDependencies {
@@ -13,6 +13,7 @@ export interface WorkspaceServiceDependencies {
   readonly saveLearningOverrides?: (workspaceId: string, subject: string, input: Pick<CreateWorkspaceInput, 'declaredLevel' | 'declaredKnowledge' | 'declaredDifficulties' | 'goals' | 'localKnowledgeProjection' | 'canonicalFocus' | 'canonicalContext'>, now: number) => void
   readonly provisioning?: { createDraft(workspaceId: string): WorkspaceProvisioningState; start(workspaceId: string): WorkspaceProvisioningState; get(workspaceId: string): WorkspaceProvisioningState | null; retry(workspaceId: string): WorkspaceProvisioningState; discardDraft(workspaceId: string): void }
   readonly findSemanticDuplicate?: (canonicalKey: string, excludedId?: string) => Workspace | null
+  readonly validateAnalysis?: (token: string, revision: number, subject: string, focus?: string, context?: string) => boolean
 }
 
 export class WorkspaceService {
@@ -25,8 +26,9 @@ export class WorkspaceService {
   private readonly saveLearningOverrides?: WorkspaceServiceDependencies['saveLearningOverrides']
   private readonly provisioning?: WorkspaceServiceDependencies['provisioning']
   private readonly findSemanticDuplicate?: WorkspaceServiceDependencies['findSemanticDuplicate']
+  private readonly validateAnalysis?: WorkspaceServiceDependencies['validateAnalysis']
 
-  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), ensureLearningPath, academicContext, createWithAcademicContexts, saveLearningOverrides, provisioning, findSemanticDuplicate }: WorkspaceServiceDependencies) {
+  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), ensureLearningPath, academicContext, createWithAcademicContexts, saveLearningOverrides, provisioning, findSemanticDuplicate, validateAnalysis }: WorkspaceServiceDependencies) {
     this.repository = repository
     this.now = now
     this.createId = createId
@@ -36,6 +38,7 @@ export class WorkspaceService {
     this.saveLearningOverrides = saveLearningOverrides
     this.provisioning = provisioning
     this.findSemanticDuplicate = findSemanticDuplicate
+    this.validateAnalysis = validateAnalysis
   }
 
   list(): Promise<WorkspaceSummary[]> {
@@ -51,6 +54,7 @@ export class WorkspaceService {
       const workspace = await this.repository.findById(input.draftId)
       if (!workspace || this.provisioning?.get(input.draftId)?.status !== 'draft') throw new Error('Workspace draft not found')
       if (workspace.name !== input.name.trim() || workspace.objective !== input.objective.trim()) throw new Error('Workspace draft changed after materials were attached; discard it and analyze again')
+      this.saveLearningOverrides?.(workspace.id, normalizeSubject(input.name).subject, { ...input, goals: [...(input.goals ?? []), input.objective].filter(Boolean) }, this.now())
       this.provisioning.start(workspace.id)
       return workspace
     }
@@ -85,7 +89,7 @@ export class WorkspaceService {
 
   private assertAnalyzed(input: CreateWorkspaceInput): void {
     if (this.provisioning && (!input.analysisToken || !input.analysisRevision)) throw new Error('Workspace analysis is required')
-    if (this.provisioning && input.analysisToken !== `${input.analysisRevision}.${workspaceAnalysisSignature(input.name, input.canonicalFocus, input.canonicalContext)}`) throw new Error('Workspace analysis is stale; analyze the theme again')
+    if (this.provisioning && this.validateAnalysis && !this.validateAnalysis(input.analysisToken!, input.analysisRevision!, input.name, input.canonicalFocus, input.canonicalContext)) throw new Error('Workspace analysis is unknown or expired; analyze the theme again')
     if (this.provisioning && isProgrammingSubject(input.name) && !input.declaredLevel && !input.fundamentals) throw new Error('Programming fundamentals must be answered with yes, no, or unknown')
   }
 

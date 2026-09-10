@@ -39,7 +39,7 @@ function reason(topic: WeeklyPlanningTopic): string {
   return 'Continuidade da Trilha conforme progresso observado.'
 }
 
-export function distributeWeeklyPlan(input: { weekStart: string; today: string; timezone: string; now: number; availability: Map<number, number>; topics: WeeklyPlanningTopic[]; existing: ExistingWeeklyItem[]; createId(): string }): WeeklyPlanDraftItem[] {
+export function distributeWeeklyPlan(input: { weekStart: string; today: string; timezone: string; now: number; availability: Map<number, number>; dayBudgets?: Map<string, number>; topics: WeeklyPlanningTopic[]; existing: ExistingWeeklyItem[]; createId(): string }): WeeklyPlanDraftItem[] {
   const preserved = input.existing.filter((item) => item.dateKey < input.today || item.status !== 'pending')
   const preservedKeys = new Set(preserved.map((item) => item.sourceKey))
   const reusable = new Map(input.existing.filter((item) => item.status === 'pending' && item.dateKey >= input.today).map((item) => [item.sourceKey, item]))
@@ -56,7 +56,7 @@ export function distributeWeeklyPlan(input: { weekStart: string; today: string; 
       const dateKey = shiftDateKey(input.weekStart, offset)
       if (dateKey < input.today) continue
       if (topic.dueAt !== null && dateKey > zonedDateKey(topic.dueAt, input.timezone)) continue
-      const available = input.availability.get(weekdayForDateKey(dateKey)) ?? 120
+      const available = input.dayBudgets?.get(dateKey) ?? input.availability.get(weekdayForDateKey(dateKey)) ?? 120
       const free = available - (dayUsage.get(dateKey) ?? 0)
       if (free >= 15) { selected = { dateKey, duration: Math.min(preferred, free) }; break }
     }

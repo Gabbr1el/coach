@@ -2,7 +2,7 @@ import { closeSync, existsSync, fsyncSync, openSync, renameSync, rmSync } from '
 import { dirname } from 'node:path'
 import type Database from 'better-sqlite3'
 
-export const CURRENT_MIGRATION_COUNT = 41
+export const CURRENT_MIGRATION_COUNT = 42
 
 function syncDirectory(path: string): void {
   const descriptor = openSync(dirname(path), 'r')
@@ -63,6 +63,7 @@ export function validateCoachDatabaseSchema(sqlite: Database.Database): void {
     planner_actions: ['id', 'origin_message_id', 'label', 'context_version', 'idempotency_key', 'type', 'status', 'payload_json'],
     academic_life_items: ['id', 'kind', 'status', 'title', 'timezone', 'provenance_source', 'fingerprint', 'share_with_ai', 'replaces_id', 'replaced_by_id'],
     weekly_plans: ['id', 'week_start', 'timezone', 'revision', 'generated_at'], weekly_plan_items: ['id', 'plan_id', 'workspace_id', 'source_key', 'date_key', 'status', 'topic_id', 'scheduled_start_minutes'],
+    daily_planning_budgets: ['date_key', 'timezone', 'minutes', 'updated_at'], plan_item_completion_history: ['id', 'item_id', 'workspace_id', 'completed', 'duration_minutes', 'created_at'],
     exercise_sets: ['id', 'workspace_id', 'topic_id', 'status', 'retry_after'], exercises: ['id', 'set_id', 'kind', 'difficulty', 'public_tests_json', 'private_tests_json', 'reference_solution', 'expected_prediction', 'prediction_prompt', 'code_to_observe', 'required_for_topic_completion'], exercise_progress: ['workspace_id', 'exercise_id', 'status', 'current_code', 'attempts', 'last_run_json', 'last_submission_json', 'passed_tests', 'total_tests', 'help_used', 'first_try_success', 'help_count', 'passed_at'], exercise_attempts: ['id', 'workspace_id', 'exercise_id', 'idempotency_key', 'prediction', 'private_result_json'],
   }
   for (const [table, requiredColumns] of Object.entries(requirements)) {

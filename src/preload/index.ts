@@ -141,6 +141,7 @@ const api: CoachDesktopApi = {
     updateContextSharing: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.updateContextSharing, input),
     togglePlanItem: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.togglePlanItem, input),
     completePlanItem: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.completePlanItem, input),
+    setPlanItemCompletion: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.setPlanItemCompletion, input),
     recalculatePlan: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.recalculatePlan, input),
     refreshLivePlan: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.refreshLivePlan, input),
     activatePlanItem: (input) => ipcRenderer.invoke(STUDY_WORKSPACE_CHANNELS.activatePlanItem, input),

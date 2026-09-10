@@ -49,17 +49,23 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
   }
 
   async completePlanItem(workspaceId: string, sessionId: string, itemId: string, statuses: ReadonlyArray<{ id: string; status: StudyPlanItem['status'] }>, timer: Pick<StudyWorkspaceState, 'timerDurationSeconds' | 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'timerStartedMonotonicMs' | 'timerBootId' | 'accumulatedFocusSeconds'>, now: number): Promise<boolean> {
+    return this.setPlanItemCompletion(workspaceId, sessionId, itemId, true, statuses, timer, now)
+  }
+
+  async setPlanItemCompletion(workspaceId: string, sessionId: string, itemId: string, completedValue: boolean, statuses: ReadonlyArray<{ id: string; status: StudyPlanItem['status'] }>, timer: Pick<StudyWorkspaceState, 'timerDurationSeconds' | 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'timerStartedMonotonicMs' | 'timerBootId' | 'accumulatedFocusSeconds'>, now: number): Promise<boolean> {
     return this.database.sqlite.transaction(() => {
       const active = this.database.sqlite.prepare('SELECT 1 FROM workspace_study_states WHERE workspace_id = ? AND active_session_id = ?').get(workspaceId, sessionId)
       if (!active) throw new Error('Study session changed while completing plan item')
-      const weekly = this.database.sqlite.prepare('SELECT status FROM weekly_plan_items WHERE id = ? AND workspace_id = ?').get(itemId, workspaceId) as { status: string } | undefined
+      const weekly = this.database.sqlite.prepare('SELECT status,duration_minutes AS durationMinutes FROM weekly_plan_items WHERE id = ? AND workspace_id = ?').get(itemId, workspaceId) as { status: string; durationMinutes: number } | undefined
       if (!weekly) throw new Error('Weekly plan item not found')
-      if (weekly.status === 'completed') return false
-      const completed = this.database.sqlite.prepare("UPDATE weekly_plan_items SET status = 'completed', updated_at = ? WHERE id = ? AND workspace_id = ? AND status != 'completed'").run(now, itemId, workspaceId)
-      if (completed.changes !== 1) return false
-      for (const item of statuses) this.database.sqlite.prepare("UPDATE weekly_plan_items SET status=CASE ? WHEN 'active' THEN 'in_progress' ELSE ? END,updated_at=? WHERE id=? AND workspace_id=? AND status != 'completed'").run(item.status, item.status, now, item.id, workspaceId)
+      if ((weekly.status === 'completed') === completedValue) return false
+      const target = completedValue ? 'completed' : 'pending'
+      const changedStatus = this.database.sqlite.prepare('UPDATE weekly_plan_items SET status = ?, updated_at = ? WHERE id = ? AND workspace_id = ?').run(target, now, itemId, workspaceId)
+      if (changedStatus.changes !== 1) return false
+      for (const item of statuses) this.database.sqlite.prepare("UPDATE weekly_plan_items SET status=CASE ? WHEN 'active' THEN 'in_progress' ELSE ? END,updated_at=? WHERE id=? AND workspace_id=? AND (? = 0 OR status != 'completed')").run(item.status, item.status, now, item.id, workspaceId, Number(completedValue))
       this.database.orm.update(studyPlanItems).set({ status: 'pending', updatedAt: now }).where(and(eq(studyPlanItems.workspaceId, workspaceId), eq(studyPlanItems.sessionId, sessionId))).run()
       for (const item of statuses) this.database.orm.update(studyPlanItems).set({ status: item.status, updatedAt: now }).where(and(eq(studyPlanItems.workspaceId, workspaceId), eq(studyPlanItems.sessionId, sessionId), eq(studyPlanItems.id, item.id))).run()
+      this.database.sqlite.prepare('INSERT INTO plan_item_completion_history (id,item_id,workspace_id,completed,duration_minutes,created_at) VALUES (?,?,?,?,?,?)').run(crypto.randomUUID(), itemId, workspaceId, Number(completedValue), weekly.durationMinutes, now)
       const changed = this.database.orm.update(workspaceStudyStates).set({ ...timer, updatedAt: now }).where(and(eq(workspaceStudyStates.workspaceId, workspaceId), eq(workspaceStudyStates.activeSessionId, sessionId))).run()
       if (changed.changes !== 1) throw new Error('Study session changed while completing plan item')
       return true

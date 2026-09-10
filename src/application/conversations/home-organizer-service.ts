@@ -25,6 +25,30 @@ function confirmationText(content: string): boolean { return /^(autorizo|confirm
 function mentionsProposal(content: string): boolean { return /cad[eê]\s+a\s+proposta|qual\s+(?:é\s+)?a\s+proposta/i.test(content) }
 function isPedagogicalQuery(content: string): boolean { return /\b(?:o que (?:é|e)|como funciona|me explica|explique|me dê um exercício|me de um exercicio|exercício de|exercicio de|qual a diferença|qual a diferenca)\b/i.test(content) }
 
+function requestedMinutes(content: string): number | null {
+  const hours = /(\d+(?:[.,]\d+)?)\s*(?:h|hora|horas)\b/i.exec(content)?.[1]
+  if (hours) return Math.round(Number(hours.replace(',', '.')) * 60)
+  const minutes = /(\d+)\s*(?:min|minuto|minutos)\b/i.exec(content)?.[1]
+  return minutes ? Number(minutes) : null
+}
+
+function planMutationIntent(content: string, clock: HomeTurnClock, plan: ReturnType<PlanningService['getWeeklyPlan']>): { type: 'plan.today-budget.set' | 'plan.weekday-availability.set' | 'plan.recalculate' | 'plan.item-completion.set'; payload: unknown; label: string; workspaceIds: string[] } | null {
+  const normalized = content.toLocaleLowerCase('pt-BR'); const minutes = requestedMinutes(content)
+  const weekdays = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado']
+  if (minutes !== null && /\bhoje\b/.test(normalized) && /(?:dispon|tempo|estud|planej|orçamento|orcamento|tenho|terei|vou ter)/.test(normalized)) return { type: 'plan.today-budget.set', payload: { dateKey: clock.currentDate, timezone: clock.timezone, minutes }, label: `Usar ${minutes} min disponíveis hoje`, workspaceIds: [] }
+  const weekday = weekdays.findIndex((day) => normalized.includes(day))
+  if (minutes !== null && weekday >= 0 && /(?:dispon|tempo|estud|planej|tenho|terei|vou ter)/.test(normalized)) return { type: 'plan.weekday-availability.set', payload: { weekday, minutes, timezone: clock.timezone }, label: `Definir ${minutes} min para ${weekdays[weekday]}`, workspaceIds: [] }
+  if (/\b(?:recalcule|recalcular|refaça|refaca|redistribua|reorganize)\b/.test(normalized) && /\b(?:plano|semana|estudos?)\b/.test(normalized)) return { type: 'plan.recalculate', payload: { timezone: clock.timezone }, label: 'Recalcular o plano semanal', workspaceIds: [] }
+  const completed = /\b(?:concluir|conclua|marcar como conclu[ií]d[ao])\b/.test(normalized)
+  const reopened = /\b(?:reabrir|reabra|desfazer conclus[aã]o|marcar como pendente)\b/.test(normalized)
+  if (!completed && !reopened) return null
+  const candidates = plan.days.flatMap((day) => day.items).filter((item) => reopened ? item.status === 'completed' : item.status !== 'completed')
+  const named = candidates.filter((item) => normalized.includes(item.title.toLocaleLowerCase('pt-BR')) || normalized.includes(item.workspaceName.toLocaleLowerCase('pt-BR')))
+  const item = named.length === 1 ? named[0] : candidates.length === 1 ? candidates[0] : null
+  if (!item) return null
+  return { type: 'plan.item-completion.set', payload: { workspaceId: item.workspaceId, itemId: item.id, completed }, label: `${completed ? 'Concluir' : 'Reabrir'} ${item.title}`, workspaceIds: [item.workspaceId] }
+}
+
 export function extractAcademicLifeIntent(content: string, clock: HomeTurnClock, workspaces: Array<{ id: string; name: string }>, active: AcademicLifeItem[] = []): AcademicLifeMutationInput | null {
   const normalized = content.toLocaleLowerCase('pt-BR')
   const provenance = { source: 'conversation' as const, reference: null }
@@ -32,7 +56,6 @@ export function extractAcademicLifeIntent(content: string, clock: HomeTurnClock,
   const weekdayNames = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado']
   const weekday = weekdayNames.findIndex((day) => normalized.includes(day))
   const hours = /(?:só|so)?\s*(?:vou\s+ter\s+)?(\d+(?:[.,]\d+)?)\s*horas?/.exec(normalized)?.[1]
-  if (weekday >= 0 && hours && /dispon|estudar|consigo|tempo/.test(normalized)) return { kind: 'availability', title: `Disponibilidade de ${weekdayNames[weekday]}`, details: '', workspaceId: null, startsAt: null, endsAt: null, expiresAt: null, timezone: clock.timezone, weekday, minutes: Math.round(Number(hours.replace(',', '.')) * 60), shareWithAi: true, provenance }
   const dueAt = parseExplicitDate(content, clock.currentTime)
   const eventMatch = /\b(prova|exame|trabalho|atividade|prazo)\b/.exec(normalized)
   if (eventMatch && dueAt) {
@@ -65,6 +88,12 @@ export class HomeOrganizerService {
 
     try {
       const workspaces = await this.listWorkspaces()
+      const planIntent = planMutationIntent(content, clock, this.planning.getWeeklyPlan(clock.timezone))
+      if (planIntent) {
+        const messageId = crypto.randomUUID()
+        const action = this.actions.propose({ type: planIntent.type, payload: planIntent.payload, label: planIntent.label, originMessageId: messageId, contextVersion: version })
+        return this.persist(content, { outcome: 'needs_decision', operations: [], actions: [action], affectedWorkspaceIds: planIntent.workspaceIds, message: `Posso ${planIntent.label.toLocaleLowerCase('pt-BR')}. Confirme pelo botão; nada mudou ainda.` }, messageId)
+      }
       const academicLifeIntent = extractAcademicLifeIntent(content, clock, workspaces, this.listAcademicLife())
       if (academicLifeIntent) {
         const messageId = crypto.randomUUID()

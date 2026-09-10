@@ -8,6 +8,10 @@ export const plannerActionProposalSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('routine.add'), payload: z.object({ content: z.string().trim().min(1).max(500) }).strict() }).strict(),
   z.object({ type: z.literal('academic-life.save'), payload: academicLifeMutationInputSchema }).strict(),
   z.object({ type: z.literal('academic-life.transition'), payload: z.object({ id: z.uuid(), status: z.enum(['resolved', 'archived']) }).strict() }).strict(),
+  z.object({ type: z.literal('plan.today-budget.set'), payload: z.object({ dateKey: z.iso.date(), timezone: z.string().trim().min(1).max(100), minutes: z.number().int().min(0).max(1440) }).strict() }).strict(),
+  z.object({ type: z.literal('plan.weekday-availability.set'), payload: z.object({ weekday: z.number().int().min(0).max(6), minutes: z.number().int().min(0).max(1440), timezone: z.string().trim().min(1).max(100) }).strict() }).strict(),
+  z.object({ type: z.literal('plan.recalculate'), payload: z.object({ timezone: z.string().trim().min(1).max(100) }).strict() }).strict(),
+  z.object({ type: z.literal('plan.item-completion.set'), payload: z.object({ workspaceId: workspaceIdSchema, itemId: z.uuid(), completed: z.boolean() }).strict() }).strict(),
 ])
 export const resolvePlannerActionInputSchema = z.object({ actionId: z.uuid(), decision: z.enum(['apply', 'reject']) }).strict()
 export type PlannerActionType = z.infer<typeof plannerActionProposalSchema>['type']

@@ -5,6 +5,7 @@ export const STUDY_WORKSPACE_CHANNELS = {
   updateContextSharing: 'study-workspace:update-context-sharing',
   togglePlanItem: 'study-workspace:toggle-plan-item',
   completePlanItem: 'study-workspace:complete-plan-item',
+  setPlanItemCompletion: 'study-workspace:set-plan-item-completion',
   recalculatePlan: 'study-workspace:recalculate-plan',
   refreshLivePlan: 'study-workspace:refresh-live-plan',
   activatePlanItem: 'study-workspace:activate-plan-item',

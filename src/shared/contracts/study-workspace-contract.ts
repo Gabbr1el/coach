@@ -26,6 +26,7 @@ export const flushWorkspaceDraftsInputSchema = studyWorkspaceIdInputSchema.exten
 
 export const toggleStudyPlanItemInputSchema = studyWorkspaceIdInputSchema.extend({ itemId: z.uuid() }).strict()
 export const completeStudyPlanItemInputSchema = studyWorkspaceIdInputSchema.extend({ itemId: z.uuid() }).strict()
+export const setStudyPlanItemCompletionInputSchema = studyWorkspaceIdInputSchema.extend({ itemId: z.uuid(), completed: z.boolean() }).strict()
 export const recalculateStudyPlanInputSchema = studyWorkspaceIdInputSchema
 export const refreshLiveStudyPlanInputSchema = studyWorkspaceIdInputSchema
 export const activateStudyPlanItemInputSchema = studyWorkspaceIdInputSchema.extend({ itemId: z.uuid() }).strict()
@@ -93,6 +94,7 @@ export interface StudyWorkspaceApi {
   updateContextSharing(input: z.infer<typeof updateContextSharingInputSchema>): Promise<StudyWorkspaceState>
   togglePlanItem(input: z.infer<typeof toggleStudyPlanItemInputSchema>): Promise<StudyWorkspaceState>
   completePlanItem(input: z.infer<typeof completeStudyPlanItemInputSchema>): Promise<StudyWorkspaceState>
+  setPlanItemCompletion(input: z.infer<typeof setStudyPlanItemCompletionInputSchema>): Promise<StudyWorkspaceState>
   recalculatePlan(input: z.infer<typeof recalculateStudyPlanInputSchema>): Promise<StudyWorkspaceState>
   refreshLivePlan(input: z.infer<typeof refreshLiveStudyPlanInputSchema>): Promise<StudyWorkspaceState>
   activatePlanItem(input: z.infer<typeof activateStudyPlanItemInputSchema>): Promise<StudyWorkspaceState>

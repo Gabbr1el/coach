@@ -257,6 +257,7 @@ describe('Coach database migrations', () => {
       { name: 'academic_subject_contexts' },
       { name: 'conversation_messages' },
       { name: 'conversation_threads' },
+      { name: 'daily_planning_budgets' },
       { name: 'exercise_attempts' },
       { name: 'exercise_progress' },
       { name: 'exercise_sets' },
@@ -264,6 +265,7 @@ describe('Coach database migrations', () => {
       { name: 'learning_events' },
       { name: 'material_chunks' },
       { name: 'materials' },
+      { name: 'plan_item_completion_history' },
       { name: 'planner_actions' },
       { name: 'project_builds' },
       { name: 'project_files' },
@@ -302,6 +304,16 @@ describe('Coach database migrations', () => {
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: CURRENT_MIGRATION_COUNT })
     expect(() => validateCoachDatabaseSchema(sqlite)).not.toThrow()
     database.close()
+  })
+
+  it('persists explicit daily budget and reversible completion history across reload', () => {
+    const databasePath = createDatabasePath(); let database = openCoachDatabase({ databasePath, migrationsFolder })
+    const workspaceId = crypto.randomUUID(); const planId = crypto.randomUUID(); const itemId = crypto.randomUUID(); const now = Date.parse('2026-09-10T12:00:00Z')
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,?,?,'active',?,?)").run(workspaceId, 'C', 'Aprender C', now, now)
+    database.sqlite.prepare('INSERT INTO weekly_plans (id,week_start,timezone,revision,generated_at,updated_at) VALUES (?,?,?,?,?,?)').run(planId, '2026-09-07', 'UTC', 1, now, now)
+    database.sqlite.prepare("INSERT INTO weekly_plan_items (id,plan_id,workspace_id,source_key,date_key,title,duration_minutes,position,status,module_id,topic_id,activity_type,scheduled_start_minutes,reason,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(itemId, planId, workspaceId, 'source', '2026-09-10', 'Ponteiros', 60, 1, 'pending', null, null, 'exercise', 1080, 'Teste', now, now)
+    const repository = new DrizzlePlanningRepository(database); database.sqlite.prepare("INSERT INTO academic_life_items (id,kind,title,details,workspace_id,starts_at,ends_at,expires_at,timezone,weekday,minutes,status,share_with_ai,provenance_json,replaces_id,replaced_by_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',1,'{}',NULL,NULL,?,?)").run(crypto.randomUUID(), 'availability', 'Antiga', '', null, null, null, null, 'UTC', 4, 120, now - 10, now - 10); repository.setAvailability(4, 240, now); expect(repository.listWeeklyAvailability(now)).toContainEqual({ weekday: 4, minutes: 240 }); repository.setTodayBudget('2026-09-10', 'UTC', 240, now); expect(repository.setWeeklyPlanItemCompletion(workspaceId, itemId, true, now + 1)).toBe(true); expect(repository.setWeeklyPlanItemCompletion(workspaceId, itemId, false, now + 2)).toBe(true); database.close()
+    database = openCoachDatabase({ databasePath, migrationsFolder }); const reopened = database.sqlite.prepare('SELECT status FROM weekly_plan_items WHERE id=?').get(itemId) as { status: string }; expect(reopened.status).toBe('pending'); expect(database.sqlite.prepare('SELECT completed,duration_minutes AS duration FROM plan_item_completion_history WHERE item_id=? ORDER BY created_at').all(itemId)).toEqual([{ completed: 1, duration: 60 }, { completed: 0, duration: 60 }]); expect(database.sqlite.prepare('SELECT minutes FROM daily_planning_budgets WHERE date_key=? AND timezone=?').get('2026-09-10', 'UTC')).toEqual({ minutes: 240 }); database.close()
   })
 
   it('persists one weekly plan across restart without duplicate work', () => {

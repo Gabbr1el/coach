@@ -115,29 +115,32 @@ export class StudyWorkspaceService {
   }
 
   async completePlanItem(workspaceId: string, itemId: string): Promise<StudyWorkspaceState> {
+    return this.setPlanItemCompletion(workspaceId, itemId, true)
+  }
+
+  async setPlanItemCompletion(workspaceId: string, itemId: string, completed: boolean): Promise<StudyWorkspaceState> {
     const state = await this.getState(workspaceId)
     const item = state.plan.find((candidate) => candidate.id === itemId)
     if (!item) throw new Error('Study plan item not found')
-    if (item.status === 'completed') return state
+    if ((item.status === 'completed') === completed) return state
     const now = this.now()
     const checkpoint = this.checkpointTimer(state, now)
     const nextStatuses: Array<{ id: string; status: StudyPlanItem['status'] }> = state.plan.map((candidate) => ({
       id: candidate.id,
       status: candidate.id === itemId
-        ? 'completed' as const
+        ? (completed ? 'completed' as const : 'pending' as const)
         : candidate.status === 'active' ? 'pending' as const : candidate.status,
     }))
-    const nextActive = state.plan.find((candidate) => candidate.position > item.position && candidate.status !== 'completed' && candidate.id !== itemId)
-      ?? state.plan.find((candidate) => candidate.status !== 'completed' && candidate.id !== itemId)
-      ?? null
+    const available = state.plan.filter((candidate) => candidate.id !== itemId && candidate.status !== 'completed')
+    const nextActive = !completed ? item : available.find((candidate) => candidate.position > item.position) ?? available[0] ?? null
     if (nextActive) {
       const status = nextStatuses.find((candidate) => candidate.id === nextActive.id)
       if (status) status.status = 'active'
     }
     const duration = nextActive ? nextActive.durationMinutes * 60 : 60
-    await this.dependencies.repository.completePlanItem(workspaceId, state.sessionId, itemId, nextStatuses, { timerDurationSeconds: duration, timerStatus: 'idle', timerRemainingSeconds: duration, timerStartedAt: null, timerStartedMonotonicMs: null, timerBootId: null, accumulatedFocusSeconds: checkpoint.accumulatedFocusSeconds }, now)
+    await this.dependencies.repository.setPlanItemCompletion(workspaceId, state.sessionId, itemId, completed, nextStatuses, { timerDurationSeconds: duration, timerStatus: 'idle', timerRemainingSeconds: duration, timerStartedAt: null, timerStartedMonotonicMs: null, timerBootId: null, accumulatedFocusSeconds: checkpoint.accumulatedFocusSeconds }, now)
     const next = await this.getState(workspaceId)
-    this.publish(next, 'plan.changed', { itemId, status: 'completed', explicit: true })
+    this.publish(next, 'plan.changed', { itemId, status: completed ? 'completed' : 'pending', explicit: true })
     return next
   }
 

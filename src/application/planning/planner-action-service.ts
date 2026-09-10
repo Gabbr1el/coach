@@ -27,6 +27,10 @@ export interface PlannerActionDependencies {
   readonly addRoutine: (content: string) => void
   readonly saveAcademicLife?: (input: AcademicLifeMutationInput) => AcademicLifeItem
   readonly transitionAcademicLife?: (id: string, status: 'resolved' | 'archived') => AcademicLifeItem
+  readonly setTodayBudget?: (input: { dateKey: string; timezone: string; minutes: number }) => unknown
+  readonly setWeekdayAvailability?: (input: { weekday: number; minutes: number; timezone: string }) => unknown
+  readonly recalculatePlan?: (timezone: string) => unknown
+  readonly setPlanItemCompletion?: (workspaceId: string, itemId: string, completed: boolean) => Promise<unknown>
   readonly now?: () => number
   readonly createId?: () => string
 }
@@ -61,10 +65,23 @@ export class PlannerActionService {
       } else if (action.type === 'academic-life.save') {
         if (!this.dependencies.saveAcademicLife) throw new Error('Academic life service unavailable')
         result = this.dependencies.saveAcademicLife(action.payload as AcademicLifeMutationInput)
-      } else {
+      } else if (action.type === 'academic-life.transition') {
         if (!this.dependencies.transitionAcademicLife) throw new Error('Academic life service unavailable')
         const payload = action.payload as { id: string; status: 'resolved' | 'archived' }
         result = this.dependencies.transitionAcademicLife(payload.id, payload.status)
+      } else if (action.type === 'plan.today-budget.set') {
+        if (!this.dependencies.setTodayBudget) throw new Error('Planning service unavailable')
+        result = this.dependencies.setTodayBudget(action.payload as { dateKey: string; timezone: string; minutes: number })
+      } else if (action.type === 'plan.weekday-availability.set') {
+        if (!this.dependencies.setWeekdayAvailability) throw new Error('Planning service unavailable')
+        result = this.dependencies.setWeekdayAvailability(action.payload as { weekday: number; minutes: number; timezone: string })
+      } else if (action.type === 'plan.recalculate') {
+        if (!this.dependencies.recalculatePlan) throw new Error('Planning service unavailable')
+        result = this.dependencies.recalculatePlan((action.payload as { timezone: string }).timezone)
+      } else {
+        if (!this.dependencies.setPlanItemCompletion) throw new Error('Study plan service unavailable')
+        const payload = action.payload as { workspaceId: string; itemId: string; completed: boolean }
+        result = await this.dependencies.setPlanItemCompletion(payload.workspaceId, payload.itemId, payload.completed)
       }
       const completed = this.dependencies.repository.complete(actionId, 'applied', result, this.now())
       this.dependencies.repository.invalidateSiblings(action.originMessageId, action.id, this.now())

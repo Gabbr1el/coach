@@ -25,6 +25,7 @@ export interface PlanningRepository {
   listWeeklyAvailability?(now: number): Array<{ weekday: number; minutes: number }>
   saveWeeklyPlan?(input: { id: string; weekStart: string; timezone: string; revision: number; generatedAt: number; items: ExistingWeeklyItem[] }): void
   listLegacyDailyItems?(dateKey: string): ExistingWeeklyItem[]
+  getCanonicalPlanningTimezone?(fallback: string): string
 }
 
 const WEEKDAYS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'] as const
@@ -116,14 +117,16 @@ export class PlanningService {
   }
 
   getAcademicOverview(): AcademicOverview { return this.repository.getAcademicOverview?.(this.now()) ?? { events: [], availability: [], workspaces: [], routine: this.listRoutineNotes() } }
-  getSchedule(timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): StudyScheduleItem[] { if (!this.repository.findWeeklyPlan) return []; const plan = this.getWeeklyPlan(timezone); const today = zonedDateKey(this.now(), timezone); return plan.days.find((day) => day.dateKey === today)?.items.map((item) => ({ workspaceId: item.workspaceId, workspaceName: item.workspaceName, title: item.title, suggestedMinutes: item.durationMinutes, reason: item.reason })) ?? [] }
+  getSchedule(timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): StudyScheduleItem[] { if (!this.repository.findWeeklyPlan) return []; const plan = this.getWeeklyPlan(timezone); const today = zonedDateKey(this.now(), plan.timezone); return plan.days.find((day) => day.dateKey === today)?.items.map((item) => ({ workspaceId: item.workspaceId, workspaceName: item.workspaceName, title: item.title, suggestedMinutes: item.durationMinutes, reason: item.reason })) ?? [] }
   getWeeklyPlan(timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): WeeklyPlan {
+    timezone = this.repository.getCanonicalPlanningTimezone?.(timezone) ?? timezone
     const now = this.now(); const weekStart = weekStartKey(now, timezone)
     const found = this.repository.findWeeklyPlan?.(weekStart, timezone)
     if (!found) return this.replanWeek(timezone)
     return this.presentWeeklyPlan(found.id, weekStart, timezone, found.revision, found.generatedAt, found.items, now)
   }
   replanWeek(timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): WeeklyPlan {
+    timezone = this.repository.getCanonicalPlanningTimezone?.(timezone) ?? timezone
     if (!this.repository.findWeeklyPlan || !this.repository.listWeeklyPlanningTopics || !this.repository.listWeeklyAvailability || !this.repository.saveWeeklyPlan) throw new Error('Weekly planning persistence is unavailable')
     const now = this.now(); const today = zonedDateKey(now, timezone); const weekStart = weekStartKey(now, timezone); const existing = this.repository.findWeeklyPlan(weekStart, timezone)
     const availability = new Map(this.repository.listWeeklyAvailability(now).map((item) => [item.weekday, item.minutes]))
@@ -136,7 +139,7 @@ export class PlanningService {
     if (!persisted || persisted.revision !== revision) throw new Error('Weekly plan was not persisted')
     return this.presentWeeklyPlan(persisted.id, weekStart, timezone, revision, persisted.generatedAt, persisted.items, now)
   }
-  getTodayPlan(workspaceId: string, timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): import('../../shared/contracts/study-workspace-contract').StudyPlanItem[] { const plan = this.getWeeklyPlan(timezone); const today = zonedDateKey(this.now(), timezone); const items = plan.days.find((day) => day.dateKey === today)?.items.filter((item) => item.workspaceId === workspaceId) ?? []; const hasActive = items.some((item) => item.status === 'in_progress'); const firstPending = items.find((item) => item.status === 'pending')?.id; return items.map((item) => ({ id: item.id, title: item.title, durationMinutes: item.durationMinutes, position: item.position, status: item.status === 'in_progress' || (!hasActive && item.id === firstPending) ? 'active' : item.status, moduleId: item.moduleId ?? undefined, topicId: item.topicId ?? undefined, activityType: item.activityType, scheduledStartMinutes: item.scheduledStartMinutes })) }
+  getTodayPlan(workspaceId: string, timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): import('../../shared/contracts/study-workspace-contract').StudyPlanItem[] { const plan = this.getWeeklyPlan(timezone); const today = zonedDateKey(this.now(), plan.timezone); const items = plan.days.find((day) => day.dateKey === today)?.items.filter((item) => item.workspaceId === workspaceId) ?? []; const hasActive = items.some((item) => item.status === 'in_progress'); const firstPending = items.find((item) => item.status === 'pending')?.id; return items.map((item) => ({ id: item.id, title: item.title, durationMinutes: item.durationMinutes, position: item.position, status: item.status === 'in_progress' || (!hasActive && item.id === firstPending) ? 'active' : item.status, moduleId: item.moduleId ?? undefined, topicId: item.topicId ?? undefined, activityType: item.activityType, scheduledStartMinutes: item.scheduledStartMinutes })) }
   private presentWeeklyPlan(id: string, weekStart: string, timezone: string, revision: number, generatedAt: number, items: ExistingWeeklyItem[], now: number): WeeklyPlan {
     const today = zonedDateKey(now, timezone)
     const names = new Map((this.repository.listWorkspaces?.() ?? []).map((item) => [item.id, item.name]))

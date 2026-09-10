@@ -541,7 +541,7 @@ export function App() {
       setMessages(turn.messages); setPlannerActions(await window.coach.plannerAction.listPending())
       if (turn.result.outcome === 'applied') { const [nextPriorities, nextSchedule, overview, nextWeek] = await Promise.all([window.coach.planning.listPriorities(), window.coach.planning.getSchedule(), window.coach.planning.getAcademicOverview(), window.coach.planning.replanWeek()]); setPriorities(nextPriorities); setSchedule(nextSchedule); setAcademicOverview(overview); setWeeklyPlan(nextWeek) }
       if (turn.result.outcome === 'failed') setPlannerError(turn.result.message)
-    } catch { setPlannerInput(content); setPlannerError('Não foi possível concluir este turno da Organizadora.') }
+    } catch { setPlannerInput(content); setPlannerError('A ação pode ter sido salva, mas não foi possível atualizar toda a tela. Recarregue para confirmar o estado persistido.') }
     finally { setPlannerSending(false); setStreamedContent('') }
   }
 

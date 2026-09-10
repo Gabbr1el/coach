@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 const read = (path: string) => readFileSync(path, 'utf8')
 
 describe('renderer UI safeguards', () => {
+  it('does not fabricate Today cards from priorities when the weekly projection is empty', () => { const home = read('src/renderer/app/HomeScreen.tsx'); expect(home).not.toContain(': priorities.slice(0, 4)') })
+  it('does not report an applied conversation action as wholly failed when refresh fails', () => { const app = read('src/renderer/app/App.tsx'); expect(app).toContain('A ação pode ter sido salva'); expect(app).not.toContain('Não foi possível concluir este turno da Organizadora.') })
   it('renders planner actions only in the decision card', () => {
     const home = read('src/renderer/app/HomeScreen.tsx')
     expect(home.match(/plannerActions\.map/g)).toHaveLength(1)

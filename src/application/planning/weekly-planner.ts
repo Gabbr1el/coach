@@ -62,9 +62,8 @@ export function distributeWeeklyPlan(input: { weekStart: string; today: string; 
     }
     if (!selected) continue
     const old = reusable.get(sourceKey)
-    const same = old?.dateKey === selected.dateKey && old.durationMinutes === selected.duration
     const title = `${topic.topic} / ${activityType === 'introduction' ? 'introdução' : activityType === 'review' ? 'revisão' : 'exercícios'}`
-    generated.push({ id: same ? old.id : input.createId(), sourceKey, workspaceId: topic.workspaceId, workspaceName: topic.workspaceName, dateKey: selected.dateKey, title, durationMinutes: selected.duration, position: 0, status: 'pending', moduleId: topic.moduleId, topicId: topic.topicId, activityType, scheduledStartMinutes: 0, reason: reason(topic) })
+    generated.push({ id: old?.id ?? input.createId(), sourceKey, workspaceId: topic.workspaceId, workspaceName: topic.workspaceName, dateKey: selected.dateKey, title, durationMinutes: selected.duration, position: 0, status: 'pending', moduleId: topic.moduleId, topicId: topic.topicId, activityType, scheduledStartMinutes: 0, reason: reason(topic) })
     dayUsage.set(selected.dateKey, (dayUsage.get(selected.dateKey) ?? 0) + selected.duration)
   }
   const names = new Map(input.topics.map((topic) => [topic.workspaceId, topic.workspaceName]))

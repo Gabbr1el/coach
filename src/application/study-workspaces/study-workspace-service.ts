@@ -61,30 +61,24 @@ export class StudyWorkspaceService {
       }
       return this.dependencies.getTodayPlan ? { ...existing, plan: this.dependencies.getTodayPlan(workspaceId) } : existing
     }
-    const plan = createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, [], this.createId, this.dependencies.getPlanContext?.(workspaceId))
-    const activePlanItem = plan.find((item) => item.status === 'active') ?? null
-    const timerDurationSeconds = activePlanItem?.durationMinutes ? activePlanItem.durationMinutes * 60 : 60
-    const initialState: StudyWorkspaceState = {
+    const initialState: Omit<StudyWorkspaceState, 'plan' | 'timerDurationSeconds' | 'timerRemainingSeconds'> = {
       workspaceId,
       sessionId: this.createId(),
       sessionStartedAt: now,
       ...workspaceCodeProfile(workspace),
       notes: '',
       shareContextWithAi: false,
-      timerDurationSeconds,
-      timerRemainingSeconds: timerDurationSeconds,
       timerStatus: 'idle',
       timerStartedAt: null,
       timerStartedMonotonicMs: null,
       timerBootId: null,
-      plan,
       updatedAt: now,
       documentRevision: 0,
       notesRevision: 0,
       accumulatedFocusSeconds: 0,
     }
     try {
-      const created = await this.dependencies.repository.createState(initialState)
+      const created = await this.dependencies.repository.createStateFromAuthoritative(initialState, () => this.dependencies.getTodayPlan?.(workspaceId) ?? createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, [], this.createId, this.dependencies.getPlanContext?.(workspaceId)))
       this.publish(created, 'session.started', { source: 'workspace-initialization' })
       return created
     } catch (error) {
@@ -149,12 +143,11 @@ export class StudyWorkspaceService {
 
   async recalculatePlan(workspaceId: string): Promise<StudyWorkspaceState> {
     const state = await this.getState(workspaceId)
-    this.dependencies.replanWeek?.()
-    const plan = this.dependencies.getTodayPlan?.(workspaceId) ?? createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, state.plan, this.createId, this.dependencies.getPlanContext?.(workspaceId))
     const context = this.dependencies.getPlanContext?.(workspaceId)
-    await this.dependencies.repository.replacePlan(workspaceId, state.sessionId, plan, this.now(), context?.dayKey)
-    const active = plan.find((item) => item.status === 'active') ?? null
-    await this.dependencies.repository.setTimerDuration(workspaceId, state.sessionId, active ? active.durationMinutes * 60 : 60, this.now())
+    await this.dependencies.repository.recalculatePlanAtomically(workspaceId, state.sessionId, () => {
+      this.dependencies.replanWeek?.()
+      return this.dependencies.getTodayPlan?.(workspaceId) ?? createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, state.plan, this.createId, context)
+    }, this.now(), context?.dayKey)
     return this.getState(workspaceId)
   }
   async refreshLivePlan(workspaceId: string): Promise<StudyWorkspaceState> { const context = this.dependencies.getPlanContext?.(workspaceId); if (!context || context.lastPlannedDayKey === context.dayKey) return this.getState(workspaceId); return this.recalculatePlan(workspaceId) }

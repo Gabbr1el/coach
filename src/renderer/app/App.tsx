@@ -425,6 +425,7 @@ export function App() {
       .then(([loaded, state, observer]) => { if (workspaceLoadEpoch.current === epoch) { setWorkspaceMessages(loaded); setStudyState(state); setObserverState(observer); setEditorContent(state.editorContent); setStudyNotes(state.notes); documentRevision.current = state.documentRevision; notesRevision.current = state.notesRevision } })
       .catch(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceError('Não foi possível carregar a conversa deste Workspace.') })
       .finally(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceLoading(false) })
+    void window.coach.roadmap.getRebuildPreview({ workspaceId: selected.id }).then((preview) => { if (workspaceLoadEpoch.current === epoch) setRoadmapRebuild(preview) }).catch(() => {})
     return () => { workspaceLoadEpoch.current += 1 }
   }, [selected?.id])
 

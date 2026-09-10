@@ -232,6 +232,8 @@ describe('StudyLessonService', () => {
     expect(send.mock.calls[1]![0].messages[0]!.content).toContain('Corrija apenas a estrutura JSON da aula')
   })
 
+  it('uses strict generation schema instead of silently normalizing provider fields', async () => { const item = module(['decorators']); const ws = workspace('Python Avançado'); const path = roadmap(ws.id, item); const topicId = `${item.id}:decorators`; const malformed = JSON.parse(generated(topicId, 'decorators')); delete malformed.blocks[3].expectedOutput; const send = vi.fn<AIProvider['sendMessage']>(async () => ({ content: JSON.stringify(malformed), providerId: 'test', modelId: 'model' })); const result = await new StudyLessonService(new MemoryLessons(), providerManager(send), async () => ws, () => path).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId }); expect(result).toEqual({ status: 'failed_retryable', errorCode: 'LESSON_SCHEMA_INVALID' }); expect(send).toHaveBeenCalledTimes(2) })
+
   it('classifies a lesson timeout as provider request failure', async () => {
     const item = module(['ponteiros'])
     const ws = workspace('C')
@@ -303,7 +305,7 @@ describe('StudyLessonService', () => {
     const history = service.listAdaptations({ workspaceId: ws.id, lessonId: 'lesson', blockId: original.blocks[0]!.id })
     expect(history.map((item) => item.revision)).toEqual([1, 2])
     expect(history.filter((item) => item.isActive)).toHaveLength(1)
-    expect(prompts).toEqual([{ instruction: 'Simplifique', preferences: { ...repository.preferences, situationalIntent: 'SIMPLIFY' }, block: original.blocks[0] }, { instruction: 'Mais conciso', preferences: { ...repository.preferences, situationalIntent: 'MORE_CONCISE' }, block: original.blocks[0] }])
+    expect(prompts).toEqual([{ instruction: 'Simplifique', preferences: { ...repository.preferences, situationalIntent: 'SIMPLIFY' }, block: original.blocks[0], boundedMaterialEvidence: [] }, { instruction: 'Mais conciso', preferences: { ...repository.preferences, situationalIntent: 'MORE_CONCISE' }, block: original.blocks[0], boundedMaterialEvidence: [] }])
     expect(repository.values.values().next().value?.blocks[0]).toEqual(original.blocks[0])
   })
 
@@ -325,4 +327,6 @@ describe('StudyLessonService', () => {
     await expect(service.adaptSection({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId, lessonId: 'lesson', blockId: code.id, instruction: 'Código primeiro', mode: 'CODE_FIRST' })).rejects.toThrow('executable example contract')
     expect(repository.adaptations).toEqual([])
   })
+
+  it('provides at most three bounded material excerpts for block adaptation', async () => { const item = module(['decorators']); const ws = workspace('Python Avançado'); const path = roadmap(ws.id, item); const topicId = `${item.id}:decorators`; const repository = new MemoryLessons(); const original = localLesson(ws, item, 'decorators', topicId)!; repository.create({ ...original, id: 'lesson', generationKind: 'ai_generated', workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId, providerId: 'old', modelId: 'old', createdAt: 1 }); let prompt: any; const service = new StudyLessonService(repository, providerManager(async (request) => { prompt = JSON.parse(request.messages[1]!.content); return { content: JSON.stringify({ ...original.blocks[0]!, content: 'Adaptado com evidência.' }), providerId: 'test', modelId: 'model' } }), async () => ws, () => path, Date.now, undefined, { getTopicLearningState: () => null, searchMaterials: () => Array.from({ length: 5 }, (_, index) => ({ chunkId: `c${index}`, materialId: crypto.randomUUID(), materialName: 'Apostila.pdf', pageNumber: index + 1, topicId: null, retrieval: 'lexical' as const, role: 'base' as const, content: 'x'.repeat(3000) })) }); await service.adaptSection({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId, lessonId: 'lesson', blockId: original.blocks[0]!.id, instruction: 'Use a apostila' }); expect(prompt.boundedMaterialEvidence).toHaveLength(3); expect(prompt.boundedMaterialEvidence.every((item: { excerpt: string }) => item.excerpt.length === 1600)).toBe(true) })
 })

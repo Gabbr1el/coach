@@ -60,6 +60,10 @@ function tokens(value: string): string[] {
   return normalize(value).split(/[^\p{L}\p{N}+#]+/u).filter((term) => term.length > 0)
 }
 
+export function normalizedSearchTerms(query: string): string[] {
+  return [...new Set(tokens(query).filter((term) => term.length >= 2 || /^[a-z0-9+#]$/i.test(term)))].slice(0, 8)
+}
+
 function contextTerms(workspace: WorkspaceContext): string[] {
   return [...new Set(tokens(`${workspace.name} ${workspace.objective}`).filter((term) => !STOP_WORDS.has(term) && (term.length >= 2 || ['c', 'r'].includes(term))))].slice(0, 24)
 }
@@ -162,7 +166,7 @@ export class PdfMaterialService {
   }
 
   search(workspaceId: string, query: string, materialIds?: string[]): MaterialSearchResult[] {
-    const searchTerms = [...new Set(tokens(query).filter((term) => term.length >= 2))].slice(0, 8)
+    const searchTerms = normalizedSearchTerms(query)
     if (!searchTerms.length) return []
     const allowed = materialIds?.length ? materialIds : null; const idClause = allowed ? `AND m.id IN (${allowed.map(() => '?').join(',')})` : ''; const rows = this.database.sqlite.prepare(`SELECT c.id AS chunkId, m.id AS materialId, m.name AS materialName, m.relevance, m.role, m.semantic_analysis_json AS semanticAnalysisJson, c.page_number AS pageNumber, c.content FROM material_chunks c JOIN materials m ON m.id = c.material_id WHERE m.workspace_id = ? AND m.status = 'ready' AND m.relevance > 0 ${idClause} ORDER BY m.relevance DESC LIMIT 500`).all(workspaceId, ...(allowed ?? [])) as SearchRow[]
     const topics = this.topicCandidates(workspaceId)

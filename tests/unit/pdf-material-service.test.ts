@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { PdfMaterialService, assessLexicalRelevance, type MinimalMaterialReviewRequest } from '../../src/main/materials/pdf-material-service'
+import { PdfMaterialService, assessLexicalRelevance, normalizedSearchTerms, type MinimalMaterialReviewRequest } from '../../src/main/materials/pdf-material-service'
 import type { CoachDatabase } from '../../src/main/database/connection'
 import type { MaterialSemanticAnalysis } from '../../src/shared/contracts/material-contract'
 
@@ -23,6 +23,8 @@ beforeEach(() => {
 })
 
 afterEach(() => sqlite.close())
+
+it('normalizes accents and preserves meaningful one-character technical queries', () => { expect(normalizedSearchTerms(' C  árvore C ')).toEqual(['c', 'arvore']); expect(normalizedSearchTerms(' a ')).toEqual(['a']) })
 
 function service(pages: string[], reviewAmbiguous?: (request: MinimalMaterialReviewRequest) => Promise<{ decision: 'relevant' | 'irrelevant' | 'ambiguous'; confidence: number }>): PdfMaterialService {
   return new PdfMaterialService(database, { extractPages: vi.fn(async () => pages), reviewAmbiguous, now: () => 10, createId: () => `id-${++sequence}` })

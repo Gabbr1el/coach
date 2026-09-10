@@ -174,7 +174,7 @@ describe('Coach database migrations', () => {
     database.close()
   })
 
-  it('applies curricular roadmap previews to new and existing databases', () => { const databasePath = createDatabasePath(); const first = openCoachDatabase({ databasePath, migrationsFolder }); expect(first.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'roadmap_rebuild_previews'").get()).toEqual({ name: 'roadmap_rebuild_previews' }); first.close(); const reopened = openCoachDatabase({ databasePath, migrationsFolder }); expect(reopened.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]); reopened.close() })
+  it('applies curricular roadmap preview lifecycle to new and existing databases', () => { const databasePath = createDatabasePath(); const first = openCoachDatabase({ databasePath, migrationsFolder }); expect(first.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'roadmap_rebuild_previews'").get()).toEqual({ name: 'roadmap_rebuild_previews' }); expect((first.sqlite.pragma('table_info(roadmap_rebuild_previews)') as Array<{ name: string }>).map((column) => column.name)).toEqual(expect.arrayContaining(['status', 'applied_roadmap_id', 'resolved_at'])); first.close(); const reopened = openCoachDatabase({ databasePath, migrationsFolder }); expect(reopened.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]); reopened.close() })
   it('repairs a divergent interactive code table idempotently without losing rows', () => {
     const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
     database.sqlite.exec('ALTER TABLE study_interactive_code_states DROP COLUMN evidence_granted_at')

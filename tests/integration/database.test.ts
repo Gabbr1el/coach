@@ -6,7 +6,7 @@ import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openCoachDatabase } from '../../src/main/database/connection'
 import { CURRENT_MIGRATION_COUNT, validateCoachDatabaseSchema } from '../../src/main/database/restore-recovery'
-import { repairInteractiveCodeStateSchema } from '../../src/main/database/migrate'
+import { repairExerciseSchema, repairInteractiveCodeStateSchema } from '../../src/main/database/migrate'
 import { DrizzleWorkspaceRepository } from '../../src/main/repositories/drizzle-workspace-repository'
 import { DrizzleConversationRepository } from '../../src/main/repositories/drizzle-conversation-repository'
 import { DrizzleStudyWorkspaceRepository } from '../../src/main/repositories/drizzle-study-workspace-repository'
@@ -54,6 +54,57 @@ function migrationsThrough0028(): string {
 }
 
 describe('Coach database migrations', () => {
+  it('repairs divergent exercise tables without losing existing data', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    database.sqlite.prepare("INSERT INTO workspaces (id, name, objective, status, created_at, updated_at) VALUES ('exercise-repair-workspace', 'Python', '', 'active', 1, 1)").run()
+    database.sqlite.exec(`
+      INSERT INTO exercise_sets (id, workspace_id, roadmap_id, module_id, topic_id, lesson_id, status, created_at, updated_at)
+        VALUES ('repair-set', 'exercise-repair-workspace', 'roadmap', 'module', 'topic', 'lesson', 'ready', 1, 1);
+      INSERT INTO exercises (id, set_id, position, kind, difficulty, title, statement, input_description, output_description, language, starter_code, public_tests_json, private_tests_json, reference_solution, hint, created_at)
+        VALUES ('repair-exercise', 'repair-set', 1, 'PROGRAMMING_PROBLEM', 'introductory', 'Preserved', 'Statement', '', '', 'python', 'print(1)', '[]', '[]', 'print(1)', 'Hint', 1);
+      INSERT INTO exercise_progress (workspace_id, exercise_id, status, current_code, attempts, updated_at)
+        VALUES ('exercise-repair-workspace', 'repair-exercise', 'in_progress', 'print(2)', 3, 2);
+      ALTER TABLE exercise_attempts DROP COLUMN prediction;
+      ALTER TABLE exercises DROP COLUMN expected_prediction;
+      ALTER TABLE exercises DROP COLUMN code_to_observe;
+      ALTER TABLE exercises DROP COLUMN prediction_prompt;
+    `)
+
+    repairExerciseSchema(database.sqlite)
+
+    expect(database.sqlite.prepare("SELECT title, reference_solution AS referenceSolution FROM exercises WHERE id = 'repair-exercise'").get()).toEqual({ title: 'Preserved', referenceSolution: 'print(1)' })
+    expect(database.sqlite.prepare("SELECT current_code AS currentCode, attempts FROM exercise_progress WHERE exercise_id = 'repair-exercise'").get()).toEqual({ currentCode: 'print(2)', attempts: 3 })
+    expect((database.sqlite.pragma('table_info(exercises)') as Array<{ name: string }>).map(({ name }) => name)).toEqual(expect.arrayContaining(['prediction_prompt', 'code_to_observe', 'expected_prediction']))
+    expect(database.sqlite.pragma('foreign_key_check')).toEqual([])
+    validateCoachDatabaseSchema(database.sqlite)
+    database.close()
+
+    const reopened = openCoachDatabase({ databasePath: database.path, migrationsFolder })
+    expect(reopened.sqlite.prepare("SELECT current_code AS currentCode, attempts FROM exercise_progress WHERE exercise_id = 'repair-exercise'").get()).toEqual({ currentCode: 'print(2)', attempts: 3 })
+    expect(reopened.sqlite.pragma('foreign_key_check')).toEqual([])
+    reopened.close()
+  })
+
+  it('creates missing and partial exercise tables idempotently', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    database.sqlite.exec('DROP TABLE exercise_attempts; DROP TABLE exercise_progress; DROP TABLE exercises; DROP TABLE exercise_sets; CREATE TABLE exercise_sets (id text PRIMARY KEY NOT NULL, workspace_id text NOT NULL, topic_id text NOT NULL, status text NOT NULL);')
+    database.sqlite.prepare("INSERT INTO workspaces (id, name, objective, status, created_at, updated_at) VALUES ('partial-workspace', 'C', '', 'active', 1, 1)").run()
+    database.sqlite.prepare("INSERT INTO exercise_sets (id, workspace_id, topic_id, status) VALUES ('partial-set', 'partial-workspace', 'topic', 'ready')").run()
+    database.sqlite.pragma('foreign_keys = OFF')
+    database.sqlite.prepare("INSERT INTO exercise_sets (id, workspace_id, topic_id, status) VALUES ('orphan-set', 'missing-workspace', 'orphan-topic', 'ready')").run()
+    database.sqlite.pragma('foreign_keys = ON')
+
+    repairExerciseSchema(database.sqlite)
+    repairExerciseSchema(database.sqlite)
+
+    expect(database.sqlite.prepare("SELECT id, workspace_id AS workspaceId, topic_id AS topicId FROM exercise_sets WHERE id = 'partial-set'").get()).toEqual({ id: 'partial-set', workspaceId: 'partial-workspace', topicId: 'topic' })
+    expect(database.sqlite.prepare("SELECT id FROM exercise_sets WHERE id = 'orphan-set'").get()).toBeUndefined()
+    expect(database.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'exercise%' ORDER BY name").all()).toEqual([{ name: 'exercise_attempts' }, { name: 'exercise_progress' }, { name: 'exercise_sets' }, { name: 'exercises' }])
+    expect(database.sqlite.pragma('foreign_key_check')).toEqual([])
+    validateCoachDatabaseSchema(database.sqlite)
+    database.close()
+  })
+
   it('applies curricular roadmap previews to new and existing databases', () => { const databasePath = createDatabasePath(); const first = openCoachDatabase({ databasePath, migrationsFolder }); expect(first.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'roadmap_rebuild_previews'").get()).toEqual({ name: 'roadmap_rebuild_previews' }); first.close(); const reopened = openCoachDatabase({ databasePath, migrationsFolder }); expect(reopened.sqlite.prepare('PRAGMA foreign_key_check').all()).toEqual([]); reopened.close() })
   it('repairs a divergent interactive code table idempotently without losing rows', () => {
     const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })

@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 import Database from 'better-sqlite3'
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { app } from 'electron'
-import { migrateDatabase, repairDraftAdaptiveStudyMigration, repairInteractiveCodeStateSchema } from './migrate'
+import { migrateDatabase, repairDraftAdaptiveStudyMigration, repairExerciseSchema, repairInteractiveCodeStateSchema } from './migrate'
 import * as workspaceSchema from './schema/workspaces'
 import * as conversationSchema from './schema/conversations'
 import * as providerSchema from './schema/provider-configurations'
@@ -53,6 +53,7 @@ export function openCoachDatabase(options: OpenCoachDatabaseOptions = {}): Coach
     migrateDatabase(orm, { migrationsFolder })
     repairDraftAdaptiveStudyMigration(sqlite)
     repairInteractiveCodeStateSchema(sqlite)
+    repairExerciseSchema(sqlite)
 
     return {
       sqlite,

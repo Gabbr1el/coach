@@ -74,8 +74,10 @@ describe('PDF material pipeline', () => {
     const result = await importPdf(materialService)
     expect(result.status).toBe('staged')
     materialService.decide('workspace-1', result.id, 'approve', 'base')
-    expect(materialService.search('workspace-1', 'ponteiros')).toEqual([expect.objectContaining({ materialId: result.id, pageNumber: 1, topicId: 'module-1:ponteiros em C', retrieval: 'lexical' })])
+    expect(materialService.search('workspace-1', 'ponteiros')).toEqual([expect.objectContaining({ materialId: result.id, pageNumber: 1, topicId: 'module-1:ponteiros em C', retrieval: 'lexical', role: 'base' })])
   })
+
+  it('ranks approved priority and semantic material without treating staged imports as curriculum', async () => { const semanticService = new PdfMaterialService(database, { extractPages: async () => ['Árvores binárias e travessia em profundidade.'], analyzeSemantic: async () => semantic('high'), createId: () => `id-${++sequence}` }); const base = await importPdf(semanticService, 'base.pdf'); const priority = await importPdf(semanticService, 'priority.pdf'); semanticService.decide('workspace-1', base.id, 'approve', 'base'); expect(semanticService.search('workspace-1', 'filas')).toEqual([expect.objectContaining({ materialId: base.id, retrieval: 'hybrid' })]); semanticService.decide('workspace-1', priority.id, 'approve', 'priority'); expect(semanticService.search('workspace-1', 'árvores')[0]).toMatchObject({ materialId: priority.id, role: 'priority', retrieval: 'hybrid' }) })
 
   it('deduplicates PDFs by workspace and content hash', async () => {
     sqlite.prepare("UPDATE workspaces SET name = 'C', objective = 'Aprender C' WHERE id = 'workspace-1'").run()

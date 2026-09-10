@@ -102,4 +102,5 @@ describe('renderer UI safeguards', () => {
     expect(lesson).toContain('Praticar este tópico')
     expect(lesson).toContain('Abrir Prática')
   })
+  it('shows curricular approval and authoritative roadmap impact before applying', () => { const app = read('src/renderer/app/App.tsx'); const lesson = read('src/renderer/app/StudyLessonView.tsx'); expect(app).toContain('A importação sozinha não altera o currículo'); expect(app).toContain('window.coach.roadmap.previewRebuild'); expect(app).toContain('unsafeProgressTopicIds'); expect(app).toContain('window.coach.roadmap.applyRebuild'); expect(lesson).toContain('Fontes realmente consultadas'); expect(lesson).toContain('página/slide') })
 })

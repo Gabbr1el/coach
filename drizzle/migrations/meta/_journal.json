@@ -253,6 +253,13 @@
       "when": 1788982835766,
       "tag": "0035_hot_annihilus",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1789014300000,
+      "tag": "0036_curricular_material_roadmap",
+      "breakpoints": true
     }
   ]
 }

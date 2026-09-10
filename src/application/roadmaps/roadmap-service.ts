@@ -1,12 +1,15 @@
 import type { AIProvider, AIResponse } from '../ai/ai-provider'
+import { createHash } from 'node:crypto'
 import type { AIProviderManager } from '../ai/ai-provider-manager'
 import { extractJsonDocument, sanitizedResponsePreview, structuredErrorDetail, structuredOutputDebugEnabled } from '../ai/structured-json'
-import { generatedRoadmapProposalSchema, roadmapProposalSchema, type CurriculumSource, type LearningPathState, type Roadmap, type RoadmapResource } from '../../shared/contracts/roadmap-contract'
+import { generatedRoadmapProposalSchema, roadmapProposalSchema, type CurriculumSource, type LearningPathState, type Roadmap, type RoadmapRebuildImpact, type RoadmapRebuildPreview, type RoadmapResource } from '../../shared/contracts/roadmap-contract'
 import type { Workspace } from '../../shared/contracts/workspace-contract'
 import type { CurriculumSourceService } from './curriculum-source-service'
+import type { MaterialReadResult, MaterialSearchResult, MaterialSummary } from '../../shared/contracts/material-contract'
 
-export interface RoadmapRepository { findCurrent(workspaceId: string): Roadmap | null; nextVersion(workspaceId: string): number; create(roadmap: Roadmap): Roadmap; activate(roadmap: Roadmap): Roadmap; accept(workspaceId: string, roadmapId: string, now: number): Roadmap; getLearningPathState(workspaceId: string): LearningPathState | null; setLearningPathState(state: LearningPathState): LearningPathState; recoverInterrupted(workspaceId: string, now: number, staleBefore: number, retryAfter: number): LearningPathState | null; tryStartGeneration(workspaceId: string, activeRoadmapId: string | null, now: number, staleBefore: number): boolean; listWaitingForProvider(): string[] }
+export interface RoadmapRepository { findCurrent(workspaceId: string): Roadmap | null; nextVersion(workspaceId: string): number; create(roadmap: Roadmap): Roadmap; activate(roadmap: Roadmap): Roadmap; accept(workspaceId: string, roadmapId: string, now: number): Roadmap; progressedTopicIds?(workspaceId: string): string[]; saveRebuildPreview?(preview: RoadmapRebuildPreview): RoadmapRebuildPreview; findRebuildPreview?(workspaceId: string, previewId: string): RoadmapRebuildPreview | null; applyRebuildPreview?(preview: RoadmapRebuildPreview, now: number): Roadmap; getLearningPathState(workspaceId: string): LearningPathState | null; setLearningPathState(state: LearningPathState): LearningPathState; recoverInterrupted(workspaceId: string, now: number, staleBefore: number, retryAfter: number): LearningPathState | null; tryStartGeneration(workspaceId: string, activeRoadmapId: string | null, now: number, staleBefore: number): boolean; listWaitingForProvider(): string[] }
 export interface RoadmapAcademicContext { difficulties: string[]; deadline: number | null; availability: Array<{ weekday: number; minutes: number }>; knownContext: string[] }
+export interface RoadmapMaterialProvider { list(workspaceId: string): MaterialSummary[]; search(workspaceId: string, query: string, materialIds?: string[]): MaterialSearchResult[]; overview(workspaceId: string, materialId: string): MaterialReadResult; readPage(workspaceId: string, materialId: string, pageNumber: number): MaterialReadResult }
 
 export function hasGenericModules(proposal: ReturnType<typeof roadmapProposalSchema.parse>): boolean { const vague = /^(fundamentos|introdução|introducao|revisar conceitos?|prática guiada|pratica guiada|prática independente|projeto integrador)$/i; const rendered = JSON.stringify(proposal).toLocaleLowerCase(); return /vocabulário e mapa|mapa de 10 conceitos|mecanismos centrais|aplicação guiada|projeto independente/.test(rendered) || proposal.modules.some((item) => vague.test(item.title.trim()) || item.topics.some((topic) => /^(conceitos? (básicos|essenciais)|revisar conceitos?)$/i.test(topic))) }
 
@@ -19,7 +22,7 @@ class LearningPathGenerationError extends Error {
 
 const RETRY_COOLDOWN = 5 * 60_000
 const FAST_RETRY_COOLDOWN = 30_000
-function resourceType(source: CurriculumSource): RoadmapResource['type'] { return source.type === 'outline' ? 'roadmap' : source.type === 'documentation' || source.type === 'reference' ? 'documentation' : source.type === 'educational' ? 'course' : 'article' }
+function resourceType(source: CurriculumSource): 'roadmap' | 'documentation' | 'course' | 'article' { return source.type === 'outline' ? 'roadmap' : source.type === 'documentation' || source.type === 'reference' ? 'documentation' : source.type === 'educational' ? 'course' : 'article' }
 function validRoadmap(roadmap: Roadmap | null): roadmap is Roadmap { return Boolean(roadmap && roadmap.modules.length > 0 && roadmap.modules.every((item) => item.topics.length > 0)) }
 function providerUnavailable(error: unknown): boolean { if (!(error instanceof Error)) return false; const code = 'code' in error ? String((error as { code?: unknown }).code ?? '') : ''; return code === 'NETWORK_UNAVAILABLE' || /network|fetch failed|offline|unavailable|connect(?:ion)? refused/i.test(`${error.name} ${error.message}`) }
 function providerInvalidResponse(error: unknown): boolean { return error instanceof Error && /empty response|no response body|invalid provider response/i.test(error.message) }
@@ -28,10 +31,13 @@ function diagnosticError(error: unknown, fallbackStage: LearningPathStage): Lear
 function logProgress(workspaceId: string, stage: LearningPathStage, detail: Record<string, unknown> = {}): void { if (structuredOutputDebugEnabled()) console.info('[LearningPath] stage', { workspaceId, stage, ...detail }) }
 function logFailure(workspaceId: string, error: LearningPathGenerationError): void { if (!structuredOutputDebugEnabled()) return; console.error('[LearningPath] generation failed', { workspaceId, stage: error.stage, errorCode: error.code, errorName: error.cause instanceof Error ? error.cause.name : error.name, errorMessage: error.message, cause: error.cause instanceof Error && error.cause.cause instanceof Error ? error.cause.cause.message : undefined, responsePreview: error.response ? sanitizedResponsePreview(error.response) : undefined }) }
 function schemaDescription(): string { return '{"title":string,"modules":[{"title":string,"objective":string,"estimatedMinutes":integer 10..2400,"topics":[2..12 non-empty strings],"outcomes":[1..8 strings],"practice":string,"completionCriteria":[1..6 strings],"sourceIds":[0..6 provided IDs]}]}' }
+function semanticKey(value: string): string { return value.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9+#]+/g, ' ').trim() }
+function materialSourceId(materialId: string, pageNumber: number): string { return `material:${materialId}:${pageNumber}` }
+function materialHash(content: string): string { return createHash('sha256').update(content).digest('hex') }
 
 export class RoadmapService {
   private readonly generating = new Map<string, Promise<LearningPathState>>()
-  constructor(private readonly repository: RoadmapRepository, private readonly providers: AIProviderManager, private readonly getWorkspace: (id: string) => Promise<Workspace | null>, private readonly getAcademicContext: (workspaceId: string) => RoadmapAcademicContext = () => ({ difficulties: [], deadline: null, availability: [], knownContext: [] }), private readonly curriculumSources?: CurriculumSourceService, private readonly now = Date.now, private readonly createId = () => crypto.randomUUID()) {}
+  constructor(private readonly repository: RoadmapRepository, private readonly providers: AIProviderManager, private readonly getWorkspace: (id: string) => Promise<Workspace | null>, private readonly getAcademicContext: (workspaceId: string) => RoadmapAcademicContext = () => ({ difficulties: [], deadline: null, availability: [], knownContext: [] }), private readonly curriculumSources?: CurriculumSourceService, private readonly now = Date.now, private readonly createId = () => crypto.randomUUID(), private readonly materials?: RoadmapMaterialProvider) {}
   retryWaitingForProvider(): void { for (const workspaceId of this.repository.listWaitingForProvider()) void this.ensureLearningPath(workspaceId, { forceProviderRetry: true }).catch(() => {}) }
   async get(workspaceId: string): Promise<Roadmap | null> { await this.requireWorkspace(workspaceId); return this.repository.findCurrent(workspaceId) }
   async getLearningPathState(workspaceId: string): Promise<LearningPathState> {
@@ -72,17 +78,56 @@ export class RoadmapService {
     }
   }
   generate(workspaceId: string, instruction?: string): Promise<Roadmap> { return this.generateWithProvider(workspaceId, this.providers.route('roadmap'), instruction) }
+  async previewRebuild(input: { workspaceId: string; materialIds: string[]; instruction?: string }): Promise<RoadmapRebuildPreview> {
+    if (!this.materials || !this.repository.saveRebuildPreview) throw new Error('Curricular material rebuild is unavailable')
+    const workspace = await this.requireWorkspace(input.workspaceId)
+    const current = this.repository.findCurrent(input.workspaceId)
+    if (!current) throw new Error('Current roadmap not found')
+    const approved = new Map(this.materials.list(input.workspaceId).filter((item) => item.status === 'ready').map((item) => [item.id, item]))
+    if (input.materialIds.some((id) => !approved.has(id))) throw new Error('Only approved materials can rebuild the roadmap')
+    const provider = this.providers.route('roadmap')
+    if (!provider) throw new LearningPathGenerationError('PROVIDER_UNAVAILABLE', 'provider_route', 'Roadmap provider is unavailable')
+    const candidate = await this.generateCandidate(workspace, provider, input.instruction, input.materialIds)
+    const oldModules = new Map(current.modules.map((module) => [semanticKey(module.title), module]))
+    const preservedTopicIds: string[] = []
+    const modules = candidate.proposal.modules.map((module, index) => {
+      const old = oldModules.get(semanticKey(module.title))
+      const oldTopics = new Map(old?.topics.map((topic) => [semanticKey(topic), topic]) ?? [])
+      const topics = module.topics.map((topic) => oldTopics.get(semanticKey(topic)) ?? topic)
+      if (old) for (const topic of topics) if (oldTopics.has(semanticKey(topic))) preservedTopicIds.push(`${old.id}:${topic}`)
+      return { id: old?.id ?? this.createId(), ...module, topics, position: index + 1, status: old?.status ?? (index === 0 ? 'active' as const : 'locked' as const) }
+    })
+    const oldTopicIds = current.modules.flatMap((module) => module.topics.map((topic) => `${module.id}:${topic}`))
+    const nextTopicIds = modules.flatMap((module) => module.topics.map((topic) => `${module.id}:${topic}`))
+    const removedTopics = oldTopicIds.filter((id) => !nextTopicIds.includes(id))
+    const progressed = new Set(this.repository.progressedTopicIds?.(input.workspaceId) ?? [])
+    const unsafeProgressTopicIds = removedTopics.filter((id) => progressed.has(id))
+    const impact: RoadmapRebuildImpact = { preservedModuleIds: modules.filter((module) => current.modules.some((old) => old.id === module.id)).map((module) => module.id), preservedTopicIds, addedTopics: nextTopicIds.filter((id) => !oldTopicIds.includes(id)), removedTopics, unsafeProgressTopicIds, requiresAcknowledgement: unsafeProgressTopicIds.length > 0 }
+    const preview: RoadmapRebuildPreview = { id: this.createId(), workspaceId: input.workspaceId, currentRoadmapId: current.id, title: candidate.proposal.title, modules, materialIds: input.materialIds, impact, createdAt: this.now() }
+    return this.repository.saveRebuildPreview(preview)
+  }
+  async applyRebuild(input: { workspaceId: string; previewId: string; acknowledgeUnsafeChanges: boolean }): Promise<Roadmap> { await this.requireWorkspace(input.workspaceId); if (!this.repository.findRebuildPreview || !this.repository.applyRebuildPreview) throw new Error('Curricular material rebuild is unavailable'); const preview = this.repository.findRebuildPreview(input.workspaceId, input.previewId); if (!preview) throw new Error('Roadmap rebuild preview not found'); if (preview.impact.requiresAcknowledgement && !input.acknowledgeUnsafeChanges) throw new Error('Unsafe roadmap changes require explicit acknowledgement'); return this.repository.applyRebuildPreview(preview, this.now()) }
   private async generateWithProvider(workspaceId: string, provider: AIProvider | null, instruction?: string): Promise<Roadmap> {
     if (!provider) throw new LearningPathGenerationError('PROVIDER_UNAVAILABLE', 'provider_route', 'Roadmap provider is unavailable')
     let workspace: Workspace
     try { workspace = await this.requireWorkspace(workspaceId); logProgress(workspaceId, 'workspace', { subject: workspace.name }) } catch (error) { throw new LearningPathGenerationError('UNKNOWN_GENERATION_ERROR', 'workspace', structuredErrorDetail(error), { cause: error }) }
+    const candidate = await this.generateCandidate(workspace, provider, instruction)
+    const { proposal, response } = candidate
+    const now = this.now()
+    try { const roadmap = this.repository.activate({ id: this.createId(), workspaceId, title: proposal.title, status: 'accepted', generationKind: 'ai_generated', version: this.repository.nextVersion(workspaceId), providerId: response.providerId, modelId: response.modelId, modules: proposal.modules.map((item, index) => ({ id: this.createId(), ...item, position: index + 1, status: index === 0 ? 'active' : 'locked' })), createdAt: now, updatedAt: now }); logProgress(workspaceId, 'persistence_activate', { roadmapId: roadmap.id }); return roadmap }
+    catch (error) { throw new LearningPathGenerationError('ROADMAP_PERSISTENCE_FAILED', 'persistence_activate', structuredErrorDetail(error), { cause: error }) }
+  }
+  private async generateCandidate(workspace: Workspace, provider: AIProvider, instruction?: string, materialIds: string[] = []): Promise<{ proposal: ReturnType<typeof roadmapProposalSchema.parse>; response: AIResponse }> {
+    const workspaceId = workspace.id
     let academic: RoadmapAcademicContext
     try { academic = this.getAcademicContext(workspaceId); logProgress(workspaceId, 'academic_context') } catch (error) { throw new LearningPathGenerationError('UNKNOWN_GENERATION_ERROR', 'academic_context', structuredErrorDetail(error), { cause: error }) }
     let sources: CurriculumSource[] = []
     try { sources = await this.curriculumSources?.sourcesFor(workspace) ?? []; logProgress(workspaceId, 'curriculum_sources', { retrievedSources: sources.filter((source) => source.retrieved).length }) } catch (error) { if (structuredOutputDebugEnabled()) console.error('[LearningPath] curriculum source enrichment failed', { workspaceId, stage: 'curriculum_sources', errorCode: 'CURRICULUM_SOURCE_FAILED', errorName: error instanceof Error ? error.name : 'UnknownError', errorMessage: structuredErrorDetail(error) }) }
     const retrieved = sources.filter((source) => source.retrieved && source.excerpt)
-    const allowed = new Map(retrieved.map((source) => [source.id, source]))
-    const request = { messages: [{ role: 'system' as const, content: `Gere somente uma estrutura curricular progressiva e específica da Trilha de Aprendizado. Não gere aula completa. Retorne somente JSON válido no formato ${schemaDescription()}. Contexto marcado como DECLARED é auto-relato e não prova domínio, conclusão ou mastery; use-o para calibrar linguagem e ênfase, nunca para remover silenciosamente pré-requisitos. Somente evidência OBSERVED pode sustentar domínio. Proibido usar módulos vagos ou os padrões "Vocabulário e mapa", "Mecanismos centrais", "Mapa de 10 conceitos", "Fundamentos genéricos" e "Projeto independente genérico". O campo practice é uma string com uma atividade concreta, não uma lista. Use apenas sourceIds fornecidos; não retorne URLs.` }, { role: 'user' as const, content: JSON.stringify({ subject: workspace.name, objective: workspace.objective || null, declaredContext: academic.knownContext, observedLearning: academic.difficulties, deadline: academic.deadline, availability: academic.availability, topicLearningState: [], sources: sources.map(({ excerpt, ...metadata }) => metadata), retrievedCurriculumExcerpts: retrieved.map(({ id, excerpt }) => ({ sourceId: id, content: excerpt })), requestedChange: instruction || null }) }], maxOutputTokens: 5000, signal: AbortSignal.timeout(240_000) }
+    const allowed = new Map<string, RoadmapResource>(retrieved.map((source) => [source.id, { kind: 'web', title: source.title, url: source.url, type: resourceType(source) }]))
+    const materialExcerpts: Array<{ sourceId: string; content: string; materialId: string; pageNumber: number; role: string }> = []
+    for (const materialId of materialIds) { try { const overview = this.materials?.overview(workspaceId, materialId); if (!overview || overview.material.status !== 'ready') continue; for (const pageNumber of overview.pageNumbers) { const content = this.materials?.readPage(workspaceId, materialId, pageNumber).content ?? ''; if (!content) continue; const sourceId = materialSourceId(materialId, pageNumber); allowed.set(sourceId, { kind: 'material', title: overview.material.name, type: 'material', materialId, pageNumber, role: overview.material.role ?? 'reference', excerptHash: materialHash(content) }); materialExcerpts.push({ sourceId, content, materialId, pageNumber, role: overview.material.role ?? 'reference' }) } } catch {} }
+    const request = { messages: [{ role: 'system' as const, content: `Gere somente uma estrutura curricular progressiva e específica da Trilha de Aprendizado. Não gere aula completa. Retorne somente JSON válido no formato ${schemaDescription()}. Contexto marcado como DECLARED é auto-relato e não prova domínio, conclusão ou mastery; use-o para calibrar linguagem e ênfase, nunca para remover silenciosamente pré-requisitos. Somente evidência OBSERVED pode sustentar domínio. Materiais locais só são curriculares quando aparecem no catálogo aprovado; respeite role priority, base e reference nessa ordem, mas não invente cobertura. Proibido usar módulos vagos ou os padrões "Vocabulário e mapa", "Mecanismos centrais", "Mapa de 10 conceitos", "Fundamentos genéricos" e "Projeto independente genérico". O campo practice é uma string com uma atividade concreta, não uma lista. Use apenas sourceIds fornecidos; não retorne URLs.` }, { role: 'user' as const, content: JSON.stringify({ subject: workspace.name, objective: workspace.objective || null, declaredContext: academic.knownContext, observedLearning: academic.difficulties, deadline: academic.deadline, availability: academic.availability, topicLearningState: [], sources: sources.map(({ excerpt, ...metadata }) => metadata), retrievedCurriculumExcerpts: retrieved.map(({ id, excerpt }) => ({ sourceId: id, content: excerpt })), approvedMaterialExcerpts: materialExcerpts, requestedChange: instruction || null }) }], maxOutputTokens: 5000, signal: AbortSignal.timeout(240_000) }
     let response: AIResponse
     try { response = await provider.sendMessage(request); logProgress(workspaceId, 'provider_response', { providerId: response.providerId, modelId: response.modelId, contentLength: response.content.length }) } catch (error) { throw diagnosticError(error, 'provider_response') }
     if (!response.content.trim()) throw new LearningPathGenerationError('PROVIDER_INVALID_RESPONSE', 'provider_response', 'Roadmap provider returned empty content')
@@ -98,17 +143,15 @@ export class RoadmapService {
       response = repaired
     }
     logProgress(workspaceId, 'generic_validation', { modules: proposal.modules.length, topics: proposal.modules.reduce((total, item) => total + item.topics.length, 0) })
-    const now = this.now()
-    try { const roadmap = this.repository.activate({ id: this.createId(), workspaceId, title: proposal.title, status: 'accepted', generationKind: 'ai_generated', version: this.repository.nextVersion(workspaceId), providerId: response.providerId, modelId: response.modelId, modules: proposal.modules.map((item, index) => ({ id: this.createId(), ...item, position: index + 1, status: index === 0 ? 'active' : 'locked' })), createdAt: now, updatedAt: now }); logProgress(workspaceId, 'persistence_activate', { roadmapId: roadmap.id }); return roadmap }
-    catch (error) { throw new LearningPathGenerationError('ROADMAP_PERSISTENCE_FAILED', 'persistence_activate', structuredErrorDetail(error), { cause: error }) }
+    return { proposal, response }
   }
-  private parseProposal(workspaceId: string, content: string, allowed: Map<string, CurriculumSource>): ReturnType<typeof roadmapProposalSchema.parse> {
+  private parseProposal(workspaceId: string, content: string, allowed: Map<string, RoadmapResource>): ReturnType<typeof roadmapProposalSchema.parse> {
     let raw: unknown
     try { raw = extractJsonDocument(content); logProgress(workspaceId, 'extract_json') } catch (error) { throw new LearningPathGenerationError('JSON_EXTRACTION_FAILED', 'extract_json', structuredErrorDetail(error), { cause: error, response: content }) }
     const generated = generatedRoadmapProposalSchema.safeParse(raw)
     if (!generated.success) throw new LearningPathGenerationError('ROADMAP_SCHEMA_INVALID', 'generated_schema', structuredErrorDetail(generated.error), { cause: generated.error, response: content })
     logProgress(workspaceId, 'generated_schema')
-    const proposal = roadmapProposalSchema.safeParse({ title: generated.data.title, modules: generated.data.modules.map(({ sourceIds, ...item }) => ({ ...item, resources: sourceIds.map((id) => allowed.get(id)).filter((source): source is CurriculumSource => Boolean(source)).map((source) => ({ title: source.title, url: source.url, type: resourceType(source) })) })) })
+    const proposal = roadmapProposalSchema.safeParse({ title: generated.data.title, modules: generated.data.modules.map(({ sourceIds, ...item }) => ({ ...item, resources: sourceIds.map((id) => allowed.get(id)).filter((source): source is RoadmapResource => Boolean(source)) })) })
     if (!proposal.success) throw new LearningPathGenerationError('ROADMAP_SCHEMA_INVALID', 'roadmap_schema', structuredErrorDetail(proposal.error), { cause: proposal.error, response: content })
     logProgress(workspaceId, 'roadmap_schema')
     if (!validRoadmap({ id: '', workspaceId: '', title: proposal.data.title, status: 'accepted', generationKind: 'ai_generated', version: 1, providerId: null, modelId: null, modules: proposal.data.modules.map((item, index) => ({ id: String(index), ...item, position: index, status: 'active' })), createdAt: 0, updatedAt: 0 })) throw new LearningPathGenerationError('ROADMAP_SCHEMA_INVALID', 'roadmap_schema', 'Roadmap must contain modules and topics', { response: content })

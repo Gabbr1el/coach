@@ -17,3 +17,7 @@ export const workspaceLearningPathState = sqliteTable('workspace_learning_path_s
   activeRoadmapId: text('active_roadmap_id').references(() => roadmaps.id, { onDelete: 'set null' }),
   lastAttemptAt: integer('last_attempt_at'), retryAfter: integer('retry_after'), lastErrorCode: text('last_error_code'), updatedAt: integer('updated_at').notNull(),
 }, (table) => [check('learning_path_status_check', sql`${table.status} in ('idle','generating','ready','waiting_for_provider','failed_retryable')`), index('learning_path_status_retry_idx').on(table.status, table.retryAfter)])
+
+export const roadmapRebuildPreviews = sqliteTable('roadmap_rebuild_previews', {
+  id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }), currentRoadmapId: text('current_roadmap_id').notNull().references(() => roadmaps.id, { onDelete: 'cascade' }), proposalJson: text('proposal_json').notNull(), materialIdsJson: text('material_ids_json').notNull(), impactJson: text('impact_json').notNull(), createdAt: integer('created_at').notNull(),
+}, (table) => [index('roadmap_rebuild_previews_workspace_idx').on(table.workspaceId, table.createdAt)])

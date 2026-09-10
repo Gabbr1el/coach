@@ -166,7 +166,7 @@ describe('StudyLessonService', () => {
     const result = await new StudyLessonService(repository, providerManager(send), async () => ws, () => path, () => 20, sources).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId })
     expect(result.status).toBe('ready')
     if (result.status === 'ready') { expect(result.lesson.id).toBe('stable-id'); expect(result.lesson.generationKind).toBe('ai_generated'); expect(result.lesson.createdAt).toBe(5) }
-    if (result.status === 'ready') expect(result.sources).toEqual(expect.arrayContaining([{ title: 'Python Tutorial', url: 'https://docs.python.org/3/tutorial/', type: 'documentation' }]))
+    if (result.status === 'ready') expect(result.sources).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'web', title: 'Python Tutorial', url: 'https://docs.python.org/3/tutorial/', type: 'documentation' })]))
     expect(repository.replaces).toBe(1)
     const request = send.mock.calls[0]![0]
     expect(request.messages[1]!.content).toContain('python-tutorial')
@@ -188,8 +188,8 @@ describe('StudyLessonService', () => {
     expect(prompt.presentationProfile).toMatchObject({ detail: 'detailed', explanation: 'step_by_step', examples: 'practical' })
     expect(prompt.topicLearningState).toEqual({ difficulty: 'medium', needsReview: true, confidence: 'low', assessmentCounts: { total: 2, correctFirstTry: 1, correctAfterHelp: 0, incorrect: 1 } })
     expect(prompt.workspaceMemory).toBe('Prefere exemplos concretos.')
-    expect(prompt.materialSnippets).toEqual([{ materialName: 'Notas.pdf', pageNumber: 4, content: 'Decorators preservam contratos.' }])
-    expect(prompt.materialSnippets[0]).not.toHaveProperty('materialId')
+    expect(prompt.materialSnippets).toEqual([expect.objectContaining({ sourceId: 'material:chunk-private', materialId: 'private-id', materialName: 'Notas.pdf', pageNumber: 4, role: 'reference', content: 'Decorators preservam contratos.' })])
+    expect(prompt.providedSources).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'material:chunk-private', authority: 'Material local aprovado (reference)' })]))
   })
 
   it('caps generation sources and material snippets at three', async () => {
@@ -202,9 +202,9 @@ describe('StudyLessonService', () => {
     const context = { getTopicLearningState: () => null, searchMaterials: () => Array.from({ length: 5 }, (_, index) => ({ chunkId: `chunk-${index}`, materialId: `material-${index}`, materialName: `Material ${index}`, pageNumber: index + 1, topicId: null, retrieval: 'lexical' as const, content: `Snippet ${index}` })) }
     await new StudyLessonService(new MemoryLessons(), providerManager(send), async () => ws, () => path, Date.now, sources, { ...context, canShareContext: () => true }).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId })
     const prompt = JSON.parse(send.mock.calls[0]![0].messages[1]!.content)
-    expect(prompt.providedSources).toHaveLength(3)
+    expect(prompt.providedSources).toHaveLength(6)
     expect(prompt.materialSnippets).toHaveLength(3)
-    expect(prompt.providedSources.map((source: { id: string }) => source.id)).toEqual(['source-0', 'source-1', 'source-2'])
+    expect(prompt.providedSources.map((source: { id: string }) => source.id)).toEqual(['source-0', 'source-1', 'source-2', 'material:chunk-0', 'material:chunk-1', 'material:chunk-2'])
   })
 
   it('includes mastery when learning confidence is established', async () => {

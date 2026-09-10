@@ -193,6 +193,8 @@ const api: CoachDesktopApi = {
     get: (workspaceId) => ipcRenderer.invoke(ROADMAP_CHANNELS.get, { workspaceId }),
     getLearningPathState: (workspaceId) => ipcRenderer.invoke(ROADMAP_CHANNELS.getLearningPathState, { workspaceId }),
     generate: (workspaceId, instruction) => ipcRenderer.invoke(ROADMAP_CHANNELS.generate, { workspaceId, instruction }),
+    previewRebuild: (input) => ipcRenderer.invoke(ROADMAP_CHANNELS.previewRebuild, input),
+    applyRebuild: (input) => ipcRenderer.invoke(ROADMAP_CHANNELS.applyRebuild, input),
     accept: (input) => ipcRenderer.invoke(ROADMAP_CHANNELS.accept, input),
   },
   plannerAction: {

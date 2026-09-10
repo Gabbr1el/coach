@@ -49,7 +49,7 @@ export interface LexicalRelevanceAssessment {
 
 type WorkspaceContext = { name: string; objective: string }
 type MaterialRow = MaterialSummary & { readonly semanticAnalysisJson?: string | null; readonly errorMessage: string | null }
-type SearchRow = Omit<MaterialSearchResult, 'topicId' | 'retrieval'> & { readonly chunkId: string; readonly relevance: number }
+type SearchRow = Omit<MaterialSearchResult, 'topicId' | 'retrieval' | 'role'> & { readonly chunkId: string; readonly relevance: number; readonly role: 'base' | 'priority' | 'reference'; readonly semanticAnalysisJson: string | null }
 type TopicCandidate = { readonly moduleId: string; readonly topic: string }
 
 function normalize(value: string): string {
@@ -164,14 +164,18 @@ export class PdfMaterialService {
   search(workspaceId: string, query: string, materialIds?: string[]): MaterialSearchResult[] {
     const searchTerms = [...new Set(tokens(query).filter((term) => term.length >= 2))].slice(0, 8)
     if (!searchTerms.length) return []
-    const clauses = searchTerms.map(() => "lower(c.content) LIKE ? ESCAPE '\\'").join(' OR ')
-    const escapeLike = (term: string) => term.replace(/[\\%_]/g, '\\$&')
-    const allowed = materialIds?.length ? materialIds : null; const idClause = allowed ? `AND m.id IN (${allowed.map(() => '?').join(',')})` : ''; const rows = this.database.sqlite.prepare(`SELECT c.id AS chunkId, m.id AS materialId, m.name AS materialName, m.relevance, c.page_number AS pageNumber, c.content FROM material_chunks c JOIN materials m ON m.id = c.material_id WHERE m.workspace_id = ? AND m.status = 'ready' AND m.relevance > 0 ${idClause} AND (${clauses}) ORDER BY m.relevance DESC LIMIT 100`).all(workspaceId, ...(allowed ?? []), ...searchTerms.map((term) => `%${escapeLike(term)}%`)) as SearchRow[]
+    const allowed = materialIds?.length ? materialIds : null; const idClause = allowed ? `AND m.id IN (${allowed.map(() => '?').join(',')})` : ''; const rows = this.database.sqlite.prepare(`SELECT c.id AS chunkId, m.id AS materialId, m.name AS materialName, m.relevance, m.role, m.semantic_analysis_json AS semanticAnalysisJson, c.page_number AS pageNumber, c.content FROM material_chunks c JOIN materials m ON m.id = c.material_id WHERE m.workspace_id = ? AND m.status = 'ready' AND m.relevance > 0 ${idClause} ORDER BY m.relevance DESC LIMIT 500`).all(workspaceId, ...(allowed ?? [])) as SearchRow[]
     const topics = this.topicCandidates(workspaceId)
     const bestByPage = new Map<string, { row: SearchRow; score: number }>()
     for (const row of rows) {
       const content = normalize(row.content)
-      const score = searchTerms.reduce((sum, term) => sum + (content.includes(term) ? 1 : 0), 0)
+      let semanticTerms: string[] = []
+      try { const analysis = row.semanticAnalysisJson ? materialSemanticAnalysisSchema.parse(JSON.parse(row.semanticAnalysisJson)) : null; semanticTerms = analysis ? tokens(`${analysis.subject} ${analysis.summary} ${analysis.topics.join(' ')} ${analysis.prerequisiteTopics.join(' ')}`) : [] } catch { semanticTerms = [] }
+      const lexical = searchTerms.reduce((sum, term) => sum + (content.includes(term) ? 1 : 0), 0)
+      const semantic = searchTerms.reduce((sum, term) => sum + (semanticTerms.includes(term) ? 1 : 0), 0)
+      if (lexical + semantic === 0) continue
+      const roleWeight = row.role === 'priority' ? 3 : row.role === 'base' ? 2 : 1
+      const score = lexical * 4 + semantic * 2 + roleWeight
       const key = `${row.materialId}:${row.pageNumber}`
       if (score > (bestByPage.get(key)?.score ?? -1)) bestByPage.set(key, { row, score })
     }
@@ -179,7 +183,7 @@ export class PdfMaterialService {
       const lower = normalize(row.content)
       const positions = searchTerms.map((term) => lower.indexOf(term)).filter((index) => index >= 0)
       const start = Math.max(0, (positions.length ? Math.min(...positions) : 0) - 400)
-      return { chunkId: row.chunkId, materialId: row.materialId, materialName: row.materialName, pageNumber: row.pageNumber, topicId: reliableTopicId(row.content, topics), retrieval: 'lexical', content: row.content.slice(start, start + 1_600) }
+      return { chunkId: row.chunkId, materialId: row.materialId, materialName: row.materialName, pageNumber: row.pageNumber, topicId: reliableTopicId(row.content, topics), retrieval: row.semanticAnalysisJson ? 'hybrid' : 'lexical', role: row.role, content: row.content.slice(start, start + 1_600) }
     })
   }
   read(workspaceId: string, materialId: string, offset = 0, limit = 4000): MaterialReadResult { const material = this.getReadyMaterial(workspaceId, materialId); const rows = this.database.sqlite.prepare('SELECT page_number AS pageNumber, content FROM material_chunks WHERE material_id = ? ORDER BY page_number, id').all(materialId) as Array<{ pageNumber: number; content: string }>; const full = rows.map((row) => `[Página/slide ${row.pageNumber}]\n${row.content.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')}`).join('\n\n'); const bounded = Math.min(6000, Math.max(1, limit)); const content = full.slice(offset, offset + bounded); return { material, content, offset, nextOffset: offset + content.length < full.length ? offset + content.length : null, pageNumbers: [...new Set(rows.map((row) => row.pageNumber))] } }

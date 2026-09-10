@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { openCoachDatabase } from '../../src/main/database/connection'
 import { CURRENT_MIGRATION_COUNT, validateCoachDatabaseSchema } from '../../src/main/database/restore-recovery'
 import { repairExerciseSchema, repairInteractiveCodeStateSchema } from '../../src/main/database/migrate'
+import { repairLegacyExerciseData } from '../../src/main/database/exercise-data-repair'
 import { DrizzleWorkspaceRepository } from '../../src/main/repositories/drizzle-workspace-repository'
 import { DrizzleConversationRepository } from '../../src/main/repositories/drizzle-conversation-repository'
 import { DrizzleStudyWorkspaceRepository } from '../../src/main/repositories/drizzle-study-workspace-repository'
@@ -54,6 +55,74 @@ function migrationsThrough0028(): string {
 }
 
 describe('Coach database migrations', () => {
+  it('repairs legacy prediction labels without inventing expected output', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES ('legacy-workspace','Python','','active',1,1)").run()
+    database.sqlite.prepare("INSERT INTO exercise_sets (id,workspace_id,roadmap_id,module_id,topic_id,lesson_id,status,generation_attempts,created_at,updated_at) VALUES ('legacy-set','legacy-workspace','roadmap','module','topic','lesson','ready',1,1,1)").run()
+    const insert = database.sqlite.prepare("INSERT INTO exercises (id,set_id,position,kind,difficulty,title,statement,input_description,output_description,language,starter_code,prediction_prompt,code_to_observe,required_for_topic_completion,public_tests_json,private_tests_json,reference_solution,expected_prediction,hint,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    insert.run('legacy-code','legacy-set',1,'PREDICT_OUTPUT','introductory','Legacy','Execute','','','python','print(input())',null,null,1,JSON.stringify([{ id: 'public-1', input: 'a', expectedOutput: 'a' }]),JSON.stringify(Array.from({ length: 3 }, (_, index) => ({ id: `hidden-${index}`, input: 'b', expectedOutput: 'b' }))),'print(input())',null,'Hint',1)
+    database.sqlite.prepare("INSERT INTO exercise_progress (workspace_id,exercise_id,status,current_code,attempts,updated_at) VALUES ('legacy-workspace','legacy-code','in_progress','print(typed)',3,2)").run()
+
+    expect(repairLegacyExerciseData(database.sqlite, 100)).toEqual({ transformed: 1, quarantinedSets: 0 })
+    expect(repairLegacyExerciseData(database.sqlite, 200)).toEqual({ transformed: 0, quarantinedSets: 0 })
+    expect(database.sqlite.prepare("SELECT kind,expected_prediction AS expectedPrediction FROM exercises WHERE id='legacy-code'").get()).toEqual({ kind: 'PROGRAMMING_PROBLEM', expectedPrediction: null })
+    expect(database.sqlite.prepare("SELECT current_code AS currentCode,attempts FROM exercise_progress WHERE exercise_id='legacy-code'").get()).toEqual({ currentCode: 'print(typed)', attempts: 3 })
+    database.close()
+  })
+
+  it('quarantines only irreparable exercise sets with a persisted cooldown', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES ('bad-workspace','Python','','active',1,1)").run()
+    database.sqlite.prepare("INSERT INTO exercise_sets (id,workspace_id,roadmap_id,module_id,topic_id,lesson_id,status,generation_attempts,created_at,updated_at) VALUES ('bad-set','bad-workspace','roadmap','module','topic','lesson','ready',1,1,1)").run()
+    database.sqlite.prepare("INSERT INTO exercises (id,set_id,position,kind,difficulty,title,statement,input_description,output_description,language,starter_code,prediction_prompt,code_to_observe,required_for_topic_completion,public_tests_json,private_tests_json,reference_solution,expected_prediction,hint,created_at) VALUES ('bad-predict','bad-set',1,'PREDICT_OUTPUT','introductory','Bad','Observe','','','python','',NULL,'print(1)',1,'[]','[]',NULL,NULL,'Hint',1)").run()
+
+    expect(repairLegacyExerciseData(database.sqlite, 100)).toEqual({ transformed: 0, quarantinedSets: 1 })
+    expect(database.sqlite.prepare("SELECT status,retry_after AS retryAfter,last_error_code AS lastErrorCode FROM exercise_sets WHERE id='bad-set'").get()).toEqual({ status: 'failed_retryable', retryAfter: 300100, lastErrorCode: 'EXERCISE_DATA_INVALID' })
+    expect(database.sqlite.prepare("SELECT id FROM exercises WHERE id='bad-predict'").get()).toEqual({ id: 'bad-predict' })
+    expect(repairLegacyExerciseData(database.sqlite, 200)).toEqual({ transformed: 0, quarantinedSets: 0 })
+    database.close()
+  })
+
+  it('hydrates valid rows when one row is corrupt and preserves the invalid history', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    const workspaceId = crypto.randomUUID()
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,'Python','','active',1,1)").run(workspaceId)
+    database.sqlite.prepare("INSERT INTO exercise_sets (id,workspace_id,roadmap_id,module_id,topic_id,lesson_id,status,generation_attempts,created_at,updated_at) VALUES ('mixed-set',?,'roadmap','module','topic','lesson','ready',1,1,1)").run(workspaceId)
+    const insert = database.sqlite.prepare("INSERT INTO exercises (id,set_id,position,kind,difficulty,title,statement,input_description,output_description,language,starter_code,prediction_prompt,code_to_observe,required_for_topic_completion,public_tests_json,private_tests_json,reference_solution,expected_prediction,hint,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    insert.run('valid-code','mixed-set',1,'PROGRAMMING_PROBLEM','introductory','Valid','Run','','','python','print(1)',null,null,1,JSON.stringify([{ id: 'public-1', input: '', expectedOutput: '1' }]),JSON.stringify(Array.from({ length: 3 }, (_, index) => ({ id: `hidden-${index}`, input: '', expectedOutput: '1' }))),'print(1)',null,'Hint',1)
+    insert.run('invalid-predict','mixed-set',2,'PREDICT_OUTPUT','introductory','Invalid','Observe','','','python','',null,'print(2)',0,'[]','[]',null,null,'Hint',1)
+    database.sqlite.prepare("INSERT INTO exercise_progress (workspace_id,exercise_id,status,current_code,attempts,updated_at) VALUES (?,'valid-code','in_progress','print(typed)',4,2),(?,'invalid-predict','in_progress','',2,2)").run(workspaceId, workspaceId)
+
+    const set = new SqliteExerciseRepository(database, () => 100).findSet(workspaceId, 'topic')
+    expect(set).toMatchObject({ status: 'failed_retryable', retryAfter: 300100, lastErrorCode: 'EXERCISE_DATA_INVALID' })
+    expect(set?.exercises.map((exercise) => exercise.id)).toEqual(['valid-code'])
+    expect(set?.progress).toEqual([expect.objectContaining({ exerciseId: 'valid-code', attempts: 4, currentCode: 'print(typed)' })])
+    expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM exercises WHERE id='invalid-predict'").get()).toEqual({ count: 1 })
+    database.close()
+  })
+
+  it('regenerates only an invalid row and preserves valid exercise evidence', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    const workspaceId = crypto.randomUUID()
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,'Python','','active',1,1)").run(workspaceId)
+    database.sqlite.prepare("INSERT INTO exercise_sets (id,workspace_id,roadmap_id,module_id,topic_id,lesson_id,status,generation_attempts,retry_after,last_error_code,created_at,updated_at) VALUES ('selective-set',?,'roadmap','module','topic','lesson','generating',2,NULL,'EXERCISE_DATA_INVALID',1,2)").run(workspaceId)
+    const insert = database.sqlite.prepare("INSERT INTO exercises (id,set_id,position,kind,difficulty,title,statement,input_description,output_description,language,starter_code,prediction_prompt,code_to_observe,required_for_topic_completion,public_tests_json,private_tests_json,reference_solution,expected_prediction,hint,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+    const hidden = Array.from({ length: 3 }, (_, index) => ({ id: `hidden-${index}`, input: '', expectedOutput: '1' }))
+    insert.run('preserved-id','selective-set',1,'PROGRAMMING_PROBLEM','introductory','Valid','Run','','','python','print(1)',null,null,1,JSON.stringify([{ id: 'public-1', input: '', expectedOutput: '1' }]),JSON.stringify(hidden),'print(1)',null,'Hint',1)
+    insert.run('repaired-id','selective-set',2,'PREDICT_OUTPUT','introductory','Invalid','Observe','','','python','',null,'print(2)',0,'[]','[]',null,null,'Hint',1)
+    database.sqlite.prepare("INSERT INTO exercise_progress (workspace_id,exercise_id,status,current_code,attempts,updated_at) VALUES (?,'preserved-id','passed','print(learned)',4,2),(?,'repaired-id','in_progress','',2,2)").run(workspaceId, workspaceId)
+    database.sqlite.prepare("INSERT INTO exercise_attempts (id,workspace_id,exercise_id,idempotency_key,source_revision,code,prediction,status,public_result_json,private_result_json,duration_ms,created_at) VALUES ('attempt',?,'preserved-id','key','revision','print(learned)',NULL,'passed',?,'[]',1,2)").run(workspaceId, JSON.stringify({ mode: 'submit', exerciseId: 'preserved-id', attemptId: 'attempt', status: 'passed', passed: true, passedTests: 4, totalTests: 4, message: 'Passed', compileDiagnostics: [], cases: [], stdout: '', stderr: '', durationMs: 1, createdAt: 2 }))
+    const repository = new SqliteExerciseRepository(database)
+    const privateExercise = (id: string, position: number) => ({ id, setId: 'selective-set', workspaceId, topicId: 'topic', position, kind: 'PROGRAMMING_PROBLEM' as const, difficulty: 'introductory' as const, title: 'Generated', statement: 'Run', inputDescription: '', outputDescription: '', language: 'python' as const, starterCode: 'print(9)', predictionPrompt: null, codeToObserve: null, requiredForTopicCompletion: true, publicTests: [{ id: 'public-1', input: '', expectedOutput: '9' }], hiddenTests: hidden.map((test) => ({ ...test, expectedOutput: '9' })), referenceSolution: 'print(9)', expectedPrediction: null, hint: 'Hint' })
+
+    repository.saveGenerated({ setId: 'selective-set', workspaceId, topicId: 'topic', providerId: 'provider', modelId: 'model', exercises: [privateExercise('discarded-generated-id', 1), privateExercise('unused-generated-id', 2)], now: 3 })
+
+    expect(database.sqlite.prepare("SELECT id,title FROM exercises WHERE set_id='selective-set' ORDER BY position").all()).toEqual([{ id: 'preserved-id', title: 'Valid' }, { id: 'repaired-id', title: 'Generated' }])
+    expect(database.sqlite.prepare("SELECT status,current_code AS currentCode,attempts FROM exercise_progress WHERE exercise_id='preserved-id'").get()).toEqual({ status: 'passed', currentCode: 'print(learned)', attempts: 4 })
+    expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM exercise_attempts WHERE exercise_id='preserved-id'").get()).toEqual({ count: 1 })
+    database.close()
+  })
+
   it('repairs divergent exercise tables without losing existing data', () => {
     const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
     database.sqlite.prepare("INSERT INTO workspaces (id, name, objective, status, created_at, updated_at) VALUES ('exercise-repair-workspace', 'Python', '', 'active', 1, 1)").run()
@@ -251,7 +320,7 @@ describe('Coach database migrations', () => {
     const workspaceId = crypto.randomUUID()
     database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,'Python','Laços','active',1,1)").run(workspaceId)
     database.sqlite.prepare("INSERT INTO exercise_sets (id,workspace_id,roadmap_id,module_id,topic_id,lesson_id,status,generation_attempts,created_at,updated_at) VALUES ('set',?,'roadmap','module','module:loops','lesson','ready',1,1,1)").run(workspaceId)
-    database.sqlite.prepare("INSERT INTO exercises (id,set_id,position,kind,difficulty,title,statement,input_description,output_description,language,starter_code,prediction_prompt,code_to_observe,required_for_topic_completion,public_tests_json,private_tests_json,reference_solution,expected_prediction,hint,created_at) VALUES ('exercise','set',1,'COMPLETE_CODE','introductory','Somar','Some','Dois inteiros','Soma','python','print(0) # TODO',NULL,NULL,1,?,?,?,NULL,'Pense na operação',1)").run(JSON.stringify([{ id: 'public-1', input: '1 2', expectedOutput: '3' }]), JSON.stringify([{ id: 'hidden-secret', input: '99 1', expectedOutput: '100' }]), 'secret solution')
+    database.sqlite.prepare("INSERT INTO exercises (id,set_id,position,kind,difficulty,title,statement,input_description,output_description,language,starter_code,prediction_prompt,code_to_observe,required_for_topic_completion,public_tests_json,private_tests_json,reference_solution,expected_prediction,hint,created_at) VALUES ('exercise','set',1,'COMPLETE_CODE','introductory','Somar','Some','Dois inteiros','Soma','python','print(0) # TODO',NULL,NULL,1,?,?,?,NULL,'Pense na operação',1)").run(JSON.stringify([{ id: 'public-1', input: '1 2', expectedOutput: '3' }]), JSON.stringify(Array.from({ length: 3 }, (_, index) => ({ id: `hidden-secret-${index}`, input: '99 1', expectedOutput: '100' }))), 'secret solution')
     const lastSubmission = { status: 'failed', passedTests: 1, totalTests: 4, message: '1 de 4 testes passaram.', compileDiagnostics: [] }
     database.sqlite.prepare("INSERT INTO exercise_progress (workspace_id,exercise_id,status,current_code,attempts,last_submission_json,passed_tests,total_tests,help_used,first_try_success,help_count,passed_at,updated_at) VALUES (?,'exercise','in_progress','print(3)',2,?,1,4,1,0,1,NULL,10)").run(workspaceId, JSON.stringify(lastSubmission))
 

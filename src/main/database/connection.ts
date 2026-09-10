@@ -4,6 +4,7 @@ import Database from 'better-sqlite3'
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { app } from 'electron'
 import { migrateDatabase, repairDraftAdaptiveStudyMigration, repairExerciseSchema, repairInteractiveCodeStateSchema } from './migrate'
+import { repairLegacyExerciseData } from './exercise-data-repair'
 import * as workspaceSchema from './schema/workspaces'
 import * as conversationSchema from './schema/conversations'
 import * as providerSchema from './schema/provider-configurations'
@@ -54,6 +55,7 @@ export function openCoachDatabase(options: OpenCoachDatabaseOptions = {}): Coach
     repairDraftAdaptiveStudyMigration(sqlite)
     repairInteractiveCodeStateSchema(sqlite)
     repairExerciseSchema(sqlite)
+    repairLegacyExerciseData(sqlite)
 
     return {
       sqlite,

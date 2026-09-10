@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { plannerActionProposalSchema, type PlannerAction, type PlannerActionType } from '../../shared/contracts/planner-action-contract'
 import type { ProjectLanguage } from '../../shared/contracts/project-contract'
+import type { AcademicLifeItem, AcademicLifeMutationInput } from '../../shared/contracts/academic-life-contract'
 
 export interface PlannerActionRepository {
   listPending(): PlannerAction[]
@@ -24,6 +25,8 @@ export interface PlannerActionDependencies {
   readonly createProject: (workspaceId: string, name: string, language: ProjectLanguage) => Promise<unknown>
   readonly createDeadline: (input: { workspaceId: string; title: string; dueAt: number; estimatedMinutes: number; masteryPercent: number | null }) => void
   readonly addRoutine: (content: string) => void
+  readonly saveAcademicLife?: (input: AcademicLifeMutationInput) => AcademicLifeItem
+  readonly transitionAcademicLife?: (id: string, status: 'resolved' | 'archived') => AcademicLifeItem
   readonly now?: () => number
   readonly createId?: () => string
 }
@@ -52,9 +55,16 @@ export class PlannerActionService {
       } else if (action.type === 'deadline.create') {
         this.dependencies.createDeadline(action.payload as Parameters<PlannerActionDependencies['createDeadline']>[0])
         result = { ok: true }
-      } else {
+      } else if (action.type === 'routine.add') {
         this.dependencies.addRoutine((action.payload as { content: string }).content)
         result = { ok: true }
+      } else if (action.type === 'academic-life.save') {
+        if (!this.dependencies.saveAcademicLife) throw new Error('Academic life service unavailable')
+        result = this.dependencies.saveAcademicLife(action.payload as AcademicLifeMutationInput)
+      } else {
+        if (!this.dependencies.transitionAcademicLife) throw new Error('Academic life service unavailable')
+        const payload = action.payload as { id: string; status: 'resolved' | 'archived' }
+        result = this.dependencies.transitionAcademicLife(payload.id, payload.status)
       }
       const completed = this.dependencies.repository.complete(actionId, 'applied', result, this.now())
       this.dependencies.repository.invalidateSiblings(action.originMessageId, action.id, this.now())

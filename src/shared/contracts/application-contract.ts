@@ -32,4 +32,5 @@ export interface CoachDesktopApi {
   studyProgress: import('./study-progress-contract').StudyProgressApi
   studyLesson: import('./study-lesson-contract').StudyLessonApi
   exercise: import('./exercise-contract').ExerciseApi
+  academicLife: import('./academic-life-contract').AcademicLifeApi
 }

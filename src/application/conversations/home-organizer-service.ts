@@ -4,6 +4,9 @@ import type { HomePlannerService } from './home-planner-service'
 import type { PlanningService } from '../planning/planning-service'
 import type { PlannerActionService } from '../planning/planner-action-service'
 import type { AcademicSubjectContextService } from '../workspaces/academic-subject-context'
+import type { AcademicLifeMutationInput } from '../../shared/contracts/academic-life-contract'
+import type { AcademicLifeItem } from '../../shared/contracts/academic-life-contract'
+import { parseExplicitDate } from '../planning/planning-service'
 
 export interface HomeTurnClock {
   readonly currentTime: number
@@ -22,8 +25,34 @@ function confirmationText(content: string): boolean { return /^(autorizo|confirm
 function mentionsProposal(content: string): boolean { return /cad[eê]\s+a\s+proposta|qual\s+(?:é\s+)?a\s+proposta/i.test(content) }
 function isPedagogicalQuery(content: string): boolean { return /\b(?:o que (?:é|e)|como funciona|me explica|explique|me dê um exercício|me de um exercicio|exercício de|exercicio de|qual a diferença|qual a diferenca)\b/i.test(content) }
 
+export function extractAcademicLifeIntent(content: string, clock: HomeTurnClock, workspaces: Array<{ id: string; name: string }>, active: AcademicLifeItem[] = []): AcademicLifeMutationInput | null {
+  const normalized = content.toLocaleLowerCase('pt-BR')
+  const provenance = { source: 'conversation' as const, reference: null }
+  const workspace = workspaces.find((item) => normalized.includes(item.name.toLocaleLowerCase('pt-BR')))
+  const weekdayNames = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado']
+  const weekday = weekdayNames.findIndex((day) => normalized.includes(day))
+  const hours = /(?:só|so)?\s*(?:vou\s+ter\s+)?(\d+(?:[.,]\d+)?)\s*horas?/.exec(normalized)?.[1]
+  if (weekday >= 0 && hours && /dispon|estudar|consigo|tempo/.test(normalized)) return { kind: 'availability', title: `Disponibilidade de ${weekdayNames[weekday]}`, details: '', workspaceId: null, startsAt: null, endsAt: null, expiresAt: null, timezone: clock.timezone, weekday, minutes: Math.round(Number(hours.replace(',', '.')) * 60), shareWithAi: true, provenance }
+  const dueAt = parseExplicitDate(content, clock.currentTime)
+  const eventMatch = /\b(prova|exame|trabalho|atividade|prazo)\b/.exec(normalized)
+  if (eventMatch && dueAt) {
+    const kind = eventMatch[1] === 'trabalho' || eventMatch[1] === 'atividade' ? 'commitment' as const : 'event' as const
+    const title = `${eventMatch[1]![0]!.toLocaleUpperCase('pt-BR')}${eventMatch[1]!.slice(1)}${workspace ? ` ${workspace.name}` : ''}`
+    const correction = /na verdade|corrigindo|mudou|remarcad|adiad/.test(normalized)
+    const previous = correction ? active.filter((item) => item.kind === kind && (!workspace || item.workspaceId === workspace.id)).sort((a, b) => b.updatedAt - a.updatedAt)[0] : undefined
+    if (!workspace && !previous) return null
+    return { kind, title: previous?.title ?? title, details: previous?.details ?? '', workspaceId: workspace?.id ?? null, startsAt: previous?.startsAt ?? null, endsAt: dueAt, expiresAt: dueAt, timezone: clock.timezone, weekday: null, minutes: null, shareWithAi: previous?.shareWithAi ?? true, provenance, ...(previous ? { replacesId: previous.id } : {}) }
+  }
+  const explicit = /\b(?:registre|salve|anote|lembre)\b/.test(normalized)
+  if (!explicit) return null
+  const commitment = /\b(?:compromisso|entregar|reunião|reuniao)\b/.test(normalized)
+  if (commitment && dueAt) return { kind: 'commitment', title: content.trim().slice(0, 160), details: '', workspaceId: workspace?.id ?? null, startsAt: null, endsAt: dueAt, expiresAt: dueAt, timezone: clock.timezone, weekday: null, minutes: null, shareWithAi: true, provenance }
+  if (/\b(?:fato|contexto|preferência|preferencia)\b/.test(normalized)) return { kind: 'fact', title: content.replace(/^.*?\b(?:fato|contexto|preferência|preferencia)\b\s*(?:de|que|:)?\s*/i, '').trim().slice(0, 160) || 'Contexto acadêmico', details: content.trim(), workspaceId: workspace?.id ?? null, startsAt: clock.currentTime, endsAt: null, expiresAt: null, timezone: clock.timezone, weekday: null, minutes: null, shareWithAi: true, provenance }
+  return null
+}
+
 export class HomeOrganizerService {
-  constructor(private readonly conversation: HomePlannerService, private readonly planning: PlanningService, private readonly actions: PlannerActionService, private readonly listWorkspaces: () => Promise<Array<{ id: string; name: string }>>, private readonly recalculate: (workspaceId: string) => Promise<unknown>, private readonly now = Date.now, private readonly academicContext?: AcademicSubjectContextService) {}
+  constructor(private readonly conversation: HomePlannerService, private readonly planning: PlanningService, private readonly actions: PlannerActionService, private readonly listWorkspaces: () => Promise<Array<{ id: string; name: string }>>, private readonly recalculate: (workspaceId: string) => Promise<unknown>, private readonly now = Date.now, private readonly academicContext?: AcademicSubjectContextService, private readonly listAcademicLife: () => AcademicLifeItem[] = () => []) {}
   listMessages(): Promise<ConversationMessage[]> { return this.conversation.listMessages() }
 
   async organize(input: SendHomeMessageInput): Promise<{ messages: ConversationMessage[]; result: HomeOrganizerResult }> {
@@ -35,6 +64,13 @@ export class HomeOrganizerService {
     if (mentionsProposal(content)) return this.persist(content, { outcome: 'informational', operations: [], actions: pending, affectedWorkspaceIds: [], message: pending.length ? 'As decisões pendentes continuam disponíveis nos botões da mensagem que as originou.' : 'Não há nenhuma proposta pendente no estado real do Coach.' })
 
     try {
+      const workspaces = await this.listWorkspaces()
+      const academicLifeIntent = extractAcademicLifeIntent(content, clock, workspaces, this.listAcademicLife())
+      if (academicLifeIntent) {
+        const messageId = crypto.randomUUID()
+        const action = this.actions.propose({ type: 'academic-life.save', payload: academicLifeIntent, label: `Salvar ${academicLifeIntent.title}`, originMessageId: messageId, contextVersion: version })
+        return this.persist(content, { outcome: 'needs_decision', operations: [], actions: [action], affectedWorkspaceIds: academicLifeIntent.workspaceId ? [academicLifeIntent.workspaceId] : [], message: `Posso salvar “${academicLifeIntent.title}” como registro estruturado. Confirme pelo botão; nada mudou ainda.` }, messageId)
+      }
       const mutation = this.planning.applyAcademicMessage(content, clock)
       if (mutation.changed) {
         try {
@@ -51,7 +87,6 @@ export class HomeOrganizerService {
         return this.persist(content, { outcome: 'needs_decision', operations: [], actions, affectedWorkspaceIds: [], message: 'Encontrei mais de um Workspace relacionado. Escolha qual devo usar.' }, messageId)
       }
 
-      const workspaces = await this.listWorkspaces()
       if (mutation.pendingEvent) {
         const messageId = crypto.randomUUID(); const subject = mutation.pendingEvent.subject; const matching = workspaces.find((workspace) => workspace.name.toLocaleLowerCase('pt-BR') === subject.toLocaleLowerCase('pt-BR'))
         if (!matching) {

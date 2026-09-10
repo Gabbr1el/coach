@@ -1,5 +1,6 @@
 import type { AIProvider, AIResponse } from '../ai/ai-provider'
 import type { AIProviderManager } from '../ai/ai-provider-manager'
+import type { HeavyGenerationRunner } from '../ai/heavy-generation-queue'
 import { extractJsonDocument, normalizeGeneratedLessonJson, sanitizedResponsePreview, structuredErrorDetail, structuredOutputDebugEnabled } from '../ai/structured-json'
 import {
   roadmapResourceSchema,
@@ -203,6 +204,7 @@ export class StudyLessonService {
     private readonly now = Date.now,
     private readonly sourceProvider?: StudyLessonSourceProvider,
     private readonly generationContext?: StudyLessonGenerationContext,
+    private readonly heavyQueue?: HeavyGenerationRunner,
   ) {}
 
   getOrCreate(input: { workspaceId: string; roadmapId: string; moduleId: string; topicId: string }): Promise<StudyLessonGenerationResult> {
@@ -231,7 +233,8 @@ export class StudyLessonService {
       : { status: 'waiting_for_provider', errorCode: 'PROVIDER_UNAVAILABLE' }
 
     try {
-      const generated = await this.generate(provider, workspace, roadmap, module, topic, input.topicId)
+      const task = () => this.generate(provider, workspace, roadmap, module, topic, input.topicId)
+      const generated = await (this.heavyQueue?.run(task) ?? task())
       let lesson: PersistedStudyLesson
       try { lesson = this.persist({ ...generated.content, sources: generated.sources }, input, generated.response, 'ai_generated', cached ?? undefined) }
       catch (error) { throw new LessonGenerationError('LESSON_PERSISTENCE_FAILED', 'persistence', structuredErrorDetail(error), { cause: error }) }

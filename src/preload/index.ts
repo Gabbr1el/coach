@@ -55,6 +55,10 @@ const api: CoachDesktopApi = {
   workspace: {
     list: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.list),
     create: (input) => ipcRenderer.invoke(WORKSPACE_CHANNELS.create, input),
+    prepareDraft: (input) => ipcRenderer.invoke(WORKSPACE_CHANNELS.prepareDraft, input),
+    discardDraft: (id) => ipcRenderer.invoke(WORKSPACE_CHANNELS.discardDraft, id),
+    getProvisioning: (id) => ipcRenderer.invoke(WORKSPACE_CHANNELS.getProvisioning, id),
+    retryProvisioning: (id) => ipcRenderer.invoke(WORKSPACE_CHANNELS.retryProvisioning, id),
     open: (id) => ipcRenderer.invoke(WORKSPACE_CHANNELS.open, id),
     archive: (id) => ipcRenderer.invoke(WORKSPACE_CHANNELS.archive, id),
   },

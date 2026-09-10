@@ -9,6 +9,7 @@ import { exerciseDifficultySchema, exerciseKindSchema, publicExerciseContextSche
 import type { CodeExecutionResult } from '../../shared/contracts/code-execution-contract'
 import type { Roadmap } from '../../shared/contracts/roadmap-contract'
 import type { Workspace } from '../../shared/contracts/workspace-contract'
+import type { HeavyGenerationRunner } from '../ai/heavy-generation-queue'
 
 const generatedTestSchema = publicExerciseTestSchema.omit({ id: true })
 const generatedExerciseSchema = z.object({ kind: exerciseKindSchema, difficulty: exerciseDifficultySchema, title: z.string().trim().min(1).max(180), statement: z.string().trim().min(1).max(5000), inputDescription: z.string().trim().max(2000), outputDescription: z.string().trim().max(2000), language: z.enum(['python', 'c', 'java']), starterCode: z.string().max(20_000), predictionPrompt: z.string().trim().min(1).max(1000).nullable(), codeToObserve: z.string().min(1).max(20_000).nullable(), requiredForTopicCompletion: z.boolean(), publicTests: z.array(generatedTestSchema).max(5), hiddenTests: z.array(generatedTestSchema).max(8), referenceSolution: z.string().max(20_000).nullable(), expectedPrediction: z.string().max(20_000).nullable(), hint: z.string().min(1).max(1000) }).strict().superRefine((value, context) => {
@@ -49,7 +50,7 @@ export class ExerciseService {
   private readonly generating = new Map<string, Promise<ExerciseSet>>()
   private readonly submitting = new Map<string, { exerciseId: string; sourceRevision: string; task: Promise<ExerciseExecution> }>()
   private readonly submitQueues = new Map<string, Promise<unknown>>()
-  constructor(private readonly repository: ExerciseRepository, private readonly providers: AIProviderManager, private readonly toolchains: ToolchainManager, private readonly getWorkspace: (id: string) => Promise<Workspace | null>, private readonly getRoadmap: (workspaceId: string) => Roadmap | null, private readonly now = Date.now, private readonly createId = () => crypto.randomUUID()) {}
+  constructor(private readonly repository: ExerciseRepository, private readonly providers: AIProviderManager, private readonly toolchains: ToolchainManager, private readonly getWorkspace: (id: string) => Promise<Workspace | null>, private readonly getRoadmap: (workspaceId: string) => Roadmap | null, private readonly now = Date.now, private readonly createId = () => crypto.randomUUID(), private readonly heavyQueue?: HeavyGenerationRunner) {}
 
   getSet(input: { workspaceId: string; topicId: string }): ExerciseSet | null { return this.repository.findSet(input.workspaceId, input.topicId) }
   getPublicContext(input: { workspaceId: string; exerciseId: string }): PublicExerciseContext | null { const context = this.repository.findPublicContext(input.workspaceId, input.exerciseId); return context ? publicExerciseContextSchema.parse(context) : null }
@@ -67,10 +68,10 @@ export class ExerciseService {
     const provider = this.providers.route('lesson')
     if (!provider) return this.repository.markGenerationFailure(input.workspaceId, input.topicId, 'waiting_for_provider', 'PROVIDER_UNAVAILABLE', this.now() + 300_000, this.now())
     try {
-      let response = await this.generate(provider, { workspace, roadmap, module, topic, topicId: input.topicId, available })
+      let response = await (this.heavyQueue?.run(() => this.generate(provider, { workspace, roadmap, module, topic, topicId: input.topicId, available })) ?? this.generate(provider, { workspace, roadmap, module, topic, topicId: input.topicId, available }))
       let values: PrivateExercise[]
       try { values = this.parseGenerated(response.content, setId, input.workspaceId, input.topicId); await this.selfValidate(input.workspaceId, values, available) }
-       catch (error) { response = await provider.sendMessage({ messages: [{ role: 'system', content: 'Faça uma única correção do conjunto e retorne somente JSON no formato original. Mantenha 4 a 7 exercícios e inclua os quatro kinds. Para PREDICT_OUTPUT use codeToObserve, predictionPrompt e expectedPrediction, sem testes nem referência. Para os demais, use testes e referência; FIX_CODE deve conter e descrever defeito, COMPLETE_CODE deve conter TODO. Inclua ao menos um obrigatório. Não explique.' }, { role: 'user', content: JSON.stringify({ error: error instanceof Error ? error.message : 'invalid', invalidResponse: response.content }) }], maxOutputTokens: 7000, signal: AbortSignal.timeout(300_000) }); values = this.parseGenerated(response.content, setId, input.workspaceId, input.topicId); await this.selfValidate(input.workspaceId, values, available) }
+       catch (error) { const repair = () => provider.sendMessage({ messages: [{ role: 'system', content: 'Faça uma única correção do conjunto e retorne somente JSON no formato original. Mantenha 4 a 7 exercícios e inclua os quatro kinds. Para PREDICT_OUTPUT use codeToObserve, predictionPrompt e expectedPrediction, sem testes nem referência. Para os demais, use testes e referência; FIX_CODE deve conter e descrever defeito, COMPLETE_CODE deve conter TODO. Inclua ao menos um obrigatório. Não explique.' }, { role: 'user', content: JSON.stringify({ error: error instanceof Error ? error.message : 'invalid', invalidResponse: response.content }) }], maxOutputTokens: 7000, signal: AbortSignal.timeout(300_000) }); response = await (this.heavyQueue?.run(repair) ?? repair()); values = this.parseGenerated(response.content, setId, input.workspaceId, input.topicId); await this.selfValidate(input.workspaceId, values, available) }
       return this.repository.saveGenerated({ setId, workspaceId: input.workspaceId, topicId: input.topicId, providerId: response.providerId, modelId: response.modelId, exercises: values, now: this.now() })
     } catch { return this.repository.markGenerationFailure(input.workspaceId, input.topicId, 'failed_retryable', 'EXERCISE_GENERATION_INVALID', this.now() + 30_000, this.now()) }
   }

@@ -115,10 +115,12 @@ function WorkspaceCreationScreen({ open, submitting, initial, onClose, onSubmit 
   const [goals, setGoals] = useState<string[]>([])
   const [relatedContexts, setRelatedContexts] = useState<AcademicSubjectContext[]>([])
   const [selectedRelated, setSelectedRelated] = useState<string[]>([])
+  const [draftWorkspaceId, setDraftWorkspaceId] = useState<string | null>(null)
+  const [draftMaterials, setDraftMaterials] = useState<MaterialSummary[]>([])
   const analysisEpoch = useRef(0)
   const resetSubjectState = () => { analysisEpoch.current += 1; setObjective(''); setDiagnosticAnswer(''); setDeclaredLevel(undefined); setDeclaredKnowledge([]); setDeclaredDifficulties([]); setGoals([]); setRelatedContexts([]); setSelectedRelated([]); setAnalyzed(false); setQuestion(null); setAnalysisError(null) }
 
-  useEffect(() => { if (!open) return; setName(initial?.name ?? ''); setObjective(initial?.objective ?? ''); setDiagnosticAnswer(''); setDeclaredLevel(undefined); setDeclaredKnowledge([]); setDeclaredDifficulties([]); setGoals([]); setRelatedContexts([]); setSelectedRelated([]); setAnalyzed(false); setQuestion(null); setAnalysisError(null) }, [open, initial])
+  useEffect(() => { if (!open) return; setName(initial?.name ?? ''); setObjective(initial?.objective ?? ''); setDiagnosticAnswer(''); setDeclaredLevel(undefined); setDeclaredKnowledge([]); setDeclaredDifficulties([]); setGoals([]); setRelatedContexts([]); setSelectedRelated([]); setDraftWorkspaceId(null); setDraftMaterials([]); setAnalyzed(false); setQuestion(null); setAnalysisError(null) }, [open, initial])
 
   async function analyze() {
     if (name.trim().length < 2 || analyzing) return
@@ -128,6 +130,9 @@ function WorkspaceCreationScreen({ open, submitting, initial, onClose, onSubmit 
     catch { setAnalysisError('Não consegui avaliar o tema agora. Tente novamente.') }
     finally { setAnalyzing(false) }
   }
+  const creationInput = (): CreateWorkspaceInput => ({ name, objective, declaredLevel, declaredKnowledge, declaredDifficulties, goals, relatedSubjects: selectedRelated.map((subject) => ({ subject, relation: 'user_selected' as const })) })
+  async function addMaterial() { let id = draftWorkspaceId; if (!id) { const draft = await window.coach.workspace.prepareDraft(creationInput()); id = draft.id; setDraftWorkspaceId(id) } await window.coach.material.importFile(id); setDraftMaterials(await window.coach.material.list(id)) }
+  function closeCreation() { if (draftWorkspaceId) void window.coach.workspace.discardDraft(draftWorkspaceId).catch(() => {}); onClose() }
 
   const dialogRef = useDialogFocus<HTMLDivElement>(open, onClose)
   if (!open) return null
@@ -139,12 +144,12 @@ function WorkspaceCreationScreen({ open, submitting, initial, onClose, onSubmit 
         onSubmit={(event) => {
           event.preventDefault()
            if (!analyzed) { void analyze(); return }
-             void onSubmit({ name, objective, declaredLevel, declaredKnowledge, declaredDifficulties, goals, relatedSubjects: selectedRelated.map((subject) => ({ subject, relation: 'user_selected' as const })) }).catch(() => setAnalysisError('Não foi possível criar o Workspace e salvar o contexto acadêmico.'))
+             void onSubmit({ ...creationInput(), draftId: draftWorkspaceId ?? undefined }).catch(() => setAnalysisError('Não foi possível criar o Workspace e iniciar a preparação.'))
         }}
       >
         <div className="flex items-start justify-between">
           <div><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Preparação contextual</p><h2 id="create-workspace-title" className="mt-2 font-display text-3xl font-black">Criar Workspace</h2></div>
-          <button type="button" aria-label="Fechar" disabled={submitting} onClick={onClose} className="rounded-full p-2 hover:bg-black/5 disabled:opacity-50"><X /></button>
+          <button type="button" aria-label="Fechar" disabled={submitting} onClick={closeCreation} className="rounded-full p-2 hover:bg-black/5 disabled:opacity-50"><X /></button>
         </div>
          <label className="mt-7 block text-sm font-bold">Tema que você quer aprender
            <input autoFocus required minLength={2} maxLength={80} value={name} onChange={(event) => { setName(event.target.value); resetSubjectState() }} placeholder="Ex.: Estrutura de Dados" className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none focus:border-coach-green" />
@@ -152,13 +157,13 @@ function WorkspaceCreationScreen({ open, submitting, initial, onClose, onSubmit 
          <label className="mt-5 block text-sm font-bold">Objetivo<input required maxLength={500} value={objective} onChange={(event) => setObjective(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-[#0d0e12] px-4 py-3" /></label>
          <label className="mt-5 block text-sm font-bold">Nível atual<select required value={declaredLevel ?? ""} onChange={(event) => setDeclaredLevel(event.target.value as CreateWorkspaceInput['declaredLevel'])} className="mt-2 w-full rounded-xl border border-coach-line bg-[#0d0e12] px-4 py-3"><option value="" disabled>Selecione</option><option value="beginner">Iniciante</option><option value="intermediate">Intermediário</option><option value="advanced">Avançado</option></select></label>
          <section className="mt-6 rounded-2xl border border-coach-line p-5"><h3 className="font-display text-xl font-black">O que o Coach já sabe</h3><p className="mt-1 text-xs text-coach-muted">Revise livremente. Uma linha por item; as mudanças serão persistidas ao criar.</p><label className="mt-4 block text-xs font-black uppercase text-coach-muted">Conhecimentos<textarea value={declaredKnowledge.join('\n')} onChange={(event) => setDeclaredKnowledge(event.target.value.split('\n').map((item) => item.trim()).filter(Boolean))} className="mt-2 min-h-20 w-full rounded-xl border border-coach-line bg-[#0d0e12] p-3 text-sm font-normal normal-case text-coach-ink" /></label><label className="mt-3 block text-xs font-black uppercase text-coach-muted">Dificuldades<textarea value={declaredDifficulties.join('\n')} onChange={(event) => setDeclaredDifficulties(event.target.value.split('\n').map((item) => item.trim()).filter(Boolean))} className="mt-2 min-h-20 w-full rounded-xl border border-coach-line bg-[#0d0e12] p-3 text-sm font-normal normal-case text-coach-ink" /></label><label className="mt-3 block text-xs font-black uppercase text-coach-muted">Objetivos relacionados<textarea value={goals.join('\n')} onChange={(event) => setGoals(event.target.value.split('\n').map((item) => item.trim()).filter(Boolean))} className="mt-2 min-h-20 w-full rounded-xl border border-coach-line bg-[#0d0e12] p-3 text-sm font-normal normal-case text-coach-ink" /></label>{relatedContexts.length > 0 && <div className="mt-4"><p className="text-xs font-black uppercase text-coach-muted">Contextos relacionados opcionais</p><div className="mt-2 flex flex-wrap gap-2">{relatedContexts.map((context) => <label key={context.subject} className="flex items-center gap-2 rounded-full border border-coach-line px-3 py-2 text-xs"><input type="checkbox" checked={selectedRelated.includes(context.subject)} onChange={(event) => setSelectedRelated((current) => event.target.checked ? [...current, context.subject] : current.filter((item) => item !== context.subject))} />{context.subject}</label>)}</div></div>}</section>
-         <section className="mt-6 rounded-2xl border border-dashed border-coach-line p-5"><h3 className="font-display text-xl font-black">Materiais para personalização</h3><p className="mt-2 text-sm text-coach-muted">PDF e PPTX poderão ser selecionados e analisados antes da criação na próxima etapa deste fluxo.</p></section>
+          <section className="mt-6 rounded-2xl border border-dashed border-coach-line p-5"><div className="flex items-center justify-between gap-4"><div><h3 className="font-display text-xl font-black">Materiais para personalização</h3><p className="mt-2 text-sm text-coach-muted">Anexe PDF ou PPTX agora; o rascunho fica oculto até você confirmar.</p></div><button type="button" disabled={!analyzed || submitting} onClick={() => void addMaterial().catch(() => setAnalysisError('Não foi possível anexar o material.'))} className="rounded-xl border border-coach-line px-4 py-2 text-sm font-bold disabled:opacity-50">Adicionar</button></div>{draftMaterials.map((material) => <p key={material.id} className="mt-2 text-xs text-coach-muted">{material.name} · {material.status}</p>)}</section>
          <section className="mt-6 rounded-2xl bg-white/[.03] p-5"><h3 className="font-display text-xl font-black">Resumo</h3><p className="mt-2 text-sm text-coach-muted">O Coach preparará {name || 'o tema'} para o nível {declaredLevel ? ({ beginner: 'iniciante', intermediate: 'intermediário', advanced: 'avançado' } as const)[declaredLevel] : 'ainda não informado'}, usando seu objetivo e contexto acadêmico sem transformar declarações em domínio comprovado.</p></section>
          {question && <label className="mt-5 block rounded-xl border border-[#39334f] bg-[#181622] p-4 text-sm font-bold"><span className="text-[#aa9cff]">Coach quer entender você</span><span className="mt-2 block font-normal leading-6 text-[#c8cad0]">{question}</span><textarea autoFocus maxLength={1000} value={diagnosticAnswer} onChange={(event) => setDiagnosticAnswer(event.target.value)} placeholder="Conte o que já estudou, praticou e onde trava…" className="mt-3 min-h-24 w-full resize-none rounded-lg border border-[#39334f] bg-[#111217] px-4 py-3 outline-none" /></label>}
          {analyzed && <label className="mt-5 block text-sm font-bold">Objetivo sugerido pelo Coach<textarea maxLength={500} value={objective} onChange={(event) => setObjective(event.target.value)} className="mt-2 min-h-24 w-full resize-none rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none focus:border-coach-green" /></label>}
          {analysisError && <p className="mt-4 text-xs text-red-400">{analysisError}</p>}
         <div className="mt-7 flex justify-end gap-3">
-          <button type="button" disabled={submitting} onClick={onClose} className="rounded-xl border border-coach-line px-5 py-3 font-bold disabled:opacity-50">Cancelar</button>
+           <button type="button" disabled={submitting} onClick={closeCreation} className="rounded-xl border border-coach-line px-5 py-3 font-bold disabled:opacity-50">Cancelar</button>
            <button type="submit" disabled={submitting || analyzing || name.trim().length < 2 || Boolean(question && !diagnosticAnswer.trim())} className="rounded-xl bg-coach-orange px-5 py-3 font-extrabold text-white disabled:opacity-50">{submitting ? 'Criando…' : analyzing ? 'Coach analisando…' : analyzed ? 'Criar Workspace' : question ? 'Continuar com o Coach' : 'Analisar tema'}</button>
         </div>
       </form>
@@ -355,6 +360,8 @@ export function App() {
     void window.coach.plannerAction.listPending().then(setPlannerActions)
     void window.coach.report.getGlobalOverview().then(setGlobalReport).catch(() => setPlannerError('Não foi possível carregar o panorama geral.'))
   }, [loadWorkspaces])
+
+  useEffect(() => { if (!workspaces.some((workspace) => workspace.provisioning && workspace.provisioning.status !== 'ready')) return; const timer = window.setInterval(() => void loadWorkspaces(), 1500); return () => window.clearInterval(timer) }, [workspaces, loadWorkspaces])
 
   useEffect(() => () => {
     streamHandle.current?.cancel()

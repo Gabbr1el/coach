@@ -6,6 +6,7 @@ import { generatedRoadmapProposalSchema, roadmapProposalSchema, type CurriculumS
 import type { Workspace } from '../../shared/contracts/workspace-contract'
 import type { CurriculumSourceService } from './curriculum-source-service'
 import type { MaterialReadResult, MaterialSearchResult, MaterialSummary } from '../../shared/contracts/material-contract'
+import type { HeavyGenerationRunner } from '../ai/heavy-generation-queue'
 
 export interface RoadmapRepository { findCurrent(workspaceId: string): Roadmap | null; nextVersion(workspaceId: string): number; create(roadmap: Roadmap): Roadmap; activate(roadmap: Roadmap): Roadmap; accept(workspaceId: string, roadmapId: string, now: number): Roadmap; progressedTopicIds?(workspaceId: string): string[]; saveRebuildPreview?(preview: RoadmapRebuildPreview): RoadmapRebuildPreview; findRebuildPreview?(workspaceId: string, previewId: string): RoadmapRebuildPreview | null; applyRebuildPreview?(preview: RoadmapRebuildPreview, now: number): Roadmap; getLearningPathState(workspaceId: string): LearningPathState | null; setLearningPathState(state: LearningPathState): LearningPathState; recoverInterrupted(workspaceId: string, now: number, staleBefore: number, retryAfter: number): LearningPathState | null; tryStartGeneration(workspaceId: string, activeRoadmapId: string | null, now: number, staleBefore: number): boolean; listWaitingForProvider(): string[] }
 export interface RoadmapAcademicContext { difficulties: string[]; deadline: number | null; availability: Array<{ weekday: number; minutes: number }>; knownContext: string[] }
@@ -37,7 +38,7 @@ function materialHash(content: string): string { return createHash('sha256').upd
 
 export class RoadmapService {
   private readonly generating = new Map<string, Promise<LearningPathState>>()
-  constructor(private readonly repository: RoadmapRepository, private readonly providers: AIProviderManager, private readonly getWorkspace: (id: string) => Promise<Workspace | null>, private readonly getAcademicContext: (workspaceId: string) => RoadmapAcademicContext = () => ({ difficulties: [], deadline: null, availability: [], knownContext: [] }), private readonly curriculumSources?: CurriculumSourceService, private readonly now = Date.now, private readonly createId = () => crypto.randomUUID(), private readonly materials?: RoadmapMaterialProvider) {}
+  constructor(private readonly repository: RoadmapRepository, private readonly providers: AIProviderManager, private readonly getWorkspace: (id: string) => Promise<Workspace | null>, private readonly getAcademicContext: (workspaceId: string) => RoadmapAcademicContext = () => ({ difficulties: [], deadline: null, availability: [], knownContext: [] }), private readonly curriculumSources?: CurriculumSourceService, private readonly now = Date.now, private readonly createId = () => crypto.randomUUID(), private readonly materials?: RoadmapMaterialProvider, private readonly heavyQueue?: HeavyGenerationRunner) {}
   retryWaitingForProvider(): void { for (const workspaceId of this.repository.listWaitingForProvider()) void this.ensureLearningPath(workspaceId, { forceProviderRetry: true }).catch(() => {}) }
   async get(workspaceId: string): Promise<Roadmap | null> { await this.requireWorkspace(workspaceId); return this.repository.findCurrent(workspaceId) }
   async getLearningPathState(workspaceId: string): Promise<LearningPathState> {
@@ -54,6 +55,27 @@ export class RoadmapService {
     const running = this.generating.get(workspaceId); if (running) return running
     const task = this.ensureOnce(workspaceId, options).finally(() => this.generating.delete(workspaceId)); this.generating.set(workspaceId, task); return task
   }
+  ensureLearningPathWithMaterials(workspaceId: string, materialIds: string[]): Promise<LearningPathState> {
+    if (!materialIds.length) return this.ensureLearningPath(workspaceId, { forceProviderRetry: true })
+    const running = this.generating.get(workspaceId); if (running) return running
+    const task = this.ensureWithMaterialsOnce(workspaceId, materialIds).finally(() => this.generating.delete(workspaceId)); this.generating.set(workspaceId, task); return task
+  }
+  private async ensureWithMaterialsOnce(workspaceId: string, materialIds: string[]): Promise<LearningPathState> {
+    await this.requireWorkspace(workspaceId)
+    const existing = this.repository.findCurrent(workspaceId)
+    if (existing?.generationKind === 'ai_generated' && validRoadmap(existing)) return this.repository.setLearningPathState({ workspaceId, status: 'ready', activeRoadmapId: existing.id, lastAttemptAt: this.now(), retryAfter: null, lastErrorCode: null, updatedAt: this.now() })
+    const provider = this.providers.route('roadmap'); const now = this.now()
+    if (!provider) return this.repository.setLearningPathState({ workspaceId, status: 'waiting_for_provider', activeRoadmapId: null, lastAttemptAt: now, retryAfter: now + RETRY_COOLDOWN, lastErrorCode: 'PROVIDER_UNAVAILABLE', updatedAt: now })
+    if (!this.repository.tryStartGeneration(workspaceId, null, now, now - RETRY_COOLDOWN)) return this.repository.getLearningPathState(workspaceId)!
+    try {
+      const workspace = await this.requireWorkspace(workspaceId)
+      const generate = () => this.generateCandidate(workspace, provider, undefined, materialIds)
+      const candidate = await (this.heavyQueue?.run(generate) ?? generate())
+      const createdAt = this.now()
+      const roadmap = this.repository.activate({ id: this.createId(), workspaceId, title: candidate.proposal.title, status: 'accepted', generationKind: 'ai_generated', version: this.repository.nextVersion(workspaceId), providerId: candidate.response.providerId, modelId: candidate.response.modelId, modules: candidate.proposal.modules.map((item, index) => ({ id: this.createId(), ...item, position: index + 1, status: index === 0 ? 'active' : 'locked' })), createdAt, updatedAt: createdAt })
+      return this.repository.setLearningPathState({ workspaceId, status: 'ready', activeRoadmapId: roadmap.id, lastAttemptAt: now, retryAfter: null, lastErrorCode: null, updatedAt: this.now() })
+    } catch (error) { const diagnostic = diagnosticError(error, 'learning_path_state'); return this.repository.setLearningPathState({ workspaceId, status: diagnostic.code === 'PROVIDER_UNAVAILABLE' ? 'waiting_for_provider' : 'failed_retryable', activeRoadmapId: null, lastAttemptAt: now, retryAfter: now + (diagnostic.code === 'PROVIDER_UNAVAILABLE' ? RETRY_COOLDOWN : FAST_RETRY_COOLDOWN), lastErrorCode: diagnostic.code, updatedAt: this.now() }) }
+  }
   private async ensureOnce(workspaceId: string, options: { forceProviderRetry?: boolean }): Promise<LearningPathState> {
     await this.requireWorkspace(workspaceId)
     const now = this.now()
@@ -66,7 +88,7 @@ export class RoadmapService {
     logProgress(workspaceId, 'provider_route', { providerId: provider.id, providerName: provider.name })
     if (!this.repository.tryStartGeneration(workspaceId, validRoadmap(current) ? current.id : null, now, now - RETRY_COOLDOWN)) return this.repository.getLearningPathState(workspaceId)!
     try {
-      const roadmap = await this.generateWithProvider(workspaceId, provider)
+      const roadmap = await (this.heavyQueue?.run(() => this.generateWithProvider(workspaceId, provider)) ?? this.generateWithProvider(workspaceId, provider))
       const persisted = this.repository.findCurrent(workspaceId)
       if (!validRoadmap(persisted) || persisted.id !== roadmap.id) throw new LearningPathGenerationError('ROADMAP_PERSISTENCE_FAILED', 'learning_path_state', 'Activated roadmap could not be read back')
       const ready = this.repository.setLearningPathState({ workspaceId, status: 'ready', activeRoadmapId: persisted.id, lastAttemptAt: now, retryAfter: null, lastErrorCode: null, updatedAt: this.now() }); logProgress(workspaceId, 'learning_path_state', { status: ready.status, activeRoadmapId: ready.activeRoadmapId }); return ready
@@ -77,7 +99,7 @@ export class RoadmapService {
       return this.repository.setLearningPathState({ workspaceId, status: unavailable ? 'waiting_for_provider' : 'failed_retryable', activeRoadmapId: validRoadmap(current) ? current.id : null, lastAttemptAt: now, retryAfter: now + (unavailable ? RETRY_COOLDOWN : FAST_RETRY_COOLDOWN), lastErrorCode: diagnostic.code, updatedAt: this.now() })
     }
   }
-  generate(workspaceId: string, instruction?: string): Promise<Roadmap> { return this.generateWithProvider(workspaceId, this.providers.route('roadmap'), instruction) }
+  generate(workspaceId: string, instruction?: string): Promise<Roadmap> { const task = () => this.generateWithProvider(workspaceId, this.providers.route('roadmap'), instruction); return this.heavyQueue?.run(task) ?? task() }
   async previewRebuild(input: { workspaceId: string; materialIds: string[]; instruction?: string }): Promise<RoadmapRebuildPreview> {
     if (!this.materials || !this.repository.saveRebuildPreview) throw new Error('Curricular material rebuild is unavailable')
     const workspace = await this.requireWorkspace(input.workspaceId)
@@ -87,7 +109,8 @@ export class RoadmapService {
     if (input.materialIds.some((id) => !approved.has(id))) throw new Error('Only approved materials can rebuild the roadmap')
     const provider = this.providers.route('roadmap')
     if (!provider) throw new LearningPathGenerationError('PROVIDER_UNAVAILABLE', 'provider_route', 'Roadmap provider is unavailable')
-    const candidate = await this.generateCandidate(workspace, provider, input.instruction, input.materialIds)
+    const task = () => this.generateCandidate(workspace, provider, input.instruction, input.materialIds)
+    const candidate = await (this.heavyQueue?.run(task) ?? task())
     const oldModules = new Map(current.modules.map((module) => [semanticKey(module.title), module]))
     const preservedTopicIds: string[] = []
     const modules = candidate.proposal.modules.map((module, index) => {

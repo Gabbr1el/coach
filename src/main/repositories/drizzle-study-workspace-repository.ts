@@ -13,13 +13,13 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
     const session = this.database.orm.select().from(studySessions).where(eq(studySessions.id, state.activeSessionId)).get()
     if (!session) throw new Error('Active study session is missing')
     const plan = this.database.orm.select({ id: studyPlanItems.id, title: studyPlanItems.title, durationMinutes: studyPlanItems.durationMinutes, position: studyPlanItems.position, status: studyPlanItems.status, moduleId: studyPlanItems.moduleId, topicId: studyPlanItems.topicId, activityType: studyPlanItems.activityType, scheduledStartMinutes: studyPlanItems.scheduledStartMinutes }).from(studyPlanItems).where(eq(studyPlanItems.sessionId, state.activeSessionId)).orderBy(asc(studyPlanItems.position)).all().map((item) => ({ ...item, moduleId: item.moduleId ?? undefined, topicId: item.topicId ?? undefined, activityType: item.activityType ?? undefined, scheduledStartMinutes: item.scheduledStartMinutes ?? undefined }))
-    return { workspaceId, sessionId: state.activeSessionId, sessionStartedAt: session.startedAt, fileName: state.fileName, language: state.language, editorContent: state.editorContent, notes: state.notes, shareContextWithAi: state.shareContextWithAi, timerDurationSeconds: state.timerDurationSeconds, timerRemainingSeconds: state.timerRemainingSeconds, timerStatus: state.timerStatus, timerStartedAt: state.timerStartedAt, plan, updatedAt: state.updatedAt, documentRevision: state.documentRevision, notesRevision: state.notesRevision, accumulatedFocusSeconds: state.accumulatedFocusSeconds }
+    return { workspaceId, sessionId: state.activeSessionId, sessionStartedAt: session.startedAt, fileName: state.fileName, language: state.language, editorContent: state.editorContent, notes: state.notes, shareContextWithAi: state.shareContextWithAi, timerDurationSeconds: state.timerDurationSeconds, timerRemainingSeconds: state.timerRemainingSeconds, timerStatus: state.timerStatus, timerStartedAt: state.timerStartedAt, timerStartedMonotonicMs: state.timerStartedMonotonicMs, timerBootId: state.timerBootId, plan, updatedAt: state.updatedAt, documentRevision: state.documentRevision, notesRevision: state.notesRevision, accumulatedFocusSeconds: state.accumulatedFocusSeconds }
   }
 
   async createState(input: StudyWorkspaceState): Promise<StudyWorkspaceState> {
     this.database.sqlite.transaction(() => {
       this.database.orm.insert(studySessions).values({ id: input.sessionId, workspaceId: input.workspaceId, status: 'active', startedAt: input.sessionStartedAt, focusSeconds: 0 }).run()
-      this.database.orm.insert(workspaceStudyStates).values({ workspaceId: input.workspaceId, activeSessionId: input.sessionId, fileName: input.fileName, language: input.language, editorContent: input.editorContent, notes: input.notes, shareContextWithAi: input.shareContextWithAi, timerDurationSeconds: input.timerDurationSeconds, timerRemainingSeconds: input.timerRemainingSeconds, timerStatus: input.timerStatus, timerStartedAt: input.timerStartedAt, updatedAt: input.updatedAt, documentRevision: input.documentRevision, notesRevision: input.notesRevision, accumulatedFocusSeconds: input.accumulatedFocusSeconds }).run()
+      this.database.orm.insert(workspaceStudyStates).values({ workspaceId: input.workspaceId, activeSessionId: input.sessionId, fileName: input.fileName, language: input.language, editorContent: input.editorContent, notes: input.notes, shareContextWithAi: input.shareContextWithAi, timerDurationSeconds: input.timerDurationSeconds, timerRemainingSeconds: input.timerRemainingSeconds, timerStatus: input.timerStatus, timerStartedAt: input.timerStartedAt, timerStartedMonotonicMs: input.timerStartedMonotonicMs, timerBootId: input.timerBootId, updatedAt: input.updatedAt, documentRevision: input.documentRevision, notesRevision: input.notesRevision, accumulatedFocusSeconds: input.accumulatedFocusSeconds }).run()
       if (input.plan.length > 0) this.database.orm.insert(studyPlanItems).values(input.plan.map((item) => ({ ...item, workspaceId: input.workspaceId, sessionId: input.sessionId, createdAt: input.updatedAt, updatedAt: input.updatedAt }))).run()
     })()
     return input
@@ -46,15 +46,33 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
     })()
   }
 
+  async completePlanItem(workspaceId: string, sessionId: string, itemId: string, statuses: ReadonlyArray<{ id: string; status: StudyPlanItem['status'] }>, timer: Pick<StudyWorkspaceState, 'timerDurationSeconds' | 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'timerStartedMonotonicMs' | 'timerBootId' | 'accumulatedFocusSeconds'>, now: number): Promise<boolean> {
+    return this.database.sqlite.transaction(() => {
+      const active = this.database.sqlite.prepare('SELECT 1 FROM workspace_study_states WHERE workspace_id = ? AND active_session_id = ?').get(workspaceId, sessionId)
+      if (!active) throw new Error('Study session changed while completing plan item')
+      const weekly = this.database.sqlite.prepare('SELECT status FROM weekly_plan_items WHERE id = ? AND workspace_id = ?').get(itemId, workspaceId) as { status: string } | undefined
+      if (!weekly) throw new Error('Weekly plan item not found')
+      if (weekly.status === 'completed') return false
+      const completed = this.database.sqlite.prepare("UPDATE weekly_plan_items SET status = 'completed', updated_at = ? WHERE id = ? AND workspace_id = ? AND status != 'completed'").run(now, itemId, workspaceId)
+      if (completed.changes !== 1) return false
+      for (const item of statuses) this.database.sqlite.prepare("UPDATE weekly_plan_items SET status=CASE ? WHEN 'active' THEN 'in_progress' ELSE ? END,updated_at=? WHERE id=? AND workspace_id=? AND status != 'completed'").run(item.status, item.status, now, item.id, workspaceId)
+      this.database.orm.update(studyPlanItems).set({ status: 'pending', updatedAt: now }).where(and(eq(studyPlanItems.workspaceId, workspaceId), eq(studyPlanItems.sessionId, sessionId))).run()
+      for (const item of statuses) this.database.orm.update(studyPlanItems).set({ status: item.status, updatedAt: now }).where(and(eq(studyPlanItems.workspaceId, workspaceId), eq(studyPlanItems.sessionId, sessionId), eq(studyPlanItems.id, item.id))).run()
+      const changed = this.database.orm.update(workspaceStudyStates).set({ ...timer, updatedAt: now }).where(and(eq(workspaceStudyStates.workspaceId, workspaceId), eq(workspaceStudyStates.activeSessionId, sessionId))).run()
+      if (changed.changes !== 1) throw new Error('Study session changed while completing plan item')
+      return true
+    })()
+  }
+
   async replacePlan(workspaceId: string, sessionId: string, plan: StudyPlanItem[], now: number, dayKey?: string): Promise<void> { this.database.sqlite.transaction(() => { this.database.sqlite.prepare("DELETE FROM study_plan_items WHERE workspace_id = ? AND session_id = ? AND status != 'completed'").run(workspaceId, sessionId); const insert = this.database.sqlite.prepare('INSERT OR REPLACE INTO study_plan_items (id, workspace_id, session_id, title, duration_minutes, position, status, module_id, topic_id, activity_type, scheduled_start_minutes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'); for (const item of plan) insert.run(item.id, workspaceId, sessionId, item.title, item.durationMinutes, item.position, item.status, item.moduleId, item.topicId, item.activityType, item.scheduledStartMinutes, now, now); if (dayKey) this.database.sqlite.prepare('UPDATE workspace_study_states SET last_planned_day_key = ? WHERE workspace_id = ?').run(dayKey, workspaceId) })() }
 
-  async updateTimer(workspaceId: string, sessionId: string, timer: Pick<StudyWorkspaceState, 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'accumulatedFocusSeconds'>, now: number): Promise<void> {
+  async updateTimer(workspaceId: string, sessionId: string, timer: Pick<StudyWorkspaceState, 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'timerStartedMonotonicMs' | 'timerBootId' | 'accumulatedFocusSeconds'>, now: number): Promise<void> {
     const result = this.database.orm.update(workspaceStudyStates).set({ ...timer, updatedAt: now }).where(and(eq(workspaceStudyStates.workspaceId, workspaceId), eq(workspaceStudyStates.activeSessionId, sessionId))).run()
     if (result.changes !== 1) throw new Error('Study session changed while updating timer')
   }
 
   async setTimerDuration(workspaceId: string, sessionId: string, durationSeconds: number, now: number): Promise<void> {
-    const result = this.database.sqlite.prepare("UPDATE workspace_study_states SET timer_duration_seconds = ?, timer_remaining_seconds = ?, timer_status = 'idle', timer_started_at = NULL, updated_at = ? WHERE workspace_id = ? AND active_session_id = ?").run(durationSeconds, durationSeconds, now, workspaceId, sessionId)
+    const result = this.database.sqlite.prepare("UPDATE workspace_study_states SET timer_duration_seconds = ?, timer_remaining_seconds = ?, timer_status = 'idle', timer_started_at = NULL, timer_started_monotonic_ms = NULL, timer_boot_id = NULL, updated_at = ? WHERE workspace_id = ? AND active_session_id = ?").run(durationSeconds, durationSeconds, now, workspaceId, sessionId)
     if (result.changes !== 1) throw new Error('Study session changed while updating timer duration')
   }
 
@@ -71,7 +89,7 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
       if (completed.changes !== 1) throw new Error('Study session was already completed')
       this.database.orm.insert(studySessions).values({ id: nextSessionId, workspaceId, status: 'active', startedAt: now, focusSeconds: 0 }).run()
       if (plan.length > 0) this.database.orm.insert(studyPlanItems).values(plan.map((item) => ({ ...item, workspaceId, sessionId: nextSessionId, createdAt: now, updatedAt: now }))).run()
-      const changed = this.database.orm.update(workspaceStudyStates).set({ activeSessionId: nextSessionId, timerStatus: 'idle', timerStartedAt: null, timerRemainingSeconds: timerDurationSeconds, accumulatedFocusSeconds: 0, updatedAt: now }).where(and(eq(workspaceStudyStates.workspaceId, workspaceId), eq(workspaceStudyStates.activeSessionId, currentSessionId))).run()
+      const changed = this.database.orm.update(workspaceStudyStates).set({ activeSessionId: nextSessionId, timerStatus: 'idle', timerStartedAt: null, timerStartedMonotonicMs: null, timerBootId: null, timerRemainingSeconds: timerDurationSeconds, accumulatedFocusSeconds: 0, updatedAt: now }).where(and(eq(workspaceStudyStates.workspaceId, workspaceId), eq(workspaceStudyStates.activeSessionId, currentSessionId))).run()
       if (changed.changes !== 1) throw new Error('Study session changed while completing')
       const metrics = this.database.sqlite.prepare("SELECT SUM(type = 'execution_error') AS errors, SUM(type = 'code_executed') AS successes, SUM(type = 'possible_learning_loop') AS loops, SUM(type = 'window_focused' AND json_extract(payload_json, '$.focusExit') = 1) AS exits FROM learning_events WHERE session_id = ?").get(currentSessionId) as { errors: number | null; successes: number | null; loops: number | null; exits: number | null }
       const summary = `Sessão de ${Math.floor(focusSeconds / 60)} minutos focados; ${metrics.successes ?? 0} execuções bem-sucedidas; ${metrics.errors ?? 0} erros; ${metrics.loops ?? 0} loops; ${metrics.exits ?? 0} saídas de foco.`

@@ -7,8 +7,9 @@ export interface StudyWorkspaceRepository {
   saveNotes(workspaceId: string, notes: string, revision: number, now: number): Promise<void>
   updateContextSharing(workspaceId: string, enabled: boolean, now: number): Promise<void>
   replacePlanStatuses(workspaceId: string, sessionId: string, statuses: ReadonlyArray<{ id: string; status: StudyPlanItem['status'] }>, now: number): Promise<void>
+  completePlanItem(workspaceId: string, sessionId: string, itemId: string, statuses: ReadonlyArray<{ id: string; status: StudyPlanItem['status'] }>, timer: Pick<StudyWorkspaceState, 'timerDurationSeconds' | 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'timerStartedMonotonicMs' | 'timerBootId' | 'accumulatedFocusSeconds'>, now: number): Promise<boolean>
   replacePlan(workspaceId: string, sessionId: string, plan: StudyPlanItem[], now: number, dayKey?: string): Promise<void>
-  updateTimer(workspaceId: string, sessionId: string, timer: Pick<StudyWorkspaceState, 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'accumulatedFocusSeconds'>, now: number): Promise<void>
+  updateTimer(workspaceId: string, sessionId: string, timer: Pick<StudyWorkspaceState, 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'timerStartedMonotonicMs' | 'timerBootId' | 'accumulatedFocusSeconds'>, now: number): Promise<void>
   setTimerDuration(workspaceId: string, sessionId: string, durationSeconds: number, now: number): Promise<void>
   flushDrafts(input: { workspaceId: string; fileName: string; language: string; content: string; notes: string; documentRevision: number; notesRevision: number; now: number }): void
   completeAndCreateSession(workspaceId: string, currentSessionId: string, nextSessionId: string, plan: StudyPlanItem[], focusSeconds: number, timerDurationSeconds: number, now: number): void

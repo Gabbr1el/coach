@@ -11,8 +11,9 @@ class MemoryStudyWorkspaceRepository implements StudyWorkspaceRepository {
   async saveNotes(_workspaceId: string, notes: string, revision: number, now: number): Promise<void> { this.state = { ...this.state!, notes, notesRevision: revision, updatedAt: now } }
   async updateContextSharing(_workspaceId: string, enabled: boolean, now: number): Promise<void> { this.state = { ...this.state!, shareContextWithAi: enabled, updatedAt: now } }
   async replacePlanStatuses(_workspaceId: string, _sessionId: string, statuses: ReadonlyArray<{ id: string; status: StudyPlanItem['status'] }>, now: number): Promise<void> { this.state = { ...this.state!, plan: this.state!.plan.map((item) => ({ ...item, status: statuses.find((status) => status.id === item.id)?.status ?? item.status })), updatedAt: now } }
+  async completePlanItem(_workspaceId: string, _sessionId: string, itemId: string, statuses: ReadonlyArray<{ id: string; status: StudyPlanItem['status'] }>, timer: Pick<StudyWorkspaceState, 'timerDurationSeconds' | 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'timerStartedMonotonicMs' | 'timerBootId' | 'accumulatedFocusSeconds'>, now: number): Promise<boolean> { if (this.state!.plan.find((item) => item.id === itemId)?.status === 'completed') return false; this.state = { ...this.state!, ...timer, plan: this.state!.plan.map((item) => ({ ...item, status: statuses.find((status) => status.id === item.id)?.status ?? item.status })), updatedAt: now }; return true }
   async replacePlan(_workspaceId: string, _sessionId: string, plan: StudyPlanItem[], now: number): Promise<void> { this.state = { ...this.state!, plan, updatedAt: now } }
-  async updateTimer(_workspaceId: string, _sessionId: string, timer: Pick<StudyWorkspaceState, 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'accumulatedFocusSeconds'>, now: number): Promise<void> { this.state = { ...this.state!, ...timer, updatedAt: now } }
+  async updateTimer(_workspaceId: string, _sessionId: string, timer: Pick<StudyWorkspaceState, 'timerStatus' | 'timerRemainingSeconds' | 'timerStartedAt' | 'timerStartedMonotonicMs' | 'timerBootId' | 'accumulatedFocusSeconds'>, now: number): Promise<void> { this.state = { ...this.state!, ...timer, updatedAt: now } }
   async setTimerDuration(_workspaceId: string, _sessionId: string, durationSeconds: number, now: number): Promise<void> { this.state = { ...this.state!, timerDurationSeconds: durationSeconds, timerRemainingSeconds: durationSeconds, timerStatus: 'idle', timerStartedAt: null, updatedAt: now } }
   flushDrafts(): void {}
   completeAndCreateSession(_workspaceId: string, _currentSessionId: string, nextSessionId: string, plan: StudyPlanItem[], _focusSeconds: number, timerDurationSeconds: number, now: number): void { this.state = { ...this.state!, sessionId: nextSessionId, sessionStartedAt: now, plan, timerStatus: 'idle', timerStartedAt: null, timerRemainingSeconds: timerDurationSeconds, accumulatedFocusSeconds: 0 } }
@@ -73,12 +74,42 @@ describe('StudyWorkspaceService', () => {
     const repository = new MemoryStudyWorkspaceRepository()
     let now = 1_000
     const roadmap = { id: crypto.randomUUID(), workspaceId: workspace.id, title: 'Algoritmos', status: 'accepted' as const, generationKind: 'ai_generated' as const, version: 1, providerId: null, modelId: null, createdAt: 1, updatedAt: 1, modules: [{ id: crypto.randomUUID(), title: 'Listas', objective: 'Aprender listas', estimatedMinutes: 120, position: 1, status: 'active' as const, topics: ['Listas'], outcomes: [], practice: 'Implementar', completionCriteria: [], resources: [] }] }
-    const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, getRoadmap: () => roadmap, now: () => now, createId: () => crypto.randomUUID() })
+    const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, getRoadmap: () => roadmap, now: () => now, monotonicNow: () => now, bootId: 'test', createId: () => crypto.randomUUID() })
     const initial = await service.getState(workspace.id)
     await service.updateTimer(workspace.id, 'start')
     now += 10_000
     const paused = await service.updateTimer(workspace.id, 'pause')
     expect(paused.timerRemainingSeconds).toBe(initial.timerDurationSeconds - 10)
     expect(paused.timerStatus).toBe('paused')
+  })
+
+  it('accounts once across pause, resume, switch, extend and restart', async () => {
+    const repository = new MemoryStudyWorkspaceRepository(); let now = 1_000; let monotonic = 50
+    const plan: StudyPlanItem[] = [{ id: crypto.randomUUID(), title: 'A', durationMinutes: 20, position: 1, status: 'active' }, { id: crypto.randomUUID(), title: 'B', durationMinutes: 30, position: 2, status: 'pending' }]
+    repository.state = { workspaceId: workspace.id, sessionId: crypto.randomUUID(), sessionStartedAt: now, fileName: 'main.py', language: 'python', editorContent: '', notes: '', shareContextWithAi: false, timerDurationSeconds: 1200, timerRemainingSeconds: 1200, timerStatus: 'idle', timerStartedAt: null, timerStartedMonotonicMs: null, timerBootId: null, plan, updatedAt: now, documentRevision: 0, notesRevision: 0, accumulatedFocusSeconds: 0 }
+    const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, now: () => now, monotonicNow: () => monotonic, bootId: 'boot' })
+    await service.updateTimer(workspace.id, 'start'); now += 10_000; monotonic += 10_000
+    expect((await service.updateTimer(workspace.id, 'pause')).accumulatedFocusSeconds).toBe(10)
+    await service.updateTimer(workspace.id, 'start'); now += 5_000; monotonic += 5_000
+    const switched = await service.activatePlanItem(workspace.id, plan[1]!.id)
+    expect(switched.accumulatedFocusSeconds).toBe(15); expect(switched.timerRemainingSeconds).toBe(1800)
+    await service.updateTimer(workspace.id, 'start'); now += 3_000; monotonic += 3_000
+    const extended = await service.updateTimer(workspace.id, 'extend')
+    expect(extended.accumulatedFocusSeconds).toBe(18); expect(extended.timerRemainingSeconds).toBe(2397)
+    now -= 60_000; monotonic += 2_000
+    expect((await service.updateTimer(workspace.id, 'pause')).accumulatedFocusSeconds).toBe(20)
+    const restarted = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, now: () => now, monotonicNow: () => 1, bootId: 'new-boot' })
+    expect((await restarted.getState(workspace.id)).accumulatedFocusSeconds).toBe(20)
+  })
+
+  it('expires without learning completion and completes a plan item idempotently', async () => {
+    const repository = new MemoryStudyWorkspaceRepository(); let now = 1_000; const item = { id: crypto.randomUUID(), title: 'Revisar', durationMinutes: 5, position: 1, status: 'active' as const, topicId: 'topic' }
+    repository.state = { workspaceId: workspace.id, sessionId: crypto.randomUUID(), sessionStartedAt: now, fileName: 'main.py', language: 'python', editorContent: '', notes: '', shareContextWithAi: false, timerDurationSeconds: 300, timerRemainingSeconds: 300, timerStatus: 'idle', timerStartedAt: null, plan: [item], updatedAt: now, documentRevision: 0, notesRevision: 0, accumulatedFocusSeconds: 0 }
+    const service = new StudyWorkspaceService({ repository, getWorkspace: async () => workspace, now: () => now, monotonicNow: () => now, bootId: 'boot' })
+    await service.updateTimer(workspace.id, 'start'); now += 300_000
+    const expired = await service.updateTimer(workspace.id, 'pause')
+    expect(expired.plan[0]?.status).toBe('active'); expect(expired.accumulatedFocusSeconds).toBe(300)
+    const completed = await service.completePlanItem(workspace.id, item.id); const repeated = await service.completePlanItem(workspace.id, item.id)
+    expect(completed.plan[0]?.status).toBe('completed'); expect(repeated).toEqual(completed); expect(repeated.accumulatedFocusSeconds).toBe(300)
   })
 })

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Roadmap, RoadmapModule } from '../../shared/contracts/roadmap-contract'
-import type { PersistedStudyLesson, StudyCheckpointEvaluation, StudyLessonAdaptation, StudyLessonBlock } from '../../shared/contracts/study-lesson-contract'
+import type { PersistedStudyLesson, StudyCheckpointEvaluation, StudyLessonAdaptation, StudyLessonAdaptationMode, StudyLessonBlock } from '../../shared/contracts/study-lesson-contract'
 import type { StudyCheckpointState, StudyLessonPosition, StudyProgressState } from '../../shared/contracts/study-progress-contract'
 import type { InteractiveCodeBlock, InteractiveCodeState } from '../../shared/contracts/code-execution-contract'
 import type { ExerciseSet } from '../../shared/contracts/exercise-contract'
@@ -58,6 +58,7 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
   const [adaptations, setAdaptations] = useState<Record<string, StudyLessonAdaptation[]>>({})
   const [displayedBlocks, setDisplayedBlocks] = useState(lesson.blocks)
   const [adaptationBusy, setAdaptationBusy] = useState<string | null>(null)
+  const [adaptationError, setAdaptationError] = useState<Record<string, string>>({})
   const [answeringCheckpointId, setAnsweringCheckpointId] = useState<string | null>(null)
   const [checkpointDrafts, setCheckpointDrafts] = useState<Record<string, { optionId: string | null; justification: string }>>({})
   const [interactiveStates, setInteractiveStates] = useState<Record<string, InteractiveCodeState>>({})
@@ -126,6 +127,22 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
       setDisplayedBlocks(updated.blocks)
       onLessonChanged(updated)
       setAdaptations((current) => ({ ...current, [blockId]: (current[blockId] ?? []).map((item) => ({ ...item, isActive: item.id === adaptation.id })) }))
+    } finally { setAdaptationBusy(null) }
+  }
+
+  async function adaptBlock(block: StudyLessonBlock, mode: StudyLessonAdaptationMode, instruction: string) {
+    setAdaptationBusy(block.id)
+    setAdaptationError((current) => ({ ...current, [block.id]: '' }))
+    try {
+      await window.coach.studyLesson.adaptSection({ workspaceId, roadmapId: roadmap.id, moduleId: module.id, topicId: lesson.topicId, lessonId: lesson.id, blockId: block.id, instruction, mode })
+      const result = await window.coach.studyLesson.getOrCreate({ workspaceId, roadmapId: roadmap.id, moduleId: module.id, topicId: lesson.topicId })
+      if (result.status !== 'ready') throw new Error('Lesson reload failed')
+      const history = await window.coach.studyLesson.listAdaptations({ workspaceId, lessonId: lesson.id, blockId: block.id })
+      setDisplayedBlocks(result.lesson.blocks)
+      setAdaptations((current) => ({ ...current, [block.id]: history }))
+      onLessonChanged(result.lesson)
+    } catch {
+      setAdaptationError((current) => ({ ...current, [block.id]: 'Não foi possível adaptar este bloco. A versão atual foi preservada.' }))
     } finally { setAdaptationBusy(null) }
   }
 
@@ -259,6 +276,10 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
               <span className="text-[10px] font-bold text-coach-muted">{String(displayIndex + 1).padStart(2, '0')}</span>
             </div>
             {history.length > 0 && <button type="button" disabled={adaptationBusy === block.id} onClick={() => void (activeAdaptation ? showOriginal(block.id) : showAdapted(block.id))} className="mt-3 text-xs font-black text-coach-green disabled:opacity-50">{activeAdaptation ? 'Ver original' : 'Voltar à versão adaptada'}</button>}
+            {!['checkpoint', 'interactiveCode', 'miniExercise'].includes(block.type) && <div className="mt-3 flex flex-wrap gap-2" aria-label={`Adaptar ${block.title}`}>
+              {([['SIMPLIFY', 'Simplificar', 'Explique este bloco com linguagem mais simples.'], ['MORE_DEPTH', 'Aprofundar', 'Aprofunde este bloco sem mudar seu objetivo.'], ['CODE_FIRST', 'Código primeiro', 'Apresente este trecho com o exemplo de código primeiro.'], ['REORDER', 'Reordenar', 'Reordene este bloco dentro da seção para melhorar a progressão.'], ['PRESENTATION', 'Mais visual', 'Converta este bloco para uma apresentação visual, concisa e escaneável.']] as const).map(([mode, label, instruction]) => <button key={mode} type="button" disabled={adaptationBusy === block.id} onClick={() => void adaptBlock(block, mode, instruction)} className="rounded-full border border-white/10 px-3 py-1.5 text-[10px] font-black text-white/65 hover:border-coach-green/50 hover:text-coach-green disabled:opacity-40">{label}</button>)}
+            </div>}
+            {adaptationError[block.id] && <p role="alert" className="mt-3 text-xs font-bold text-coach-orange">{adaptationError[block.id]}</p>}
             <h3 className="mt-2 font-display text-xl font-black">{block.title}</h3>
             {'content' in block && <p className="mt-4 whitespace-pre-line text-sm leading-7 text-coach-muted">{block.content}</p>}
             {block.type === 'codeExample' && <>

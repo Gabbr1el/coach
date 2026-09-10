@@ -48,6 +48,8 @@ const PRESENTATION_INTENTS: ReadonlyArray<[StudyPresentationIntent, RegExp]> = [
   ['SIMPLIFY', /\b(simplifi(?:que|ca)|mais simples|linguagem simples|menos técnic[oa]|de outro jeito|reformule)\b/i],
   ['ANALOGY', /\b(analogia|metáfora|metafora|compare (?:isso )?com)\b/i],
   ['CODE_FIRST', /\b(código primeiro|codigo primeiro|comece pelo código|comece pelo codigo|mostre (?:isso )?(?:em|com) código|mostre (?:isso )?(?:em|com) codigo)\b/i],
+  ['REORDER', /\b(reorden(?:e|ar)|mude a ordem|organize (?:esta|essa) (?:parte|seção|secao))\b/i],
+  ['PRESENTATION', /\b(modo apresentaç(?:ão|ao)|formato de slides?|mais visual|apresente visualmente)\b/i],
   ['MORE_EXAMPLES', /\b(mais exemplos?|outro exemplo|outros exemplos)\b/i],
   ['STEP_BY_STEP', /\b(passo a passo|por etapas|etapa por etapa)\b/i],
   ['MORE_DEPTH', /\b(aprofund(?:e|ar)|mais profundidade|mais detalhes?|detalhe mais)\b/i],
@@ -84,6 +86,9 @@ function applyPresentationPreference(current: StudyPresentationPreferences, inte
   if (intent === 'MORE_DEPTH') return { ...current, detail: 'detailed' }
   if (intent === 'MORE_CONCISE') return { ...current, detail: 'concise' }
   if (intent === 'ANALOGY') return { ...current, examples: 'conceptual' }
+  if (intent === 'CODE_FIRST') return { ...current, examples: 'practical', composition: 'code_first' }
+  if (intent === 'REORDER') return { ...current, composition: 'structured' }
+  if (intent === 'PRESENTATION') return { ...current, presentation: 'visual' }
   return { ...current, examples: 'practical' }
 }
 
@@ -138,15 +143,24 @@ export class WorkspaceCoachService {
     if (current && presentationRequest && input.activeStudy && !input.activeInteractiveCode && this.dependencies.studyLessonService) {
       if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
       const study = input.activeStudy
-      await this.dependencies.studyLessonService.adaptSection({ workspaceId, roadmapId: study.roadmapId, moduleId: study.moduleId, topicId: study.topicId, lessonId: study.lessonId, blockId: study.currentBlockId, instruction: input.content.trim(), mode: presentationRequest.intent }, signal)
-      this.dependencies.studyLessonService.updatePreferences(workspaceId, preferencesAfterRequest(this.dependencies.studyLessonService.getPreferences(workspaceId), presentationRequest, { topicId: study.topicId, blockId: study.currentBlockId }))
-      if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
-      const response = 'Adaptei esta seção na aula. Você já pode continuar por ela.'
-      yield response
-      const now = this.now()
-      await this.dependencies.repository.addTurn({ threadId, user: { id: this.createId(), threadId, role: 'user', content: input.content.trim(), providerId: null, modelId: null, createdAt: now }, assistant: { id: this.createId(), threadId, role: 'assistant', content: response, providerId: 'coach-local', modelId: 'lesson-adaptation-v1', createdAt: now + 1 } })
-      onMetadata?.({ lessonAdapted: { lessonId: study.lessonId, blockId: study.currentBlockId } })
-      return
+      try {
+        await this.dependencies.studyLessonService.adaptSection({ workspaceId, roadmapId: study.roadmapId, moduleId: study.moduleId, topicId: study.topicId, lessonId: study.lessonId, blockId: study.currentBlockId, instruction: input.content.trim(), mode: presentationRequest.intent }, signal)
+        this.dependencies.studyLessonService.updatePreferences(workspaceId, preferencesAfterRequest(this.dependencies.studyLessonService.getPreferences(workspaceId), presentationRequest, { topicId: study.topicId, blockId: study.currentBlockId }))
+        if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
+        const response = 'Adaptei esta seção na aula. Você já pode continuar por ela.'
+        yield response
+        const now = this.now()
+        await this.dependencies.repository.addTurn({ threadId, user: { id: this.createId(), threadId, role: 'user', content: input.content.trim(), providerId: null, modelId: null, createdAt: now }, assistant: { id: this.createId(), threadId, role: 'assistant', content: response, providerId: 'coach-local', modelId: 'lesson-adaptation-v1', createdAt: now + 1 } })
+        onMetadata?.({ lessonAdapted: { lessonId: study.lessonId, blockId: study.currentBlockId } })
+        return
+      } catch (error) {
+        if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error
+        const response = 'Não consegui alterar a aula agora. A versão atual foi preservada; posso responder normalmente pelo Tutor.'
+        yield response
+        const now = this.now()
+        await this.dependencies.repository.addTurn({ threadId, user: { id: this.createId(), threadId, role: 'user', content: input.content.trim(), providerId: null, modelId: null, createdAt: now }, assistant: { id: this.createId(), threadId, role: 'assistant', content: response, providerId: 'coach-local', modelId: 'lesson-adaptation-v1', createdAt: now + 1 } })
+        return
+      }
     }
     const academicContext = `${workspace.name} ${workspace.objective ?? ''}`
     const offTopic = /\b(próximo jogo|proximo jogo|placar|celebridade|fofoca|previsão do tempo|previsao do tempo)\b/i.exec(input.content)?.[0]

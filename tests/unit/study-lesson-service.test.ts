@@ -15,7 +15,7 @@ class MemoryLessons implements StudyLessonRepository {
   creates = 0
   replaces = 0
   adaptations: StudyLessonAdaptation[] = []
-  preferences: StudyPresentationPreferences = { detail: 'standard', explanation: 'balanced', examples: 'balanced', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] }
+  preferences: StudyPresentationPreferences = { detail: 'standard', explanation: 'balanced', examples: 'balanced', composition: 'balanced', presentation: 'reading', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, REORDER: 0, PRESENTATION: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] }
   findOriginal(roadmapId: string, topicId: string) { return this.values.get(`${roadmapId}:${topicId}`) ?? null }
   find(roadmapId: string, topicId: string) { const base = this.findOriginal(roadmapId, topicId); if (!base) return null; const active = new Map(this.adaptations.filter((item) => item.lessonId === base.id && item.isActive).map((item) => [item.blockId, item.adaptedBlock])); return { ...base, blocks: base.blocks.map((block) => active.get(block.id) ?? block) } }
   create(value: PersistedStudyLesson) { this.creates++; this.values.set(`${value.roadmapId}:${value.topicId}`, value); return value }
@@ -318,5 +318,11 @@ describe('StudyLessonService', () => {
     const item = module(['decorators']); const ws = workspace('Python Avançado'); const path = roadmap(ws.id, item); const topicId = `${item.id}:decorators`; const repository = new MemoryLessons(); const original = localLesson(ws, item, 'decorators', topicId)!; repository.create({ ...original, id: 'lesson', generationKind: 'ai_generated', workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId, providerId: 'old', modelId: 'old', createdAt: 1 }); const send = vi.fn<AIProvider['sendMessage']>(); const service = new StudyLessonService(repository, providerManager(send), async () => ws, () => path); const block = original.blocks.find((item) => item.type === type)!
     await expect(service.adaptSection({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId, lessonId: 'lesson', blockId: block.id, instruction: 'Simplifique' })).rejects.toThrow('cannot be adapted directly')
     expect(send).not.toHaveBeenCalled()
+  })
+
+  it('rejects provider attempts to change code and expected output', async () => {
+    const item = module(['decorators']); const ws = workspace('Python Avançado'); const path = roadmap(ws.id, item); const topicId = `${item.id}:decorators`; const repository = new MemoryLessons(); const original = localLesson(ws, item, 'decorators', topicId)!; repository.create({ ...original, id: 'lesson', generationKind: 'ai_generated', workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId, providerId: 'old', modelId: 'old', createdAt: 1 }); const code = original.blocks.find((block) => block.type === 'codeExample')!; const service = new StudyLessonService(repository, providerManager(async () => ({ content: JSON.stringify({ ...code, code: 'print("tampered")', expectedOutput: 'tampered' }), providerId: 'test', modelId: 'model' })), async () => ws, () => path)
+    await expect(service.adaptSection({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId, lessonId: 'lesson', blockId: code.id, instruction: 'Código primeiro', mode: 'CODE_FIRST' })).rejects.toThrow('executable example contract')
+    expect(repository.adaptations).toEqual([])
   })
 })

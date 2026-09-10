@@ -86,6 +86,16 @@ function stableLessonOptions(content: LessonContent): LessonContent { return { .
 function normalized(value: string): string { return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase() }
 function semanticWords(value: string): string[] { return normalized(value).split(/[^a-z0-9+#]+/).filter((word) => word.length >= 3) }
 
+const immutableBlockTypes = new Set<StudyLessonBlock['type']>(['checkpoint', 'interactiveCode', 'miniExercise'])
+
+export function assertPresentationOnlyAdaptation(original: StudyLessonBlock, adapted: StudyLessonBlock): void {
+  if (original.id !== adapted.id || original.type !== adapted.type) throw new Error('Adapted block changed its identity')
+  if (immutableBlockTypes.has(original.type)) throw new Error('Assessment and executable blocks cannot be adapted directly')
+  if (original.type === 'codeExample' && adapted.type === 'codeExample') {
+    if (original.code !== adapted.code || original.language !== adapted.language || original.expectedOutput !== adapted.expectedOutput) throw new Error('Adaptation changed the executable example contract')
+  }
+}
+
 const universalPatterns = [
   /mapa de (?:10|dez) conceitos/,
   /termos fundamentais/,
@@ -321,15 +331,15 @@ export class StudyLessonService {
     if (!lesson || lesson.id !== input.lessonId || lesson.workspaceId !== input.workspaceId || lesson.moduleId !== input.moduleId) throw new Error('Study lesson not found')
     const currentBlock = lesson.blocks.find((block) => block.id === input.blockId)
     if (!currentBlock) throw new Error('Study lesson block not found')
-    if (currentBlock.type === 'checkpoint' || currentBlock.type === 'miniExercise' || currentBlock.type === 'interactiveCode') throw new Error('Assessment and executable blocks cannot be adapted directly')
+    if (immutableBlockTypes.has(currentBlock.type)) throw new Error('Assessment and executable blocks cannot be adapted directly')
     const provider = this.providers.route('lesson')
     if (!provider) throw new Error('Study lesson adaptation provider unavailable')
     const storedPreferences = this.repository.getPreferences(input.workspaceId)
     const explicitIntent = input.mode && input.mode !== 'CUSTOM' ? input.mode : null
     const preferences = { ...storedPreferences, situationalIntent: explicitIntent }
-    const response = await provider.sendMessage({ messages: [{ role: 'system', content: 'Adapte somente o bloco-base original fornecido seguindo a instrução e as preferências. O situationalIntent, quando presente, vale para esta adaptação e deve prevalecer sobre defaults globais conflitantes. Preserve id, type e o significado pedagógico. Retorne somente o JSON completo do bloco, sem markdown.' }, { role: 'user', content: JSON.stringify({ instruction: input.instruction, preferences, block: currentBlock }) }], maxOutputTokens: 2500, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000) })
+    const response = await provider.sendMessage({ messages: [{ role: 'system', content: 'Adapte somente a apresentação do bloco-base original seguindo a instrução e as preferências. O situationalIntent, quando presente, vale para esta adaptação e prevalece sobre defaults globais conflitantes. Preserve id, type e significado pedagógico. Em codeExample preserve exatamente code, language e expectedOutput; altere apenas título/walkthrough. Nunca crie ou altere checkpoint, gabarito, rationale, miniExercise ou contrato de interactiveCode. CODE_FIRST e REORDER mudam a composição local no backend; não invente blocos. Retorne somente o JSON completo do bloco, sem markdown.' }, { role: 'user', content: JSON.stringify({ instruction: input.instruction, preferences, block: currentBlock }) }], maxOutputTokens: 2500, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000) })
     const adaptedBlock = studyLessonContentSchema.shape.blocks.element.parse(extractJsonDocument(response.content))
-    if (adaptedBlock.id !== currentBlock.id || adaptedBlock.type !== currentBlock.type) throw new Error('Adapted block changed its identity')
+    assertPresentationOnlyAdaptation(currentBlock, adaptedBlock)
     const adaptation: NewStudyLessonAdaptation = { id: crypto.randomUUID(), workspaceId: input.workspaceId, lessonId: lesson.id, blockId: input.blockId, reason: input.instruction, mode: input.mode ?? 'CUSTOM', adaptedBlock, providerId: response.providerId, modelId: response.modelId, createdAt: this.now() }
     if (signal?.aborted) throw new DOMException('Request cancelled', 'AbortError')
     return this.repository.createAdaptation(adaptation, signal)

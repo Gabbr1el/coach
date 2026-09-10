@@ -19,7 +19,7 @@ describe('adaptive study backward compatibility', () => {
   })
 
   it('defaults workspace presentation preferences', () => {
-    expect(studyPresentationPreferencesSchema.parse({})).toEqual({ detail: 'standard', explanation: 'balanced', examples: 'balanced', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] })
+    expect(studyPresentationPreferencesSchema.parse({})).toEqual({ detail: 'standard', explanation: 'balanced', examples: 'balanced', composition: 'balanced', presentation: 'reading', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, REORDER: 0, PRESENTATION: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] })
   })
 
   it('loads preferences persisted before contextual evidence existed', () => {

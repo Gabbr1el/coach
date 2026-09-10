@@ -4,7 +4,7 @@ import type { ConversationRepository, CreateConversationMessageRecord } from '..
 import { presentationIntentFor, presentationRequestFor, WorkspaceCoachService } from '../../src/application/conversations/workspace-coach-service'
 import type { AIRequest } from '../../src/application/ai/ai-provider'
 import type { ConversationMessage } from '../../src/shared/contracts/conversation-contract'
-import type { StudyPresentationPreferences } from '../../src/shared/contracts/study-lesson-contract'
+import { studyPresentationPreferencesSchema, type StudyPresentationPreferences } from '../../src/shared/contracts/study-lesson-contract'
 
 class MemoryConversationRepository implements ConversationRepository {
   readonly messages: ConversationMessage[] = []
@@ -68,7 +68,7 @@ describe('WorkspaceCoachService', () => {
     manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Resposta localmente limitada', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
     manager.select('stream')
     const adaptSection = vi.fn()
-    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(false), studyLessonService: { adaptSection, getPreferences: () => ({ detail: 'standard', explanation: 'balanced', examples: 'balanced', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] }), updatePreferences: (_workspaceId, value) => value } })
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(false), studyLessonService: { adaptSection, getPreferences: () => studyPresentationPreferencesSchema.parse({}), updatePreferences: (_workspaceId, value) => value } })
 
     for await (const _delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'use uma analogia', activePage: 'studies', activeStudy: { roadmapId: crypto.randomUUID(), moduleId: 'module', module: 'M', topicId: 'topic', topic: 'T', lessonId: 'lesson', currentBlockId: 'block', checkpointId: null, currentExcerpt: 'PRIVATE_EXCERPT' } }, new AbortController().signal)) { /* consume */ }
 
@@ -187,6 +187,8 @@ describe('WorkspaceCoachService', () => {
     ['simplifique esta parte', 'SIMPLIFY'],
     ['use uma analogia', 'ANALOGY'],
     ['comece pelo código', 'CODE_FIRST'],
+    ['reordene esta seção', 'REORDER'],
+    ['use modo apresentação', 'PRESENTATION'],
     ['dê mais exemplos', 'MORE_EXAMPLES'],
     ['explique passo a passo', 'STEP_BY_STEP'],
     ['aprofunde esta seção', 'MORE_DEPTH'],
@@ -205,8 +207,8 @@ describe('WorkspaceCoachService', () => {
     const stream = vi.fn()
     manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: stream, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
     manager.select('stream')
-    const preferences: StudyPresentationPreferences = { detail: 'standard', explanation: 'balanced', examples: 'balanced', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] }
-    const adaptSection = vi.fn(async () => ({ id: 'adaptation', workspaceId: workspace.id, lessonId: 'lesson', blockId: 'block', revision: 1, reason: 'use uma analogia', mode: 'ANALOGY' as const, originalBlock: { id: 'block', type: 'explanation' as const, title: 'T', content: 'Original' }, adaptedBlock: { id: 'block', type: 'analogy' as const, title: 'T', content: 'Adaptado' }, isActive: true, providerId: 'stream', modelId: 'model', createdAt: 1 }))
+    const preferences: StudyPresentationPreferences = studyPresentationPreferencesSchema.parse({})
+    const adaptSection = vi.fn(async () => ({ id: 'adaptation', workspaceId: workspace.id, lessonId: 'lesson', blockId: 'block', revision: 1, reason: 'use uma analogia', mode: 'ANALOGY' as const, originalBlock: { id: 'block', type: 'explanation' as const, title: 'T', content: 'Original' }, adaptedBlock: { id: 'block', type: 'explanation' as const, title: 'T', content: 'Adaptado' }, isActive: true, providerId: 'stream', modelId: 'model', createdAt: 1 }))
     const updatePreferences = vi.fn((_workspaceId: string, value: StudyPresentationPreferences) => value)
     const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(true), studyLessonService: { adaptSection, getPreferences: () => preferences, updatePreferences } })
     const metadata = vi.fn()
@@ -222,7 +224,7 @@ describe('WorkspaceCoachService', () => {
     const manager = new AIProviderManager()
     manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* () { throw new Error('must not stream') }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
     manager.select('stream')
-    let preferences: StudyPresentationPreferences = { detail: 'standard', explanation: 'balanced', examples: 'balanced', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] }
+    let preferences: StudyPresentationPreferences = studyPresentationPreferencesSchema.parse({})
     const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(true), studyLessonService: { adaptSection: async (input) => ({ id: crypto.randomUUID(), workspaceId: workspace.id, lessonId: input.lessonId, blockId: input.blockId, revision: 1, reason: input.instruction, mode: input.mode ?? 'CUSTOM', originalBlock: { id: input.blockId, type: 'explanation', title: 'T', content: 'Original' }, adaptedBlock: { id: input.blockId, type: 'explanation', title: 'T', content: 'Adaptado' }, isActive: true, providerId: 'stream', modelId: 'model', createdAt: 1 }), getPreferences: () => preferences, updatePreferences: (_workspaceId, value) => { preferences = value; return value } } })
     const activeStudy = { roadmapId: crypto.randomUUID(), moduleId: crypto.randomUUID(), module: 'M', topicId: 'topic-a', topic: 'T', lessonId: 'lesson', currentBlockId: 'block', checkpointId: null, currentExcerpt: 'Original' }
     for (let index = 0; index < 2; index += 1) for await (const _delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'simplifique esta parte', activePage: 'studies', activeStudy: { ...activeStudy, topicId: `topic-${index}`, currentBlockId: `block-${index}` } }, new AbortController().signal)) { /* consume */ }
@@ -230,6 +232,12 @@ describe('WorkspaceCoachService', () => {
     expect(preferences.detail).toBe('standard')
     expect(preferences.explanation).toBe('simple')
     expect(preferences.evidence).toHaveLength(2)
+  })
+
+  it('falls back to the normal Tutor and never claims mutation when adaptation fails', async () => {
+    const repository = new MemoryConversationRepository(); const manager = new AIProviderManager(); const stream = vi.fn(); manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: stream, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream'); const updatePreferences = vi.fn(); const metadata = vi.fn(); const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(true), studyLessonService: { adaptSection: async () => { throw new Error('offline') }, getPreferences: () => studyPresentationPreferencesSchema.parse({}), updatePreferences } }); const output: string[] = []
+    for await (const delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'simplifique esta parte', activePage: 'studies', activeStudy: { roadmapId: crypto.randomUUID(), moduleId: crypto.randomUUID(), module: 'M', topicId: 'topic', topic: 'T', lessonId: 'lesson', currentBlockId: 'block', checkpointId: null, currentExcerpt: 'Original' } }, new AbortController().signal, metadata)) output.push(delta)
+    expect(output.join('')).toContain('Não consegui alterar a aula'); expect(stream).not.toHaveBeenCalled(); expect(updatePreferences).not.toHaveBeenCalled(); expect(metadata).not.toHaveBeenCalled(); expect(repository.messages.at(-1)?.content).not.toContain('Adaptei')
   })
 
   it('rejects a missing or archived workspace before contacting a provider', async () => {

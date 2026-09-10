@@ -47,6 +47,7 @@ const api: CoachDesktopApi = {
   exercise: {
     ensureSet: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.ensureSet, input),
     getSet: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.getSet, input),
+    saveDraft: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.saveDraft, input),
     run: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.run, input),
     submit: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.submit, input),
     requestHelp: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.requestHelp, input),

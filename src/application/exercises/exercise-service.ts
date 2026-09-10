@@ -5,7 +5,7 @@ import type { AIProviderManager } from '../ai/ai-provider-manager'
 import { extractJsonDocument } from '../ai/structured-json'
 import type { ToolchainManager } from '../../main/code-execution/toolchain-manager'
 import type { WorkspaceProject, ProjectLanguage } from '../../shared/contracts/project-contract'
-import { exerciseDifficultySchema, exerciseKindSchema, publicExerciseTestSchema, type ExerciseExecution, type ExerciseSet } from '../../shared/contracts/exercise-contract'
+import { exerciseDifficultySchema, exerciseKindSchema, publicExerciseContextSchema, publicExerciseTestSchema, type ExerciseExecution, type ExerciseSet, type PublicExerciseContext } from '../../shared/contracts/exercise-contract'
 import type { CodeExecutionResult } from '../../shared/contracts/code-execution-contract'
 import type { Roadmap } from '../../shared/contracts/roadmap-contract'
 import type { Workspace } from '../../shared/contracts/workspace-contract'
@@ -29,6 +29,8 @@ type PrivateCaseResult = { testId: string; visibility: 'public' | 'hidden'; pass
 export interface ExerciseRepository {
   findSet(workspaceId: string, topicId: string): ExerciseSet | null
   findPrivateExercise(workspaceId: string, exerciseId: string): PrivateExercise | null
+  findPublicContext(workspaceId: string, exerciseId: string): PublicExerciseContext | null
+  saveDraft(workspaceId: string, exerciseId: string, code: string, now: number): void
   markGenerating(input: { id: string; workspaceId: string; roadmapId: string; moduleId: string; topicId: string; lessonId: string; now: number }): void
   markGenerationFailure(workspaceId: string, topicId: string, status: 'waiting_for_provider' | 'failed_retryable', code: string, retryAfter: number, now: number): ExerciseSet
   saveGenerated(input: { setId: string; workspaceId: string; topicId: string; providerId: string; modelId: string; exercises: PrivateExercise[]; now: number }): ExerciseSet
@@ -50,6 +52,8 @@ export class ExerciseService {
   constructor(private readonly repository: ExerciseRepository, private readonly providers: AIProviderManager, private readonly toolchains: ToolchainManager, private readonly getWorkspace: (id: string) => Promise<Workspace | null>, private readonly getRoadmap: (workspaceId: string) => Roadmap | null, private readonly now = Date.now, private readonly createId = () => crypto.randomUUID()) {}
 
   getSet(input: { workspaceId: string; topicId: string }): ExerciseSet | null { return this.repository.findSet(input.workspaceId, input.topicId) }
+  getPublicContext(input: { workspaceId: string; exerciseId: string }): PublicExerciseContext | null { const context = this.repository.findPublicContext(input.workspaceId, input.exerciseId); return context ? publicExerciseContextSchema.parse(context) : null }
+  saveDraft(input: { workspaceId: string; exerciseId: string; code: string }): void { this.repository.saveDraft(input.workspaceId, input.exerciseId, input.code, this.now()) }
   ensureSet(input: { workspaceId: string; roadmapId: string; moduleId: string; topicId: string; lessonId: string }): Promise<ExerciseSet> { const key = `${input.workspaceId}:${input.topicId}`; const current = this.generating.get(key); if (current) return current; const task = this.ensureOnce(input).finally(() => this.generating.delete(key)); this.generating.set(key, task); return task }
   private async ensureOnce(input: { workspaceId: string; roadmapId: string; moduleId: string; topicId: string; lessonId: string }): Promise<ExerciseSet> {
     const cached = this.repository.findSet(input.workspaceId, input.topicId)

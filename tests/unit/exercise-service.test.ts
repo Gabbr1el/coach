@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { ExerciseService, type ExerciseRepository, type PrivateExercise } from '../../src/application/exercises/exercise-service'
 import { AIProviderManager } from '../../src/application/ai/ai-provider-manager'
-import type { ExerciseExecution, ExerciseSet } from '../../src/shared/contracts/exercise-contract'
+import type { ExerciseExecution, ExerciseSet, PublicExerciseContext } from '../../src/shared/contracts/exercise-contract'
+import { streamWorkspaceMessageInputSchema } from '../../src/shared/contracts/conversation-contract'
 
 class MemoryRepository implements ExerciseRepository {
   set: ExerciseSet | null = null
@@ -9,6 +10,8 @@ class MemoryRepository implements ExerciseRepository {
   attempts = new Map<string, ExerciseExecution>()
   findSet(): ExerciseSet | null { return this.set }
   findPrivateExercise(): PrivateExercise | null { return this.exercise }
+  findPublicContext(): PublicExerciseContext | null { return null }
+  saveDraft(): void {}
   markGenerating(input: { id: string; workspaceId: string; roadmapId: string; moduleId: string; topicId: string; lessonId: string; now: number }): void { this.set = { ...input, status: 'generating', retryAfter: null, lastErrorCode: null, exercises: [], progress: [], updatedAt: input.now } }
   markGenerationFailure(_workspaceId: string, _topicId: string, status: 'waiting_for_provider' | 'failed_retryable', code: string, retryAfter: number, now: number): ExerciseSet { this.set = { ...this.set!, status, lastErrorCode: code, retryAfter, updatedAt: now }; return this.set }
   saveGenerated(input: { setId: string; workspaceId: string; topicId: string; providerId: string; modelId: string; exercises: PrivateExercise[]; now: number }): ExerciseSet { this.exercise = input.exercises[0]!; this.set = { ...this.set!, status: 'ready', retryAfter: null, lastErrorCode: null, exercises: input.exercises.map(({ hiddenTests: _h, referenceSolution: _r, expectedPrediction: _p, hint: _hint, setId: _s, workspaceId: _w, topicId: _t, ...item }) => item), progress: [], updatedAt: input.now }; return this.set }
@@ -29,6 +32,12 @@ const generated = { exercises: [
 ] }
 
 describe('ExerciseService', () => {
+  it('accepts only the active exercise identifier from the renderer', () => {
+    const input = { requestId: crypto.randomUUID(), workspaceId: context.workspaceId, content: 'Ajude', activePage: 'exercises' as const, activeExercise: { exerciseId: 'exercise' } }
+    expect(streamWorkspaceMessageInputSchema.parse(input).activeExercise).toEqual({ exerciseId: 'exercise' })
+    expect(() => streamWorkspaceMessageInputSchema.parse({ ...input, activeExercise: { exerciseId: 'exercise', currentCode: 'renderer-code', hiddenTests: ['private'] } })).toThrow()
+  })
+
   it('coalesces JIT generation, self-validates, and never exposes private fields', async () => {
     const repository = new MemoryRepository(); const providers = new AIProviderManager(); let calls = 0
     providers.register({ id: 'test', name: 'test', testConnection: async () => {}, getCapabilities: () => ({ streaming: false, usageInformation: false, supportedInput: ['text'] }), sendMessage: async () => { calls++; return { content: JSON.stringify(generated), providerId: 'test', modelId: 'model' } } }); providers.select('test')

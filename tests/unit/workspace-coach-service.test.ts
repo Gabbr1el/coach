@@ -119,20 +119,25 @@ describe('WorkspaceCoachService', () => {
     expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ activeInteractiveCode })
   })
 
-  it('routes only the public active exercise allowlist and records Tutor help once', async () => {
+  it('routes the canonically persisted typed draft and records Tutor help once', async () => {
     const manager = new AIProviderManager()
     let providerRequest: AIRequest | null = null
     manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Comece identificando o caso-base.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
     manager.select('stream')
     const requestHelp = vi.fn(() => ({ exerciseId: 'exercise-1', helpCount: 1, hint: 'PRIVATE_GENERATED_HINT' }))
-    const activeExercise = { exerciseId: 'exercise-1', kind: 'FIX_CODE' as const, title: 'Somar itens', statement: 'Some os itens da entrada.', language: 'python' as const, currentCode: 'print(sum(values))', attempts: 2, helpUsed: false, lastRun: { status: 'executed', passedTests: 0, totalTests: 0, message: 'Execução livre concluída.' }, lastSubmission: { status: 'failed', passedTests: 3, totalTests: 5, message: '3 de 5 testes passaram.' } }
-    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, exerciseService: { requestHelp } })
+    const activeExercise = { exerciseId: 'exercise-1', roadmapId: 'roadmap-1', moduleId: 'module-1', topicId: 'topic-1', kind: 'FIX_CODE' as const, title: 'Somar itens', statement: 'Some os itens da entrada.', language: 'python' as const, currentCode: 'print("typed before Tutor")', attemptCount: 2, helpUsed: false, progressStatus: 'in_progress' as const, passedTests: 3, totalTests: 5, lastRun: { status: 'executed' as const, passedTests: 0, totalTests: 0, message: 'Execução livre concluída.' }, lastSubmission: { status: 'failed' as const, passedTests: 3, totalTests: 5, message: '3 de 5 testes passaram.' } }
+    let canonical = activeExercise
+    const getPublicContext = vi.fn(() => canonical)
+    requestHelp.mockImplementation(() => { canonical = { ...canonical, helpUsed: true }; return { exerciseId: 'exercise-1', helpCount: 1, hint: 'PRIVATE_GENERATED_HINT' } })
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, exerciseService: { getPublicContext, requestHelp } })
 
-    for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Me dê uma dica para continuar', activePage: 'exercises', activeExercise: { ...activeExercise, referenceSolution: 'PRIVATE_REFERENCE', hiddenTests: ['PRIVATE_HIDDEN'], expectedOutput: 'PRIVATE_EXPECTED' } as typeof activeExercise }, new AbortController().signal)) {}
+    for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Me dê uma dica para continuar', activePage: 'exercises', activeExercise: { exerciseId: activeExercise.exerciseId } }, new AbortController().signal)) {}
 
     expect(requestHelp).toHaveBeenCalledTimes(1)
     expect(requestHelp).toHaveBeenCalledWith({ workspaceId: workspace.id, exerciseId: 'exercise-1' })
+    expect(getPublicContext).toHaveBeenCalledWith({ workspaceId: workspace.id, exerciseId: 'exercise-1' })
     expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ activeExercise: { ...activeExercise, helpUsed: true } })
+    expect(JSON.stringify(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64'))).toContain('typed before Tutor')
     const serialized = JSON.stringify(providerRequest)
     expect(serialized).not.toContain('PRIVATE_REFERENCE')
     expect(serialized).not.toContain('PRIVATE_HIDDEN')
@@ -140,6 +145,7 @@ describe('WorkspaceCoachService', () => {
     expect(serialized).not.toContain('PRIVATE_GENERATED_HINT')
     expect(serialized).toContain('ajuda graduada')
     expect(serialized).toContain('Não entregue código final')
+    expect(serialized).toContain('attemptCount')
   })
 
   it('does not record exercise help for unrelated or explicitly denied requests', async () => {
@@ -147,12 +153,34 @@ describe('WorkspaceCoachService', () => {
     manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* () { yield { type: 'completed', response: { content: 'Tudo bem.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
     manager.select('stream')
     const requestHelp = vi.fn(() => ({ exerciseId: 'exercise-1', helpCount: 1, hint: 'hint' }))
-    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, exerciseService: { requestHelp } })
-    const activeExercise = { exerciseId: 'exercise-1', kind: 'PROGRAMMING_PROBLEM' as const, title: 'Soma', statement: 'Some.', language: 'python' as const, currentCode: '', attempts: 0, helpUsed: false, lastRun: null, lastSubmission: null }
+    const getPublicContext = vi.fn(() => ({ exerciseId: 'exercise-1', roadmapId: 'roadmap', moduleId: 'module', topicId: 'topic', kind: 'PROGRAMMING_PROBLEM' as const, title: 'Soma', statement: 'Some.', language: 'python' as const, currentCode: '', attemptCount: 0, helpUsed: false, progressStatus: 'not_started' as const, passedTests: 0, totalTests: 0, lastRun: null, lastSubmission: null }))
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, exerciseService: { getPublicContext, requestHelp } })
+    const activeExercise = { exerciseId: 'exercise-1' }
 
     for (const content of ['Vou tentar outra entrada.', 'Não quero ajuda, só registre minha mensagem.']) for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content, activePage: 'exercises', activeExercise }, new AbortController().signal)) {}
 
     expect(requestHelp).not.toHaveBeenCalled()
+  })
+
+  it('ignores exercise identifiers outside the exercises page and missing canonical exercises', async () => {
+    const manager = new AIProviderManager(); let providerRequest: AIRequest | null = null
+    manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Tudo bem.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream')
+    const requestHelp = vi.fn(() => ({ exerciseId: 'exercise-1', helpCount: 1, hint: 'hint' })); const getPublicContext = vi.fn(() => null)
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, exerciseService: { getPublicContext, requestHelp } })
+    for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Me ajude', activePage: 'studies', activeExercise: { exerciseId: 'exercise-1' } }, new AbortController().signal)) {}
+    expect(getPublicContext).not.toHaveBeenCalled(); expect(requestHelp).not.toHaveBeenCalled(); expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toBeNull()
+    for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Me ajude', activePage: 'exercises', activeExercise: { exerciseId: 'missing' } }, new AbortController().signal)) {}
+    expect(getPublicContext).toHaveBeenCalledWith({ workspaceId: workspace.id, exerciseId: 'missing' }); expect(requestHelp).not.toHaveBeenCalled(); expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toBeNull()
+  })
+
+  it('allows repeated Tutor help while the repository keeps HELP_USED evidence idempotent', async () => {
+    const manager = new AIProviderManager(); let providerRequest: AIRequest | null = null
+    manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Outra pista.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream')
+    const canonical = { exerciseId: 'exercise-1', roadmapId: 'roadmap', moduleId: 'module', topicId: 'topic', kind: 'FIX_CODE' as const, title: 'Soma', statement: 'Corrija.', language: 'python' as const, currentCode: 'print(0)', lastRun: null, lastSubmission: null, passedTests: 0, totalTests: 0, attemptCount: 1, helpUsed: true, progressStatus: 'in_progress' as const }
+    const requestHelp = vi.fn(() => ({ exerciseId: 'exercise-1', helpCount: 1, hint: 'private' })); const getPublicContext = vi.fn(() => canonical)
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, exerciseService: { getPublicContext, requestHelp } })
+    for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Preciso de outra dica', activePage: 'exercises', activeExercise: { exerciseId: 'exercise-1' } }, new AbortController().signal)) {}
+    expect(requestHelp).toHaveBeenCalledTimes(1); expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ activeExercise: canonical })
   })
 
   it.each([

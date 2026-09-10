@@ -1,18 +1,28 @@
 import { ipcMain } from 'electron'
 import type { CoachDatabase } from '../database/connection'
+import { createHash } from 'node:crypto'
 import { STUDY_PROGRESS_CHANNELS } from '../../shared/contracts/study-progress-channels'
-import { answerStudyCheckpointSchema, completeStudyTopicSchema, recordStudyEventSchema, studyCheckpointStateSchema, studyLessonPositionSchema, studySelectionSchema, updateStudyPositionSchema, type StudyCheckpointState, type StudyLessonPosition, type StudyProgressState } from '../../shared/contracts/study-progress-contract'
+import { answerStudyCheckpointSchema, completeStudyTopicSchema, recordStudyEventSchema, retryCheckpointReasoningSchema, studyCheckpointStateSchema, studyLessonPositionSchema, studySelectionSchema, updateStudyPositionSchema, type CheckpointReasoningAssessment, type StudyCheckpointState, type StudyLessonPosition, type StudyProgressState } from '../../shared/contracts/study-progress-contract'
 import { studyLessonContentSchema } from '../../shared/contracts/study-lesson-contract'
 import { workspaceConversationInputSchema } from '../../shared/contracts/conversation-contract'
 import { assertTrustedSender } from './trusted-sender'
 import { applyLearningEvidence, emptyTopicLearningState, shouldReplan, type TopicLearningState } from '../../application/study-progress/topic-learning'
 import { parseInteractiveValidation, type ToolchainStatus } from '../../shared/contracts/code-execution-contract'
+import type { AIProviderManager } from '../../application/ai/ai-provider-manager'
+import { evaluateCheckpointReasoning, pendingAssessment } from '../../application/study-progress/checkpoint-reasoning'
 
 type ProgressRow = { workspaceId: string; roadmapId: string; currentModuleId: string; currentTopicId: string; currentLessonId: string; currentCheckpointId: string | null; topicStatusesJson: string; lessonPositionsJson: string; checkpointStatesJson?: string; updatedAt: number }
 type LessonBlockRow = { contentJson: string }
 type LessonCheckpoint = Extract<ReturnType<typeof studyLessonContentSchema.parse>['blocks'][number], { type: 'checkpoint' }>
 const answering = new Map<string, Promise<unknown>>()
-const recentAnswers = new Map<string, { signature: string; at: number; result: unknown }>()
+function answerSignature(selectedOptionId: string, justification: string): string { return createHash('sha256').update(`${selectedOptionId}\u0000${justification}`).digest('hex') }
+function matchingHistory(state: StudyCheckpointState | undefined, signature: string) { return [...(state?.history ?? [])].reverse().find((item) => item.signature === signature) }
+function responseFor(state: StudyProgressState, checkpoint: LessonCheckpoint, correct: boolean, attempt: number, input: { selectedOptionId: string; studentJustification: string }, reasoningAssessment: CheckpointReasoningAssessment, shouldReplan: boolean) {
+  const selected = checkpoint.options.find((option) => option.id === input.selectedOptionId)!
+  const reinforcement = !correct && attempt > 1 ? checkpoint.reinforcement : null
+  const feedback = correct ? 'Alternativa correta.' : `Alternativa incorreta. ${selected.rationale}`
+  return { state, evaluation: { correct, selectedOptionId: input.selectedOptionId, attempt, studentJustification: input.studentJustification, rationale: selected.rationale, misconceptionTag: selected.misconceptionTag ?? null, feedback, hint: correct ? null : checkpoint.hint, reinforcement, reasoningAssessment }, shouldReplan }
+}
 function readLearningState(database: CoachDatabase, workspaceId: string, topicId: string, now: number): TopicLearningState { const row = database.sqlite.prepare('SELECT workspace_id AS workspaceId, topic_id AS topicId, evidence_count AS evidenceCount, assessments, correct_first_try AS correctFirstTry, correct_after_help AS correctAfterHelp, incorrect, hints_used AS hintsUsed, reinforcement_events AS reinforcementEvents, exercises_completed AS exercisesCompleted, lessons_completed AS lessonsCompleted, difficulty_level AS difficultyLevel, mastery_estimate AS masteryEstimate, confidence, needs_review AS needsReview, last_practiced_at AS lastPracticedAt, last_assessed_at AS lastAssessedAt, reasons_json AS reasonsJson, updated_at AS updatedAt FROM topic_learning_states WHERE workspace_id = ? AND topic_id = ?').get(workspaceId, topicId) as (Omit<TopicLearningState, 'reasons'> & { reasonsJson: string }) | undefined; return row ? { ...row, needsReview: Boolean(row.needsReview), reasons: JSON.parse(row.reasonsJson) as string[] } : emptyTopicLearningState(workspaceId, topicId, now) }
 function writeLearningState(database: CoachDatabase, state: TopicLearningState): void { database.sqlite.prepare(`INSERT INTO topic_learning_states (workspace_id, topic_id, evidence_count, assessments, correct_first_try, correct_after_help, incorrect, hints_used, reinforcement_events, exercises_completed, lessons_completed, difficulty_level, mastery_estimate, confidence, needs_review, last_practiced_at, last_assessed_at, reasons_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id, topic_id) DO UPDATE SET evidence_count=excluded.evidence_count,assessments=excluded.assessments,correct_first_try=excluded.correct_first_try,correct_after_help=excluded.correct_after_help,incorrect=excluded.incorrect,hints_used=excluded.hints_used,reinforcement_events=excluded.reinforcement_events,exercises_completed=excluded.exercises_completed,lessons_completed=excluded.lessons_completed,difficulty_level=excluded.difficulty_level,mastery_estimate=excluded.mastery_estimate,confidence=excluded.confidence,needs_review=excluded.needs_review,last_practiced_at=excluded.last_practiced_at,last_assessed_at=excluded.last_assessed_at,reasons_json=excluded.reasons_json,updated_at=excluded.updated_at`).run(state.workspaceId, state.topicId, state.evidenceCount, state.assessments, state.correctFirstTry, state.correctAfterHelp, state.incorrect, state.hintsUsed, state.reinforcementEvents, state.exercisesCompleted, state.lessonsCompleted, state.difficultyLevel, state.masteryEstimate, state.confidence, Number(state.needsReview), state.lastPracticedAt, state.lastAssessedAt, JSON.stringify(state.reasons), state.updatedAt) }
 
@@ -68,7 +78,7 @@ export function mapStudyProgressState(row: ProgressRow): StudyProgressState {
   return { ...row, moduleId: row.currentModuleId, topicId: row.currentTopicId, lessonId: row.currentLessonId, checkpointId: row.currentCheckpointId, topicStatuses: JSON.parse(row.topicStatusesJson) as StudyProgressState['topicStatuses'], lessonPositions: positions, checkpointStates, currentPosition: positions[row.currentLessonId] ?? null }
 }
 
-export function registerStudyProgressHandlers(database: CoachDatabase, getToolchains: () => ToolchainStatus[] = () => []): void {
+export function registerStudyProgressHandlers(database: CoachDatabase, getToolchains: () => ToolchainStatus[] = () => [], providerManager?: AIProviderManager): void {
   const get = (workspaceId: string) => {
     const row = database.sqlite.prepare('SELECT workspace_id AS workspaceId, roadmap_id AS roadmapId, current_module_id AS currentModuleId, current_topic_id AS currentTopicId, current_lesson_id AS currentLessonId, current_checkpoint_id AS currentCheckpointId, topic_statuses_json AS topicStatusesJson, lesson_positions_json AS lessonPositionsJson, checkpoint_states_json AS checkpointStatesJson, updated_at AS updatedAt FROM study_progress WHERE workspace_id = ?').get(workspaceId) as ProgressRow | undefined
     return row ? mapStudyProgressState(row) : null
@@ -102,43 +112,72 @@ export function registerStudyProgressHandlers(database: CoachDatabase, getToolch
     database.sqlite.prepare('UPDATE study_progress SET current_checkpoint_id = ?, lesson_positions_json = ?, updated_at = ? WHERE workspace_id = ?').run(input.position.currentCheckpointId, JSON.stringify(positions), now, input.workspaceId)
     return get(input.workspaceId)
   })
+  const evaluateAndPersist = async (input: { workspaceId: string; lessonId: string; checkpointId: string; selectedOptionId: string; studentJustification: string }, retry: boolean) => {
+    const active = get(input.workspaceId)
+    if (!active || active.lessonId !== input.lessonId) throw new Error('Checkpoint does not belong to the active lesson')
+    const lessonRow = database.sqlite.prepare('SELECT content_json AS contentJson FROM study_lessons WHERE id = ? AND workspace_id = ?').get(input.lessonId, input.workspaceId) as LessonBlockRow | undefined
+    if (!lessonRow) throw new Error('Study lesson not found for evidence')
+    const lesson = studyLessonContentSchema.parse(JSON.parse(lessonRow.contentJson))
+    const checkpoint = lesson.blocks.find((item): item is LessonCheckpoint => item.type === 'checkpoint' && item.id === input.checkpointId)
+    const selected = checkpoint?.options.find((option) => option.id === input.selectedOptionId)
+    if (!checkpoint || !selected) throw new Error('Checkpoint option does not belong to the authoritative lesson')
+    const previous = active.checkpointStates?.[input.checkpointId]
+    const signature = answerSignature(input.selectedOptionId, input.studentJustification)
+    const replay = matchingHistory(previous, signature)
+    if (!retry && replay) return responseFor(get(input.workspaceId)!, checkpoint, replay.correct, replay.attempt, input, replay.reasoningAssessment ?? previous?.reasoningAssessment ?? pendingAssessment(0, Date.now()), false)
+    const pendingPrevious = previous?.reasoningAssessment?.status === 'reasoning_evaluation_pending' ? previous.reasoningAssessment : null
+    if (retry && !pendingPrevious) throw new Error('Checkpoint reasoning is not pending')
+    if (retry && pendingPrevious && Date.now() < pendingPrevious.nextRetryAt) return responseFor(active, checkpoint, previous!.correct, previous!.attempt, input, pendingPrevious, false)
+    const attempt = retry ? previous!.attempt : (previous?.attempt ?? 0) + 1
+    const correct = input.selectedOptionId === checkpoint.correctOptionId
+    const reinforcement = !correct && attempt > 1 ? checkpoint.reinforcement : null
+    const alternativeFeedback = correct ? 'Alternativa correta.' : `Alternativa incorreta. ${selected.rationale}`
+    const answerId = retry ? previous!.history.at(-1)?.answerId ?? crypto.randomUUID() : crypto.randomUUID()
+    const pending = pendingAssessment(pendingPrevious?.retryCount ?? 0, Date.now())
+    let assessment: CheckpointReasoningAssessment = providerManager
+      ? await evaluateCheckpointReasoning(providerManager, { topic: active.topicId.split(':').at(-1) ?? active.topicId, lesson, checkpoint, selectedOptionId: input.selectedOptionId, studentJustification: input.studentJustification })
+      : pending
+    if (assessment.status === 'reasoning_evaluation_pending') assessment = pending
+    const now = Date.now()
+    let replan = false
+    database.sqlite.transaction(() => {
+      const fresh = get(input.workspaceId)
+      const freshPrevious = fresh?.checkpointStates?.[input.checkpointId]
+      const existing = matchingHistory(freshPrevious, signature)
+      if (!retry && existing) return
+      if (retry && freshPrevious?.reasoningAssessment?.status !== 'reasoning_evaluation_pending') return
+      const historyEntry = { answerId, signature, selectedOptionId: input.selectedOptionId, studentJustification: input.studentJustification, attempt, correct, feedback: alternativeFeedback, rationale: selected.rationale, reasoningAssessment: assessment, answeredAt: retry ? (freshPrevious?.history.at(-1)?.answeredAt ?? now) : now }
+      const history = retry ? [...(freshPrevious?.history.slice(0, -1) ?? []), historyEntry] : [...(freshPrevious?.history ?? []), historyEntry]
+      const state: StudyCheckpointState = { selectedOptionId: input.selectedOptionId, studentJustification: input.studentJustification, attempt, correct, currentFeedback: alternativeFeedback, currentReinforcement: reinforcement, rationale: selected.rationale, reasoningAssessment: assessment, history }
+      const checkpointStates = { ...(fresh?.checkpointStates ?? {}), [input.checkpointId]: state }
+      database.sqlite.prepare('UPDATE study_progress SET current_checkpoint_id = ?, checkpoint_states_json = ?, updated_at = ? WHERE workspace_id = ?').run(input.checkpointId, JSON.stringify(checkpointStates), now, input.workspaceId)
+      database.sqlite.prepare(`INSERT INTO checkpoint_reasoning_evidence (answer_id, workspace_id, topic_id, lesson_id, checkpoint_id, alternative_correct, reasoning_status, summary, misconception, feedback, evaluated_at, retry_count, next_retry_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(answer_id) DO UPDATE SET reasoning_status=excluded.reasoning_status,summary=excluded.summary,misconception=excluded.misconception,feedback=excluded.feedback,evaluated_at=excluded.evaluated_at,retry_count=excluded.retry_count,next_retry_at=excluded.next_retry_at,updated_at=excluded.updated_at`).run(answerId, input.workspaceId, active.topicId, input.lessonId, input.checkpointId, Number(correct), assessment.status, assessment.summary, assessment.misconception, assessment.feedback, assessment.evaluatedAt, assessment.retryCount, assessment.nextRetryAt, now, now)
+      if (assessment.status !== 'reasoning_evaluation_pending') {
+        const inserted = database.sqlite.prepare('INSERT OR IGNORE INTO study_progress_events (id, workspace_id, type, module_id, topic_id, lesson_id, checkpoint_id, correct, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(answerId, input.workspaceId, 'CHECKPOINT_ANSWERED', active.moduleId, active.topicId, active.lessonId, input.checkpointId, correct ? 1 : 0, now)
+        if (inserted.changes) { const before = readLearningState(database, input.workspaceId, active.topicId, now); const after = applyLearningEvidence(before, { type: 'CHECKPOINT_ANSWERED', correct, attempt, hintUsed: !correct, reinforcementUsed: reinforcement !== null, reasoningStatus: assessment.status, misconception: assessment.misconception, occurredAt: now }); replan = shouldReplan(before, after); writeLearningState(database, after) }
+      }
+    })()
+    const persisted = get(input.workspaceId)!
+    return responseFor(persisted, checkpoint, persisted.checkpointStates?.[input.checkpointId]?.correct ?? correct, persisted.checkpointStates?.[input.checkpointId]?.attempt ?? attempt, input, persisted.checkpointStates?.[input.checkpointId]?.reasoningAssessment ?? assessment, replan)
+  }
   ipcMain.handle(STUDY_PROGRESS_CHANNELS.answerCheckpoint, async (event, payload) => {
     assertTrustedSender(event)
     const input = answerStudyCheckpointSchema.parse(payload)
     const key = `${input.workspaceId}:${input.lessonId}:${input.checkpointId}`
-    const signature = `${input.selectedOptionId}\u0000${input.studentJustification}`
-    const recent = recentAnswers.get(key)
-    if (recent?.signature === signature && Date.now() - recent.at < 2_000) return recent.result
     const previousTask = answering.get(key) ?? Promise.resolve()
-    const task = previousTask.catch(() => undefined).then(() => {
-      const replay = recentAnswers.get(key)
-      if (replay?.signature === signature && Date.now() - replay.at < 2_000) return replay.result
-      const active = get(input.workspaceId)
-      if (!active || active.lessonId !== input.lessonId) throw new Error('Checkpoint does not belong to the active lesson')
-      const checkpoint = lessonCheckpoints(database, active, input.lessonId).find((item) => item.id === input.checkpointId)
-      const selected = checkpoint?.options.find((option) => option.id === input.selectedOptionId)
-      if (!checkpoint || !selected) throw new Error('Checkpoint option does not belong to the authoritative lesson')
-      const previous = active.checkpointStates?.[input.checkpointId]
-      const attempt = (previous?.attempt ?? 0) + 1
-      const correct = input.selectedOptionId === checkpoint.correctOptionId
-      const reinforcement = !correct && attempt > 1 ? checkpoint.reinforcement : null
-      const feedback = correct ? 'Correto. Sua escolha está consistente com o conceito avaliado.' : `Ainda não. ${selected.rationale}`
-      const now = Date.now()
-      const state: StudyCheckpointState = { selectedOptionId: input.selectedOptionId, studentJustification: input.studentJustification, attempt, correct, currentFeedback: feedback, currentReinforcement: reinforcement, rationale: selected.rationale, history: [...(previous?.history ?? []), { selectedOptionId: input.selectedOptionId, studentJustification: input.studentJustification, attempt, correct, feedback, rationale: selected.rationale, answeredAt: now }] }
-      const checkpointStates = { ...(active.checkpointStates ?? {}), [input.checkpointId]: state }
-      let replan = false
-      database.sqlite.transaction(() => {
-        database.sqlite.prepare('UPDATE study_progress SET current_checkpoint_id = ?, checkpoint_states_json = ?, updated_at = ? WHERE workspace_id = ?').run(input.checkpointId, JSON.stringify(checkpointStates), now, input.workspaceId)
-        database.sqlite.prepare('INSERT INTO study_progress_events (id, workspace_id, type, module_id, topic_id, lesson_id, checkpoint_id, correct, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(crypto.randomUUID(), input.workspaceId, 'CHECKPOINT_ANSWERED', active.moduleId, active.topicId, active.lessonId, input.checkpointId, correct ? 1 : 0, now)
-        const before = readLearningState(database, input.workspaceId, active.topicId, now)
-        const after = applyLearningEvidence(before, { type: 'CHECKPOINT_ANSWERED', correct, attempt, hintUsed: !correct, reinforcementUsed: reinforcement !== null, occurredAt: now })
-        replan = shouldReplan(before, after)
-        writeLearningState(database, after)
-      })()
-      const result = { state: get(input.workspaceId)!, evaluation: { correct, selectedOptionId: input.selectedOptionId, attempt, studentJustification: input.studentJustification, rationale: selected.rationale, misconceptionTag: selected.misconceptionTag ?? null, feedback, hint: correct ? null : checkpoint.hint, reinforcement }, shouldReplan: replan }
-      recentAnswers.set(key, { signature, at: now, result })
-      return result
-    }).finally(() => { if (answering.get(key) === task) answering.delete(key) })
+    const task = previousTask.catch(() => undefined).then(() => evaluateAndPersist(input, false)).finally(() => { if (answering.get(key) === task) answering.delete(key) })
+    answering.set(key, task)
+    return task
+  })
+  ipcMain.handle(STUDY_PROGRESS_CHANNELS.retryCheckpointReasoning, async (event, payload) => {
+    assertTrustedSender(event)
+    const input = retryCheckpointReasoningSchema.parse(payload)
+    const active = get(input.workspaceId)
+    const previous = active?.checkpointStates?.[input.checkpointId]
+    if (!previous?.selectedOptionId || !previous.studentJustification) throw new Error('Checkpoint answer not found')
+    const key = `${input.workspaceId}:${input.lessonId}:${input.checkpointId}`
+    const previousTask = answering.get(key) ?? Promise.resolve()
+    const task = previousTask.catch(() => undefined).then(() => evaluateAndPersist({ ...input, selectedOptionId: previous.selectedOptionId!, studentJustification: previous.studentJustification! }, true)).finally(() => { if (answering.get(key) === task) answering.delete(key) })
     answering.set(key, task)
     return task
   })

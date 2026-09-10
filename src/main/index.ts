@@ -148,7 +148,7 @@ void app.whenReady().then(async () => {
     const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory, getCurrentContext: (id) => currentWorkspaceContext.get(id), contextHub: workspaceContextHub, workspaceActions, searchMaterials: (id, query) => materialService.search(id, query), studyLessonService, exerciseService })
     registerApplicationHandlers()
     registerExerciseHandlers(exerciseService)
-    registerStudyProgressHandlers(database, () => toolchainManager.getStatuses())
+    registerStudyProgressHandlers(database, () => toolchainManager.getStatuses(), providerManager)
     registerStudyLessonHandlers(studyLessonService)
     registerWorkspaceHandlers(workspaceService)
     registerStudyWorkspaceHandlers(studyWorkspaceService)

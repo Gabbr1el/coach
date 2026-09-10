@@ -49,4 +49,11 @@ describe('study progress contract', () => {
     const restored = mapStudyProgressState({ workspaceId, roadmapId, currentModuleId: moduleId, currentTopicId: `${moduleId}:new`, currentLessonId: `${moduleId}:new:lesson`, currentCheckpointId: null, topicStatusesJson: '{}', lessonPositionsJson: '{}', updatedAt: 4 })
     expect(restored.currentPosition).toBeNull()
   })
+
+  it('reloads qualitative assessment and accepts legacy checkpoint state', () => {
+    const checkpointStatesJson = JSON.stringify({ checkpoint: { selectedOptionId: 'a', studentJustification: 'Explica o conceito corretamente', attempt: 1, correct: true, currentFeedback: 'Alternativa correta.', currentReinforcement: null, rationale: 'Razão', reasoningAssessment: { status: 'coherent', summary: 'Relaciona causa e efeito.', misconception: null, feedback: 'Continue.', evaluatedAt: 10, retryCount: 0, nextRetryAt: null }, history: [] }, legacy: { selectedOptionId: 'b', studentJustification: 'Legado', attempt: 1, correct: false, currentFeedback: 'Não', currentReinforcement: null, rationale: 'Razão', history: [] } })
+    const restored = mapStudyProgressState({ workspaceId, roadmapId, currentModuleId: moduleId, currentTopicId: 'topic', currentLessonId: 'lesson', currentCheckpointId: 'checkpoint', topicStatusesJson: '{}', lessonPositionsJson: '{}', checkpointStatesJson, updatedAt: 10 })
+    expect(restored.checkpointStates?.checkpoint?.reasoningAssessment).toMatchObject({ status: 'coherent', evaluatedAt: 10 })
+    expect(restored.checkpointStates?.legacy?.reasoningAssessment).toBeNull()
+  })
 })

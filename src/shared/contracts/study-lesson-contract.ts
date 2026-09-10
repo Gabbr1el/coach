@@ -35,7 +35,7 @@ export const activateStudyLessonAdaptationSchema = studyLessonAdaptationSelectio
 
 export type StudyLessonBlock = z.infer<typeof studyLessonBlockSchema>
 export interface PersistedStudyLesson extends z.infer<typeof studyLessonContentSchema> { readonly id: string; readonly generationKind: 'ai_generated' | 'provisional_fallback'; readonly workspaceId: string; readonly roadmapId: string; readonly moduleId: string; readonly topicId: string; readonly providerId: string | null; readonly modelId: string | null; readonly createdAt: number }
-export interface StudyCheckpointEvaluation { readonly correct: boolean; readonly selectedOptionId: string; readonly attempt: number; readonly studentJustification: string; readonly rationale: string; readonly misconceptionTag: string | null; readonly feedback: string; readonly hint: string | null; readonly reinforcement: string | null }
+export interface StudyCheckpointEvaluation { readonly correct: boolean; readonly selectedOptionId: string; readonly attempt: number; readonly studentJustification: string; readonly rationale: string; readonly misconceptionTag: string | null; readonly feedback: string; readonly hint: string | null; readonly reinforcement: string | null; readonly reasoningAssessment?: import('./study-progress-contract').CheckpointReasoningAssessment }
 export type StudyLessonLoadResult =
   | { readonly status: 'ready'; readonly lesson: PersistedStudyLesson; readonly sources: PersistedStudyLesson['sources'] }
   | { readonly status: 'waiting_for_provider'; readonly errorCode: 'PROVIDER_UNAVAILABLE' }

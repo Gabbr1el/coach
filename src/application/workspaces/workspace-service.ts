@@ -1,6 +1,6 @@
 import type { CreateWorkspaceInput, Workspace, WorkspaceProvisioningState, WorkspaceSummary } from '../../shared/contracts/workspace-contract'
 import type { WorkspaceRepository } from './workspace-repository'
-import { normalizeSubject } from './subject-normalizer'
+import { isProgrammingSubject, normalizeSubject, semanticSubjectKey, workspaceAnalysisSignature } from './subject-normalizer'
 import type { AcademicSubjectContextService } from './academic-subject-context'
 
 export interface WorkspaceServiceDependencies {
@@ -10,8 +10,9 @@ export interface WorkspaceServiceDependencies {
   readonly ensureLearningPath?: (workspaceId: string) => Promise<unknown>
   readonly academicContext?: AcademicSubjectContextService
   readonly createWithAcademicContexts?: (workspace: { id: string; name: string; objective: string; createdAt: number; updatedAt: number }, academic: { declaredLevel: CreateWorkspaceInput['declaredLevel']; declaredKnowledge: readonly string[]; declaredDifficulties: readonly string[]; goals: readonly string[] }, related: NonNullable<CreateWorkspaceInput['relatedSubjects']>) => Workspace
-  readonly saveLearningOverrides?: (workspaceId: string, subject: string, input: Pick<CreateWorkspaceInput, 'declaredLevel' | 'declaredKnowledge' | 'declaredDifficulties' | 'goals'>, now: number) => void
+  readonly saveLearningOverrides?: (workspaceId: string, subject: string, input: Pick<CreateWorkspaceInput, 'declaredLevel' | 'declaredKnowledge' | 'declaredDifficulties' | 'goals' | 'localKnowledgeProjection' | 'canonicalFocus' | 'canonicalContext'>, now: number) => void
   readonly provisioning?: { createDraft(workspaceId: string): WorkspaceProvisioningState; start(workspaceId: string): WorkspaceProvisioningState; get(workspaceId: string): WorkspaceProvisioningState | null; retry(workspaceId: string): WorkspaceProvisioningState; discardDraft(workspaceId: string): void }
+  readonly findSemanticDuplicate?: (canonicalKey: string, excludedId?: string) => Workspace | null
 }
 
 export class WorkspaceService {
@@ -23,8 +24,9 @@ export class WorkspaceService {
   private readonly createWithAcademicContexts?: WorkspaceServiceDependencies['createWithAcademicContexts']
   private readonly saveLearningOverrides?: WorkspaceServiceDependencies['saveLearningOverrides']
   private readonly provisioning?: WorkspaceServiceDependencies['provisioning']
+  private readonly findSemanticDuplicate?: WorkspaceServiceDependencies['findSemanticDuplicate']
 
-  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), ensureLearningPath, academicContext, createWithAcademicContexts, saveLearningOverrides, provisioning }: WorkspaceServiceDependencies) {
+  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), ensureLearningPath, academicContext, createWithAcademicContexts, saveLearningOverrides, provisioning, findSemanticDuplicate }: WorkspaceServiceDependencies) {
     this.repository = repository
     this.now = now
     this.createId = createId
@@ -33,6 +35,7 @@ export class WorkspaceService {
     this.createWithAcademicContexts = createWithAcademicContexts
     this.saveLearningOverrides = saveLearningOverrides
     this.provisioning = provisioning
+    this.findSemanticDuplicate = findSemanticDuplicate
   }
 
   list(): Promise<WorkspaceSummary[]> {
@@ -42,6 +45,8 @@ export class WorkspaceService {
   setLearningPathEnsurer(ensureLearningPath: (workspaceId: string) => Promise<unknown>): void { this.ensureLearningPath = ensureLearningPath }
 
   async create(input: CreateWorkspaceInput): Promise<Workspace> {
+    this.assertAnalyzed(input)
+    this.assertNoDuplicate(input, input.draftId)
     if (input.draftId) {
       const workspace = await this.repository.findById(input.draftId)
       if (!workspace || this.provisioning?.get(input.draftId)?.status !== 'draft') throw new Error('Workspace draft not found')
@@ -58,6 +63,8 @@ export class WorkspaceService {
   retryProvisioning(id: string): WorkspaceProvisioningState { if (!this.provisioning) throw new Error('Workspace provisioning is unavailable'); return this.provisioning.retry(id) }
 
   private async createRecord(input: CreateWorkspaceInput, draft: boolean): Promise<Workspace> {
+    this.assertAnalyzed(input)
+    this.assertNoDuplicate(input)
     const now = this.now()
     const normalized = normalizeSubject(input.name)
     const record = {
@@ -67,13 +74,25 @@ export class WorkspaceService {
       createdAt: now,
       updatedAt: now,
     }
-    const academic = { declaredLevel: input.declaredLevel, declaredKnowledge: input.declaredKnowledge ?? [], declaredDifficulties: input.declaredDifficulties ?? [], goals: [...(input.goals ?? []), input.objective].filter(Boolean) }
+    const academic = { declaredLevel: input.declaredLevel, declaredKnowledge: input.declaredKnowledge ?? [], declaredDifficulties: input.declaredDifficulties ?? [], goals: [...(input.goals ?? []), input.objective].filter(Boolean), localKnowledgeProjection: input.localKnowledgeProjection }
     const workspace = this.createWithAcademicContexts ? this.createWithAcademicContexts(record, academic, input.relatedSubjects ?? []) : await this.repository.create(record)
     this.saveLearningOverrides?.(workspace.id, normalized.subject, academic, now)
     if (!this.createWithAcademicContexts && !this.saveLearningOverrides) this.academicContext?.record({ subject: normalized.subject, declaredLevel: academic.declaredLevel ?? null, declaredKnowledge: academic.declaredKnowledge, declaredDifficulties: academic.declaredDifficulties, goals: academic.goals, sourceEvidence: [] })
     if (this.provisioning) { this.provisioning.createDraft(workspace.id); if (!draft) this.provisioning.start(workspace.id) }
     else void this.ensureLearningPath?.(workspace.id).catch(() => {})
     return workspace
+  }
+
+  private assertAnalyzed(input: CreateWorkspaceInput): void {
+    if (this.provisioning && (!input.analysisToken || !input.analysisRevision)) throw new Error('Workspace analysis is required')
+    if (this.provisioning && input.analysisToken !== `${input.analysisRevision}.${workspaceAnalysisSignature(input.name, input.canonicalFocus, input.canonicalContext)}`) throw new Error('Workspace analysis is stale; analyze the theme again')
+    if (this.provisioning && isProgrammingSubject(input.name) && !input.declaredLevel && !input.fundamentals) throw new Error('Programming fundamentals must be answered with yes, no, or unknown')
+  }
+
+  private assertNoDuplicate(input: CreateWorkspaceInput, excludedId?: string): void {
+    const duplicate = this.findSemanticDuplicate?.(semanticSubjectKey(input.name, input.canonicalFocus, input.canonicalContext), excludedId)
+    if (!duplicate) return
+    if (!input.duplicateOverride?.confirmed) throw new Error(`WORKSPACE_DUPLICATE|${duplicate.id}|${duplicate.name}`)
   }
 
   async open(id: string): Promise<Workspace | null> {

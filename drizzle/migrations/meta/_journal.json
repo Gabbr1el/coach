@@ -302,6 +302,13 @@
       "when": 1789060800000,
       "tag": "0042_checkpoint_reasoning",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1789077600000,
+      "tag": "0043_workspace_analysis_semantics",
+      "breakpoints": true
     }
   ]
 }

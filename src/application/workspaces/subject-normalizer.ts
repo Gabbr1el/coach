@@ -24,3 +24,17 @@ export function declaredSubjectKnowledge(message: string, subject: string): stri
   if (!sameKnownSubject || !mentionsRequestedSubject || !DIAGNOSTIC_SIGNAL.test(message)) return null
   return message.trim()
 }
+
+export function semanticSubjectKey(subject: string, focus = '', context = ''): string {
+  return [normalizeSubject(subject).subject, focus, context].map((value) => value.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9+#]+/g, ' ').trim()).filter(Boolean).join('|')
+}
+
+export function workspaceAnalysisSignature(subject: string, focus = '', context = ''): string {
+  let hash = 2166136261
+  for (const character of semanticSubjectKey(subject, focus, context)) { hash ^= character.codePointAt(0) ?? 0; hash = Math.imul(hash, 16777619) }
+  return (hash >>> 0).toString(36)
+}
+
+export function isProgrammingSubject(subject: string): boolean {
+  return /\b(?:python|java(?:script|fx)?|typescript|linguagem c|programa(?:cao|ção)|algoritmos?|estrutura(?:s)? de dados|desenvolvimento de software)\b/i.test(subject.normalize('NFD').replace(/\p{M}/gu, ''))
+}

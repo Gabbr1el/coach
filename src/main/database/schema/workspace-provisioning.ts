@@ -5,6 +5,8 @@ import { workspaces } from './workspaces'
 export const workspaceLearningOverrides = sqliteTable('workspace_learning_overrides', {
   workspaceId: text('workspace_id').primaryKey().references(() => workspaces.id, { onDelete: 'cascade' }),
   subject: text('subject').notNull(),
+  canonicalFocus: text('canonical_focus').notNull().default(''),
+  canonicalContext: text('canonical_context').notNull().default(''),
   declaredLevel: text('declared_level', { enum: ['beginner', 'intermediate', 'advanced'] }),
   declaredKnowledgeJson: text('declared_knowledge_json').notNull().default('[]'),
   declaredDifficultiesJson: text('declared_difficulties_json').notNull().default('[]'),

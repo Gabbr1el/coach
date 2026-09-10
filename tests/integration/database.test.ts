@@ -23,6 +23,8 @@ import { studyLessonContentSchema, studyPresentationPreferencesSchema, type Stud
 import { AcademicSubjectContextService } from '../../src/application/workspaces/academic-subject-context'
 import { SqliteAcademicSubjectContextRepository } from '../../src/main/repositories/sqlite-academic-subject-context-repository'
 import { SqliteExerciseRepository } from '../../src/main/repositories/sqlite-exercise-repository'
+import { PlanningService } from '../../src/application/planning/planning-service'
+import { DrizzlePlanningRepository } from '../../src/main/repositories/drizzle-planning-repository'
 
 const temporaryDirectories: string[] = []
 const migrationsFolder = resolve('drizzle/migrations')
@@ -165,6 +167,8 @@ describe('Coach database migrations', () => {
       { name: 'study_progress_events' },
       { name: 'study_sessions' },
       { name: 'topic_learning_states' },
+      { name: 'weekly_plan_items' },
+      { name: 'weekly_plans' },
       { name: 'workspace_academic_contexts' },
       { name: 'workspace_learning_overrides' },
       { name: 'workspace_learning_path_state' },
@@ -178,6 +182,15 @@ describe('Coach database migrations', () => {
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: CURRENT_MIGRATION_COUNT })
     expect(() => validateCoachDatabaseSchema(sqlite)).not.toThrow()
     database.close()
+  })
+
+  it('persists one weekly plan across restart without duplicate work', () => {
+    const databasePath = createDatabasePath(); const workspaceId = crypto.randomUUID(); let database = openCoachDatabase({ databasePath, migrationsFolder })
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,'C','Ponteiros','active',1,1)").run(workspaceId)
+    database.sqlite.prepare("INSERT INTO roadmaps (id,workspace_id,title,status,generation_kind,version,created_at,updated_at) VALUES ('roadmap',?,'C','accepted','ai_generated',1,1,1)").run(workspaceId)
+    database.sqlite.prepare("INSERT INTO roadmap_modules (id,roadmap_id,title,objective,estimated_minutes,position,status,topics_json,outcomes_json,practice,completion_criteria_json,resources_json) VALUES ('module','roadmap','Base','Aprender',120,1,'active','[\"Ponteiros\"]','[]','','[]','[]')").run()
+    const at = Date.parse('2026-09-09T14:00:00Z'); const service = new PlanningService(new DrizzlePlanningRepository(database), () => at); const first = service.replanWeek('UTC'); expect(first.days.flatMap((day) => day.items).length).toBeGreaterThan(0); database.close()
+    database = openCoachDatabase({ databasePath, migrationsFolder }); const restored = new PlanningService(new DrizzlePlanningRepository(database), () => at).getWeeklyPlan('UTC'); expect(restored.id).toBe(first.id); expect(new Set(restored.days.flatMap((day) => day.items).map((item) => item.id)).size).toBe(restored.days.flatMap((day) => day.items).length); database.close()
   })
 
   it('persists public exercise metadata and reloadable progress without private results', () => {

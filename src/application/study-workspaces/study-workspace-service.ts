@@ -16,6 +16,8 @@ export interface StudyWorkspaceServiceDependencies {
   readonly getRoadmap?: (workspaceId: string) => Roadmap | null
   readonly getStudyProgress?: (workspaceId: string) => StudyProgressState | null
   readonly getPlanContext?: (workspaceId: string) => { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; learningStates: Map<string, import('../study-progress/topic-learning').TopicLearningState>; startMinutes: number; dayKey: string; lastPlannedDayKey: string | null }
+  readonly getTodayPlan?: (workspaceId: string) => StudyPlanItem[]
+  readonly replanWeek?: () => void
 }
 
 interface WorkspaceCodeProfile { fileName: string; language: string; editorContent: string }
@@ -43,7 +45,7 @@ export class StudyWorkspaceService {
     const workspace = await this.requireWorkspace(workspaceId)
     const now = this.now()
     const existing = await this.dependencies.repository.findState(workspaceId, now)
-    if (existing) return existing
+    if (existing) return this.dependencies.getTodayPlan ? { ...existing, plan: this.dependencies.getTodayPlan(workspaceId) } : existing
     const plan = createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, [], this.createId, this.dependencies.getPlanContext?.(workspaceId))
     const activePlanItem = plan.find((item) => item.status === 'active') ?? null
     const timerDurationSeconds = activePlanItem?.durationMinutes ? activePlanItem.durationMinutes * 60 : 60
@@ -126,7 +128,8 @@ export class StudyWorkspaceService {
 
   async recalculatePlan(workspaceId: string): Promise<StudyWorkspaceState> {
     const state = await this.getState(workspaceId)
-    const plan = createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, state.plan, this.createId, this.dependencies.getPlanContext?.(workspaceId))
+    this.dependencies.replanWeek?.()
+    const plan = this.dependencies.getTodayPlan?.(workspaceId) ?? createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, state.plan, this.createId, this.dependencies.getPlanContext?.(workspaceId))
     const context = this.dependencies.getPlanContext?.(workspaceId)
     await this.dependencies.repository.replacePlan(workspaceId, state.sessionId, plan, this.now(), context?.dayKey)
     const active = plan.find((item) => item.status === 'active') ?? null

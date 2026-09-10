@@ -167,6 +167,8 @@ const api: CoachDesktopApi = {
     addRoutineNote: (content) => ipcRenderer.invoke(PLANNING_CHANNELS.addRoutineNote, { content }),
     listRoutineNotes: () => ipcRenderer.invoke(PLANNING_CHANNELS.listRoutineNotes),
     getSchedule: () => ipcRenderer.invoke(PLANNING_CHANNELS.getSchedule),
+    getWeeklyPlan: () => ipcRenderer.invoke(PLANNING_CHANNELS.getWeeklyPlan),
+    replanWeek: () => ipcRenderer.invoke(PLANNING_CHANNELS.replanWeek),
     applyAcademicMessage: (content) => ipcRenderer.invoke(PLANNING_CHANNELS.applyAcademicMessage, { content }),
     getAcademicOverview: () => ipcRenderer.invoke(PLANNING_CHANNELS.getAcademicOverview),
   },

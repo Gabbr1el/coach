@@ -40,6 +40,7 @@ export class DrizzleStudyWorkspaceRepository implements StudyWorkspaceRepository
     this.database.sqlite.transaction(() => {
       const active = this.database.sqlite.prepare('SELECT 1 FROM workspace_study_states WHERE workspace_id = ? AND active_session_id = ?').get(workspaceId, sessionId)
       if (!active) throw new Error('Study session changed while updating plan')
+      for (const item of statuses) { const changed = this.database.sqlite.prepare("UPDATE weekly_plan_items SET status=CASE ? WHEN 'active' THEN 'in_progress' ELSE ? END,updated_at=? WHERE id=? AND workspace_id=?").run(item.status, item.status, now, item.id, workspaceId); if (changed.changes !== 1) throw new Error('Weekly plan item changed while updating status') }
       this.database.orm.update(studyPlanItems).set({ status: 'pending', updatedAt: now }).where(and(eq(studyPlanItems.workspaceId, workspaceId), eq(studyPlanItems.sessionId, sessionId))).run()
       for (const item of statuses) this.database.orm.update(studyPlanItems).set({ status: item.status, updatedAt: now }).where(and(eq(studyPlanItems.workspaceId, workspaceId), eq(studyPlanItems.sessionId, sessionId), eq(studyPlanItems.id, item.id))).run()
     })()

@@ -56,12 +56,14 @@ const exerciseTables = {
   exercise_sets: {
     columns: [
       ['id', "''"], ['workspace_id', "''"], ['roadmap_id', "''"], ['module_id', "''"], ['topic_id', "''"], ['lesson_id', "''"],
+      ['content_revision', '1'], ['input_hash', "'legacy-unavailable'"],
       ['status', "'failed_retryable'"], ['provider_id', 'NULL'], ['model_id', 'NULL'], ['generation_attempts', '0'], ['retry_after', 'NULL'],
       ['last_error_code', 'NULL'], ['created_at', '0'], ['updated_at', '0'],
     ],
     create: `CREATE TABLE __coach_repair_exercise_sets (
       id text PRIMARY KEY NOT NULL, workspace_id text NOT NULL, roadmap_id text NOT NULL, module_id text NOT NULL,
-      topic_id text NOT NULL, lesson_id text NOT NULL, status text NOT NULL, provider_id text, model_id text,
+      topic_id text NOT NULL, lesson_id text NOT NULL, content_revision integer DEFAULT 1 NOT NULL,
+      input_hash text DEFAULT 'legacy-unavailable' NOT NULL, status text NOT NULL, provider_id text, model_id text,
       generation_attempts integer DEFAULT 0 NOT NULL, retry_after integer, last_error_code text, created_at integer NOT NULL,
       updated_at integer NOT NULL, FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON UPDATE no action ON DELETE cascade,
       CONSTRAINT exercise_sets_status_check CHECK(status in ('generating','ready','waiting_for_provider','failed_retryable'))

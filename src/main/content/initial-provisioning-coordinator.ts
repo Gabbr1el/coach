@@ -15,8 +15,6 @@ export class InitialProvisioningCoordinator {
 
   initialize(workspaceId: string): void {
     const now = this.now()
-    const existing = this.repository.getRevision(workspaceId)
-    if (existing && existing.inputHash !== 'legacy-unavailable') { this.advance(workspaceId); return }
     const workspace = this.database.sqlite.prepare('SELECT name,objective FROM workspaces WHERE id=?').get(workspaceId) as { name: string; objective: string }
     const override = this.database.sqlite.prepare('SELECT canonical_focus AS focus,canonical_context AS context,declared_level AS level,declared_knowledge_json AS knowledge,declared_difficulties_json AS difficulties,goals_json AS goals,onboarding_analysis_revision AS analysisRevision,onboarding_analysis_fingerprint AS analysisFingerprint FROM workspace_learning_overrides WHERE workspace_id=?').get(workspaceId) as Record<string, unknown>
     this.timelines?.markProvisioning(workspaceId, 'analyze', { outcome: override.analysisFingerprint ? 'validated' : 'unavailable' })
@@ -24,6 +22,8 @@ export class InitialProvisioningCoordinator {
     this.timelines?.markProvisioning(workspaceId, 'context')
     this.timelines?.markProvisioning(workspaceId, 'material_analysis', { cache: materials.length && materials.every((item: any) => Boolean(item.analysisFingerprint)) ? 'hit' : 'unavailable' })
     const inputHash = createHash('sha256').update(canonical({ workspace, override, materials })).digest('hex')
+    const existing = this.repository.getRevision(workspaceId)
+    if (existing && existing.inputHash === inputHash) { this.advance(workspaceId); return }
     const revision = this.repository.createRevision({ workspaceId, inputHash, now })
     this.enqueue(workspaceId, revision.revision, inputHash, 'roadmap_generate', 'roadmap', 900, [])
     this.timelines?.markProvisioning(workspaceId, 'roadmap', { outcome: 'queued' })
@@ -46,8 +46,9 @@ export class InitialProvisioningCoordinator {
     this.enqueue(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', first, 900, [lessonKey])
     const exerciseKey = this.key(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', first)
     this.enqueue(workspaceId, revision.revision, revision.inputHash, 'plan_recalculate', 'current-week', 850, [exerciseKey])
+    const planKey = this.key(workspaceId, revision.revision, revision.inputHash, 'plan_recalculate', 'current-week')
     const next = topics[1]
-    if (next) this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', next, 700, [roadmapKey])
+    if (next) this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', next, 500, [planKey])
     const units = [
       { kind: 'roadmap_generate' as const, unitKey: 'roadmap', inputHash: revision.inputHash },
       ...topics.map((unitKey) => ({ kind: 'lesson_generate' as const, unitKey, inputHash: revision.inputHash })),

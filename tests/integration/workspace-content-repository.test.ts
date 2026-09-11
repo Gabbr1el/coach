@@ -1,12 +1,18 @@
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { drizzle } from 'drizzle-orm/better-sqlite3'
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator'
 import { openCoachDatabase, type CoachDatabase } from '../../src/main/database/connection'
 import { SqliteWorkspaceContentRepository } from '../../src/main/repositories/sqlite-workspace-content-repository'
+import { InitialProvisioningCoordinator } from '../../src/main/content/initial-provisioning-coordinator'
+import { ContentGenerationWorker, type ContentJobHandler } from '../../src/application/workspaces/content-generation-worker'
+import { HeavyGenerationQueue } from '../../src/application/ai/heavy-generation-queue'
+import { PerformanceTimelineStore } from '../../src/main/telemetry/performance-timeline'
+import { DrizzleRoadmapRepository } from '../../src/main/repositories/drizzle-roadmap-repository'
+import { roadmapRebuildPreviewSchema, roadmapSchema } from '../../src/shared/contracts/roadmap-contract'
 
 const directories: string[] = []
 const migrationsFolder = resolve('drizzle/migrations')
@@ -37,7 +43,28 @@ function migrationsThrough0044(): string {
   return directory
 }
 
+function migrationsThrough0045(): string {
+  const directory = mkdtempSync(join(tmpdir(), 'coach-migrations-0045-'))
+  directories.push(directory)
+  cpSync(migrationsFolder, directory, { recursive: true })
+  const journalPath = join(directory, 'meta/_journal.json')
+  const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: Array<{ idx: number; tag: string }> }
+  const removed = journal.entries.filter((entry) => entry.idx > 45)
+  journal.entries = journal.entries.filter((entry) => entry.idx <= 45)
+  writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`)
+  for (const entry of removed) rmSync(join(directory, `${entry.tag}.sql`), { force: true })
+  return directory
+}
+
 describe('SqliteWorkspaceContentRepository', () => {
+  it('upgrades a copied 45-migration profile to 48 without touching the source database', () => {
+    const sourceDirectory = mkdtempSync(join(tmpdir(), 'coach-profile-source-')); directories.push(sourceDirectory)
+    const sourcePath = join(sourceDirectory, 'coach.sqlite'); const source = openCoachDatabase({ databasePath: sourcePath, migrationsFolder: migrationsThrough0045() }); workspace(source); source.close()
+    const before = readFileSync(sourcePath); const copyDirectory = mkdtempSync(join(tmpdir(), 'coach-profile-copy-')); directories.push(copyDirectory); const copyPath = join(copyDirectory, 'coach.sqlite'); cpSync(sourcePath, copyPath)
+    const copy = openCoachDatabase({ databasePath: copyPath, migrationsFolder }); expect((copy.sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get() as { count: number }).count).toBe(48); expect(copy.sqlite.pragma('integrity_check', { simple: true })).toBe('ok'); copy.close()
+    expect(readFileSync(sourcePath)).toEqual(before)
+  })
+
   it('backfills existing workspaces conservatively and survives reopen', () => {
     const directory = mkdtempSync(join(tmpdir(), 'coach-content-upgrade-')); directories.push(directory)
     const path = join(directory, 'coach.sqlite'); const sqlite = new Database(path); sqlite.pragma('foreign_keys = ON'); migrate(drizzle(sqlite), { migrationsFolder: migrationsThrough0044() }); const id = '00000000-0000-4000-8000-000000000001'; sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,'C','Ponteiros','active',1,1)").run(id); sqlite.close()
@@ -76,6 +103,15 @@ describe('SqliteWorkspaceContentRepository', () => {
     expect(published).toBe(false)
     expect(repository.getJob(reclaimed.id)?.status).toBe('obsolete')
     db.close()
+  })
+
+  it('requeues restart-expired leases without duplicate publication', () => {
+    const db = database(); const id = workspace(db); const repository = new SqliteWorkspaceContentRepository(db); repository.createRevision({ workspaceId: id, inputHash: hash('a'), now: 1 })
+    const queued = repository.enqueue({ workspaceId: id, revision: 1, kind: 'lesson_generate', unitKey: 'm:t', priority: 10, inputHash: hash('a'), generatorContractVersion: 'lesson-v1', availableAt: 1 }, 1)
+    const leased = repository.claimNext({ owner: 'dead-process', now: 2, leaseMs: 10 })!; expect(leased.id).toBe(queued.id); expect(repository.claimNext({ owner: 'new-process', now: 5, leaseMs: 10 })).toBeNull()
+    expect(repository.reconcile(13)).toEqual({ requeued: 1, obsoleted: 0 }); const resumed = repository.claimNext({ owner: 'new-process', now: 13, leaseMs: 10 })!; expect(resumed.id).toBe(queued.id)
+    expect(repository.publishLease({ jobId: resumed.id, leaseToken: resumed.leaseToken!, now: 14, publish: () => 'once' })).toBe('once')
+    expect(repository.publishLease({ jobId: leased.id, leaseToken: leased.leaseToken!, now: 15, publish: () => 'duplicate' })).toBeNull(); db.close()
   })
 
   it('requires roadmap, actionable lesson, exercise, plan, and ready jobs before USABLE', () => {
@@ -126,5 +162,39 @@ describe('SqliteWorkspaceContentRepository', () => {
     repository.replaceRequiredUnits(id, revision.revision, [], 22)
     expect(repository.getJob(job.id)?.status).toBe('obsolete')
     db.close()
+  })
+
+  it('runs material-first provisioning to USABLE, repairs an empty plan, and leaves N+1 queued', async () => {
+    const db = database(); const id = workspace(db); const repository = new SqliteWorkspaceContentRepository(db); const now = Date.now()
+    db.sqlite.prepare("INSERT INTO workspace_provisioning (workspace_id,status,stage,material_ids_json,attempt_count,created_at,started_at,stage_updated_at) VALUES (?,'running','materials','[]',0,?,?,?)").run(id, now, now, now)
+    db.sqlite.prepare("INSERT INTO workspace_learning_overrides (workspace_id,subject,canonical_focus,canonical_context,declared_knowledge_json,declared_difficulties_json,goals_json,created_at,updated_at) VALUES (?,'C','Ponteiros','Prova','[]','[]','[]',?,?)").run(id, now, now)
+    const materialId = crypto.randomUUID(); db.sqlite.prepare("INSERT INTO materials (id,workspace_id,name,media_type,content_hash,status,page_count,created_at,role,relevance,extraction_fingerprint,analysis_fingerprint) VALUES (?,?,'Apostila','application/pdf',?,'ready',1,?,'priority',100,?,?)").run(materialId, id, hash('a'), now, hash('b'), hash('c'))
+    const order: string[] = []; const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)); let coordinator!: InitialProvisioningCoordinator
+    const handlers: Partial<Record<import('../../src/shared/contracts/workspace-content-contract').ContentUnitKind, ContentJobHandler>> = {
+      roadmap_generate: async (job) => { order.push('roadmap'); await delay(15); return { publish: () => { db.sqlite.prepare("INSERT INTO roadmaps (id,workspace_id,title,status,generation_kind,version,content_revision,content_hash,created_at,updated_at) VALUES ('roadmap',?,'Material C','accepted','ai_generated',1,?,?,?,?)").run(id, job.revision, job.inputHash, now, now); db.sqlite.prepare("INSERT INTO roadmap_modules (id,roadmap_id,title,objective,estimated_minutes,position,status,topics_json,outcomes_json,practice,completion_criteria_json,resources_json) VALUES ('module','roadmap','Ponteiros','Aplicar',60,1,'active','[\"Ponteiros\",\"Arrays\"]','[\"Aplicar\"]','Praticar','[\"Concluir\"]',?)").run(JSON.stringify([{ kind: 'material', title: 'Apostila', type: 'material', materialId, pageNumber: 1, role: 'priority', excerptHash: hash('d') }])) } } },
+      lesson_generate: async (job) => { order.push(`lesson:${job.unitKey}`); await delay(15); return { publish: () => { const lesson = { title: job.unitKey, level: 'basic', objective: job.unitKey, sources: [], blocks: [{ id: `${job.unitKey}:a`, type: 'explanation', title: 'A', content: job.unitKey }, { id: `${job.unitKey}:b`, type: 'explanation', title: 'B', content: job.unitKey }, { id: `${job.unitKey}:c`, type: 'explanation', title: 'C', content: job.unitKey }, { id: `${job.unitKey}:check`, type: 'checkpoint', title: 'Check', questionType: 'multiple_choice', question: 'Qual?', options: Array.from({ length: 5 }, (_, index) => ({ id: `o${index}`, text: `Opcao ${index}`, rationale: `Razao ${index}` })), correctOptionId: 'o1', requiresJustification: true, hint: 'Pense', reinforcement: 'Revise' }] }; db.sqlite.prepare("INSERT INTO study_lessons (id,workspace_id,roadmap_id,module_id,topic_id,generation_kind,content_revision,input_hash,content_json,created_at,updated_at) VALUES (?,?, 'roadmap','module',?,'ai_generated',?,?,?, ?,?)").run(`${job.unitKey}:lesson`, id, job.unitKey, job.revision, job.inputHash, JSON.stringify(lesson), now, now) } } },
+      exercise_generate: async (job) => { order.push('exercise'); await delay(15); return { publish: () => { db.sqlite.prepare("INSERT INTO exercise_sets (id,workspace_id,roadmap_id,module_id,topic_id,lesson_id,content_revision,input_hash,status,generation_attempts,created_at,updated_at) VALUES ('set',?,'roadmap','module',? ,?, ?,?,'ready',1,?,?)").run(id, job.unitKey, `${job.unitKey}:lesson`, job.revision, job.inputHash, now, now); db.sqlite.prepare("INSERT INTO exercises (id,set_id,position,kind,difficulty,title,statement,input_description,output_description,language,starter_code,required_for_topic_completion,public_tests_json,private_tests_json,reference_solution,hint,created_at) VALUES ('exercise','set',1,'PROGRAMMING_PROBLEM','introductory','Pratica','Execute','','','c','int main(){}',1,?,?,?,'Dica',?)").run(JSON.stringify([{ id: 'p', input: '', expectedOutput: '' }]), JSON.stringify(Array.from({ length: 3 }, (_, index) => ({ id: `h${index}`, input: '', expectedOutput: '' }))), 'int main(){}', now) } } },
+      plan_recalculate: async () => { order.push('plan'); return { publish: () => { db.sqlite.prepare("INSERT INTO weekly_plans (id,week_start,timezone,revision,generated_at,updated_at) VALUES ('plan',date(?,'weekday 1','-7 days'),'UTC',1,?,?)").run(new Date(now).toISOString(), now, now); const dateKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now); db.sqlite.prepare("INSERT INTO weekly_plan_items (id,plan_id,workspace_id,source_key,date_key,title,duration_minutes,position,status,module_id,topic_id,activity_type,scheduled_start_minutes,reason,created_at,updated_at) VALUES ('item','plan',?,'first',?,'Ponteiros',30,1,'pending','module','module:Ponteiros','introduction',600,'Primeiro',?,?)").run(id, dateKey, now, now) } } },
+    }
+    const worker = new ContentGenerationWorker({ repository, admission: new HeavyGenerationQueue(), handlers, pollMs: 5, onPublished: (job) => coordinator.onPublished(job) }); coordinator = new InitialProvisioningCoordinator(db, repository, () => worker.wake(), Date.now, new PerformanceTimelineStore(db))
+    const sequentialStarted = performance.now(); for (let call = 0; call < 5; call += 1) await delay(15); const legacySequentialMs = performance.now() - sequentialStarted
+    const started = performance.now(); worker.start(); coordinator.initialize(id)
+    await vi.waitFor(() => expect(repository.getRevision(id)?.usableAt).not.toBeNull(), { timeout: 3000 }); const usableMs = repository.getRevision(id)!.usableAt! - now
+    expect(order.slice(0, 4)).toEqual(['roadmap', 'lesson:module:Ponteiros', 'exercise', 'plan'])
+    expect(db.sqlite.prepare("SELECT COUNT(*) AS count FROM content_jobs WHERE kind='lesson_generate' AND unit_key='module:Arrays' AND status IN ('pending','queued','generating','ready')").get()).toEqual({ count: 1 })
+    expect(db.sqlite.prepare("SELECT COUNT(*) AS count FROM weekly_plan_items WHERE workspace_id=?").get(id)).toEqual({ count: 1 })
+    const eventCount = (db.sqlite.prepare("SELECT COUNT(*) AS count FROM performance_timeline_events WHERE workspace_id=? AND operation_type='provisioning'").get(id) as { count: number }).count
+    expect(eventCount).toBeGreaterThan(0)
+    await worker.stop(); console.info(`[controlled-provisioning] legacy_sequential_provider_ms=${legacySequentialMs.toFixed(1)} progressive_provider_baseline_ms=45.0 progressive_usable_ms=${usableMs.toFixed(1)} provider_delay_ms=15 legacy_provider_calls=5 provider_calls_before_usable=3`); db.close()
+  })
+
+  it('persists, fetches, applies, and reloads a strict roadmap preview without module primary-key collisions', () => {
+    const db = database(); const id = workspace(db); const repository = new DrizzleRoadmapRepository(db); const now = Date.now(); const moduleId = crypto.randomUUID()
+    const roadmap = roadmapSchema.parse({ id: crypto.randomUUID(), workspaceId: id, title: 'Original', status: 'accepted', generationKind: 'ai_generated', version: 1, providerId: 'controlled', modelId: 'delayed', modules: [{ id: moduleId, title: 'Modulo', objective: 'Aprender', estimatedMinutes: 60, position: 1, status: 'active', topics: ['Primeiro', 'Segundo'], outcomes: ['Aplicar'], practice: 'Praticar', completionCriteria: ['Concluir'], resources: [] }], createdAt: now, updatedAt: now })
+    repository.activate(roadmap)
+    const preview = roadmapRebuildPreviewSchema.parse({ id: crypto.randomUUID(), workspaceId: id, currentRoadmapId: roadmap.id, title: 'Atualizado', modules: [{ ...roadmap.modules[0], topics: ['Primeiro', 'Terceiro'] }], materialIds: [crypto.randomUUID()], impact: { preservedModuleIds: [moduleId], preservedTopicIds: [`${moduleId}:Primeiro`], addedTopics: [`${moduleId}:Terceiro`], removedTopics: [`${moduleId}:Segundo`], unsafeProgressTopicIds: [], requiresAcknowledgement: false }, status: 'pending', appliedRoadmapId: null, createdAt: now, resolvedAt: null })
+    repository.saveRebuildPreview(preview); expect(repository.findLatestRebuildPreview(id)).toEqual(preview)
+    const applied = roadmapSchema.parse(repository.applyRebuildPreview(preview, now + 1)); expect(applied.modules[0]!.id).not.toBe(moduleId); expect(repository.findLatestRebuildPreview(id)?.status).toBe('applied')
+    const databasePath = db.path; db.close(); const reopened = openCoachDatabase({ databasePath, migrationsFolder }); expect(roadmapSchema.parse(new DrizzleRoadmapRepository(reopened).findCurrent(id))).toMatchObject({ id: applied.id, title: 'Atualizado' }); reopened.close()
   })
 })

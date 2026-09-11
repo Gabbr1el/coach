@@ -6,15 +6,22 @@ export type ProvisioningTimelineStage = 'analyze' | 'context' | 'material_extrac
 export type PerformanceTimelineStage = ChatTimelineStage | ProvisioningTimelineStage
 
 const SAFE_METADATA_KEYS = new Set(['intent', 'contextResources', 'historyCount', 'snippetCount', 'cache', 'jobKind', 'outcome', 'ttftMs', 'totalMs'])
+const SAFE_VALUES: Record<string, ReadonlySet<string>> = {
+  intent: new Set(['current_topic', 'planning', 'materials', 'action']),
+  contextResources: new Set(['materials', 'plan', 'academic', 'roadmap', 'lesson', 'progress', 'notes', 'workspace']),
+  cache: new Set(['hit', 'miss', 'unavailable']),
+  jobKind: new Set(['material_extract', 'material_analyze', 'roadmap_generate', 'lesson_generate', 'exercise_generate', 'plan_recalculate']),
+  outcome: new Set(['queued', 'published', 'completed', 'unavailable', 'validated', 'usable', 'fully_provisioned']),
+}
 
 function safeMetadata(input: Record<string, unknown>): Record<string, string | number | boolean | null | string[]> {
   const result: Record<string, string | number | boolean | null | string[]> = {}
   for (const [key, value] of Object.entries(input)) {
     if (!SAFE_METADATA_KEYS.has(key)) continue
-    if (typeof value === 'string') result[key] = value.slice(0, 100)
+    if (typeof value === 'string' && SAFE_VALUES[key]?.has(value)) result[key] = value
     else if (typeof value === 'number' && Number.isFinite(value)) result[key] = Math.max(0, Math.round(value))
     else if (typeof value === 'boolean' || value === null) result[key] = value
-    else if (Array.isArray(value) && value.every((item) => typeof item === 'string')) result[key] = value.slice(0, 8).map((item) => item.slice(0, 40))
+    else if (Array.isArray(value) && value.every((item) => typeof item === 'string') && value.every((item) => SAFE_VALUES[key]?.has(item))) result[key] = value.slice(0, 8)
   }
   return result
 }

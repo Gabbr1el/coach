@@ -102,8 +102,8 @@ export class SqliteWorkspaceContentRepository implements WorkspaceContentReposit
     return this.database.sqlite.prepare("UPDATE content_jobs SET lease_expires_at=?,updated_at=? WHERE id=? AND status='generating' AND lease_token=? AND lease_expires_at>?").run(input.now + (input.leaseMs ?? CONTENT_JOB_DEFAULTS.leaseMs), input.now, input.jobId, input.leaseToken, input.now).changes === 1
   }
 
-  releaseLease(input: { jobId: string; leaseToken: string; now: number; errorCode?: string; errorMessage?: string }): boolean {
-    return this.database.sqlite.prepare("UPDATE content_jobs SET status='queued',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,claimed_cancellation_generation=NULL,available_at=?,updated_at=?,last_error_code=?,last_error_message=? WHERE id=? AND status='generating' AND lease_token=?").run(input.now, input.now, input.errorCode ?? null, safeErrorMessage(input.errorMessage), input.jobId, input.leaseToken).changes === 1
+  releaseLease(input: { jobId: string; leaseToken: string; now: number; retryAt?: number; restoreAttempt?: boolean; errorCode?: string; errorMessage?: string }): boolean {
+    return this.database.sqlite.prepare("UPDATE content_jobs SET status='queued',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,claimed_cancellation_generation=NULL,attempt_count=MAX(0,attempt_count-?),available_at=?,updated_at=?,last_error_code=?,last_error_message=? WHERE id=? AND status='generating' AND lease_token=?").run(Number(input.restoreAttempt ?? false), input.retryAt ?? input.now, input.now, input.errorCode ?? null, safeErrorMessage(input.errorMessage), input.jobId, input.leaseToken).changes === 1
   }
 
   failLease(input: { jobId: string; leaseToken: string; now: number; retryAt?: number; errorCode: string; errorMessage?: string }): boolean {
@@ -144,6 +144,10 @@ export class SqliteWorkspaceContentRepository implements WorkspaceContentReposit
     return this.immediate(() => this.reconcileWithinTransaction(now))
   }
 
+  retryProviderUnavailable(now: number): number {
+    return this.database.sqlite.prepare("UPDATE content_jobs SET available_at=?,updated_at=?,last_error_code=NULL,last_error_message=NULL WHERE status='queued' AND last_error_code='PROVIDER_UNAVAILABLE'").run(now, now).changes
+  }
+
   evaluateReadiness(input: { workspaceId: string; expectedRevision: number; todayDateKey: string; now: number }): WorkspaceContentRevision {
     return this.immediate(() => {
       const revision = this.requireCurrent(input.workspaceId, input.expectedRevision)
@@ -155,7 +159,7 @@ export class SqliteWorkspaceContentRepository implements WorkspaceContentReposit
       const planValid = first ? Boolean(this.database.sqlite.prepare("SELECT 1 FROM weekly_plan_items WHERE workspace_id=? AND date_key=? AND topic_id=? AND status<>'completed' LIMIT 1").get(input.workspaceId, input.todayDateKey, first.topicId) ?? this.database.sqlite.prepare("SELECT 1 FROM study_plan_items WHERE workspace_id=? AND topic_id=? AND status<>'completed' LIMIT 1").get(input.workspaceId, first.topicId)) : false
       const readinessJobs = first ? this.database.sqlite.prepare("SELECT kind,unit_key AS unitKey FROM content_jobs WHERE workspace_id=? AND revision=? AND input_hash=? AND status='ready' AND ((kind='roadmap_generate' AND unit_key='roadmap') OR (kind IN ('lesson_generate','exercise_generate') AND unit_key=?))").all(input.workspaceId, input.expectedRevision, revision.inputHash, first.topicId) as Array<{ kind: string; unitKey: string }> : []
       const readyKinds = new Set(readinessJobs.map((job) => job.kind))
-      const nextQueued = first ? Boolean(this.database.sqlite.prepare("SELECT 1 FROM roadmap_modules m,json_each(m.topics_json) topic JOIN content_jobs j ON j.workspace_id=? AND j.revision=? AND j.kind='lesson_generate' AND j.unit_key=(m.id || ':' || topic.value) AND j.status IN ('pending','queued','generating','ready') WHERE m.roadmap_id=? AND (m.position>(SELECT position FROM roadmap_modules WHERE id=?) OR (m.id=? AND CAST(topic.key AS integer)>0)) LIMIT 1").get(input.workspaceId, input.expectedRevision, roadmap!.id, first.moduleId, first.moduleId) ?? this.database.sqlite.prepare("SELECT 1 WHERE (SELECT SUM(json_array_length(topics_json)) FROM roadmap_modules WHERE roadmap_id=?)=1").get(roadmap!.id)) : false
+      const nextQueued = first ? Boolean(this.database.sqlite.prepare("SELECT 1 FROM roadmap_modules m,json_each(m.topics_json) topic JOIN content_jobs j ON j.workspace_id=? AND j.revision=? AND j.kind='lesson_generate' AND j.unit_key=(m.id || ':' || topic.value) AND j.status IN ('pending','queued','generating','ready') WHERE m.roadmap_id=? AND (m.position>(SELECT position FROM roadmap_modules WHERE id=?) OR (m.id=? AND CAST(topic.key AS integer)>0)) LIMIT 1").get(input.workspaceId, input.expectedRevision, roadmap!.id, first.moduleId, first.moduleId)) : false
       const usable = Boolean(roadmap && first && lesson && lessonValid && exerciseValid && planValid && nextQueued && readyKinds.has('roadmap_generate') && readyKinds.has('lesson_generate') && readyKinds.has('exercise_generate'))
       const required = this.listRequiredUnits(input.workspaceId, input.expectedRevision)
       const allRequiredReady = required.length > 0 && required.every((unit) => Boolean(this.database.sqlite.prepare("SELECT 1 FROM content_jobs WHERE workspace_id=? AND revision=? AND kind=? AND unit_key=? AND input_hash=? AND status='ready'").get(unit.workspaceId, unit.revision, unit.kind, unit.unitKey, unit.inputHash)))

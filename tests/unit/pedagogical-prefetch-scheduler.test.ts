@@ -9,4 +9,10 @@ describe('PedagogicalPrefetchScheduler', () => {
     scheduler.schedule({ type: 'topic_opened', workspaceId: revision.workspaceId, topicId: 'm:one' }); scheduler.schedule({ type: 'checkpoint_interacted', workspaceId: revision.workspaceId, topicId: 'm:one' })
     expect([...jobs.keys()]).toEqual(['lesson_generate:m:one', 'exercise_generate:m:one', 'lesson_generate:m:two']); expect(jobs.get('lesson_generate:m:one').priority).toBe(1000); expect(repository.enqueue).toHaveBeenCalledTimes(5)
   })
+
+  it('does nothing until the workspace has a persisted non-legacy content revision', () => {
+    const repository = { getRevision: () => null, enqueue: () => { throw new Error('must not enqueue') } }
+    const scheduler = new PedagogicalPrefetchScheduler({ repository: repository as never, getRoadmap: () => null })
+    expect(scheduler.schedule({ type: 'topic_opened', workspaceId: '00000000-0000-4000-8000-000000000001', topicId: 'm:t' })).toEqual([])
+  })
 })

@@ -99,6 +99,11 @@ export class ContentGenerationWorker {
     this.wake()
   }
 
+  retryProviderUnavailable(): void {
+    this.repository.retryProviderUnavailable(this.clock.now())
+    this.wake()
+  }
+
   private schedule(delayMs: number): void {
     if (!this.running || this.pollHandle !== null) return
     this.pollHandle = this.clock.setTimeout(() => { this.pollHandle = null; void this.tick() }, delayMs)
@@ -133,6 +138,7 @@ export class ContentGenerationWorker {
       if (current?.status === 'generating' && current.leaseToken === leaseToken) {
         if (!this.running) this.repository.releaseLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: 'WORKER_SHUTDOWN' })
         else if (timedOut) this.repository.failLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: 'GENERATION_TIMEOUT' })
+        else if (errorCode(error) === 'PROVIDER_UNAVAILABLE') this.repository.releaseLease({ jobId: job.id, leaseToken, now: this.clock.now(), retryAt: this.clock.now() + 300_000, restoreAttempt: true, errorCode: 'PROVIDER_UNAVAILABLE' })
         else this.repository.failLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: errorCode(error), errorMessage: error instanceof Error ? error.message : undefined })
       }
     } finally {

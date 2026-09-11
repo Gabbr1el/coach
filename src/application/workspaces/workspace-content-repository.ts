@@ -44,9 +44,10 @@ export interface WorkspaceContentRepository {
   getJob(id: string): ContentJob | null
   claimNext(input: { owner: string; now: number; leaseMs?: number }): ContentJob | null
   renewLease(input: { jobId: string; leaseToken: string; now: number; leaseMs?: number }): boolean
-  releaseLease(input: { jobId: string; leaseToken: string; now: number; errorCode?: string; errorMessage?: string }): boolean
+  releaseLease(input: { jobId: string; leaseToken: string; now: number; retryAt?: number; restoreAttempt?: boolean; errorCode?: string; errorMessage?: string }): boolean
   failLease(input: { jobId: string; leaseToken: string; now: number; retryAt?: number; errorCode: string; errorMessage?: string }): boolean
   publishLease<T>(input: { jobId: string; leaseToken: string; now: number; publish: () => T }): T | null
   reconcile(now: number): { requeued: number; obsoleted: number }
+  retryProviderUnavailable(now: number): number
   evaluateReadiness(input: { workspaceId: string; expectedRevision: number; todayDateKey: string; now: number }): WorkspaceContentRevision
 }

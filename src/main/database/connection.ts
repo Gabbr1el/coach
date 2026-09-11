@@ -23,8 +23,9 @@ import * as academicSubjectContextSchema from './schema/academic-subject-context
 import * as exerciseSchema from './schema/exercises'
 import * as workspaceProvisioningSchema from './schema/workspace-provisioning'
 import * as academicLifeSchema from './schema/academic-life'
+import * as performanceTimelineSchema from './schema/performance-timelines'
 
-const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema, ...studyWorkspaceSchema, ...learningEventSchema, ...planningSchema, ...materialSchema, ...memorySchema, ...navigationSchema, ...projectSchema, ...roadmapSchema, ...plannerActionSchema, ...studyProgressSchema, ...studyLessonSchema, ...academicSubjectContextSchema, ...exerciseSchema, ...workspaceProvisioningSchema, ...academicLifeSchema }
+const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema, ...studyWorkspaceSchema, ...learningEventSchema, ...planningSchema, ...materialSchema, ...memorySchema, ...navigationSchema, ...projectSchema, ...roadmapSchema, ...plannerActionSchema, ...studyProgressSchema, ...studyLessonSchema, ...academicSubjectContextSchema, ...exerciseSchema, ...workspaceProvisioningSchema, ...academicLifeSchema, ...performanceTimelineSchema }
 
 export interface CoachDatabase {
   readonly sqlite: Database.Database

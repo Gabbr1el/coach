@@ -38,7 +38,7 @@ export class WorkspaceProvisioningService {
     const current = this.require(workspaceId)
     if (current.status === 'ready') return current
     const now = this.now(); const materialIds = this.dependencies.listReadyMaterialIds(workspaceId)
-    const queued = this.dependencies.repository.save({ ...current, status: 'queued', stage: materialIds.length ? 'materials' : 'workspace', materialIds, stageUpdatedAt: now, retryAfter: null, errorCode: null, errorMessage: null })
+    const queued = this.dependencies.repository.save({ ...current, status: 'queued', stage: materialIds.length ? 'materials' : 'workspace', materialIds, startedAt: current.startedAt ?? now, stageUpdatedAt: now, retryAfter: null, errorCode: null, errorMessage: null })
     if (this.dependencies.initializeContent) { this.dependencies.initializeContent(workspaceId); return this.require(workspaceId) }
     void this.resume(workspaceId)
     return queued

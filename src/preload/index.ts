@@ -109,11 +109,16 @@ const api: CoachDesktopApi = {
         disposed = true
         ipcRenderer.removeListener(CONVERSATION_CHANNELS.workspaceStreamEvent, listener)
       }
+      let firstTokenReported = false
       const listener = (_event: Electron.IpcRendererEvent, streamEvent: Parameters<typeof onEvent>[0]) => {
         if (disposed || streamEvent.requestId !== input.requestId) return
         const terminal = streamEvent.type === 'completed' || streamEvent.type === 'cancelled' || streamEvent.type === 'error'
         if (terminal) dispose()
         onEvent(streamEvent)
+        if (streamEvent.type === 'text-delta' && streamEvent.content && !firstTokenReported) {
+          firstTokenReported = true
+          setTimeout(() => void ipcRenderer.invoke(CONVERSATION_CHANNELS.rendererFirstToken, { requestId: input.requestId }), 0)
+        }
       }
       ipcRenderer.on(CONVERSATION_CHANNELS.workspaceStreamEvent, listener)
       void ipcRenderer.invoke(CONVERSATION_CHANNELS.streamWorkspaceMessage, input).catch(() => {

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
 import type { CoachDatabase } from '../database/connection'
 import { materialSemanticAnalysisSchema, type MaterialReadResult, type MaterialSearchResult, type MaterialSemanticAnalysis, type MaterialSummary } from '../../shared/contracts/material-contract'
+import type { PerformanceTimelineStore } from '../telemetry/performance-timeline'
 
 const MAX_PDF_BYTES = 20_000_000
 const MAX_PAGES = 500
@@ -41,6 +42,7 @@ export interface PdfMaterialServiceOptions {
   readonly createId?: () => string
   readonly analyzeSemantic?: (request: MinimalMaterialReviewRequest) => Promise<MaterialSemanticAnalysis>
   readonly extractPptxSlides?: (path: string) => Promise<string[]>
+  readonly timelines?: PerformanceTimelineStore
 }
 
 export interface LexicalRelevanceAssessment {
@@ -135,14 +137,24 @@ export class PdfMaterialService {
       const pages = isPdf ? await this.extractPages(data) : await (this.options.extractPptxSlides ? this.options.extractPptxSlides(path) : extractPptxSlides(data))
       const extracted = prepareExtractedPages(pages)
       this.persistExtraction(materialId, extracted)
+      this.options.timelines?.markProvisioning(workspaceId, 'material_extraction', { outcome: 'completed' })
       const assessment = assessLexicalRelevance(workspace, name, extracted)
       this.database.sqlite.prepare('UPDATE materials SET relevance = ? WHERE id = ?').run(assessment.relevance, materialId)
       const request = { workspaceName: workspace.name, workspaceObjective: workspace.objective, fileName: name, excerpt: samplePages(extracted, MAX_REVIEW_CHARACTERS), lexicalRelevance: assessment.relevance }
       let semantic: MaterialSemanticAnalysis | null = null
-      try { semantic = this.options.analyzeSemantic ? materialSemanticAnalysisSchema.parse(await this.options.analyzeSemantic(request)) : null } catch { semantic = null }
+      const roleContextHash = createHash('sha256').update(normalize(`${workspace.name}|${workspace.objective}`)).digest('hex')
+      const analysisFingerprint = createHash('sha256').update(`${extractionFingerprint}|${roleContextHash}|${ANALYSIS_CONTRACT_VERSION}`).digest('hex')
+      const cached = this.database.sqlite.prepare('SELECT analysis_json AS analysisJson FROM material_analysis_cache WHERE analysis_fingerprint = ?').get(analysisFingerprint) as { analysisJson: string } | undefined
+      try {
+        semantic = cached ? materialSemanticAnalysisSchema.parse(JSON.parse(cached.analysisJson)) : this.options.analyzeSemantic ? materialSemanticAnalysisSchema.parse(await this.options.analyzeSemantic(request)) : null
+      } catch { semantic = null }
+      this.options.timelines?.markProvisioning(workspaceId, 'material_analysis', { cache: cached ? 'hit' : semantic ? 'miss' : 'unavailable', outcome: semantic ? 'completed' : 'unavailable' })
       if (semantic) {
-        const analysisFingerprint = createHash('sha256').update(`${extractionFingerprint}|${normalize(`${workspace.name}|${workspace.objective}`)}|${ANALYSIS_CONTRACT_VERSION}`).digest('hex')
-        this.database.sqlite.prepare('UPDATE materials SET semantic_analysis_json = ?, analysis_fingerprint = ? WHERE id = ?').run(JSON.stringify(semantic), analysisFingerprint, materialId)
+        const analysisJson = JSON.stringify(semantic)
+        this.database.sqlite.transaction(() => {
+          this.database.sqlite.prepare('INSERT INTO material_analysis_cache (analysis_fingerprint,content_hash,extraction_fingerprint,parser_revision,schema_revision,role_context_hash,analysis_json,created_at,last_used_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(analysis_fingerprint) DO UPDATE SET last_used_at=excluded.last_used_at').run(analysisFingerprint, hash, extractionFingerprint, EXTRACTION_CONTRACT_VERSION, ANALYSIS_CONTRACT_VERSION, roleContextHash, analysisJson, createdAt, this.now())
+          this.database.sqlite.prepare('UPDATE materials SET semantic_analysis_json = ?, analysis_fingerprint = ? WHERE id = ?').run(analysisJson, analysisFingerprint, materialId)
+        })()
       }
       if (semantic?.relevance === 'unrelated' && semantic.confidence >= 0.8) return this.rejectMaterial(materialId, 'Este documento não parece relacionado ao estudo.')
       return this.getMaterial(materialId)

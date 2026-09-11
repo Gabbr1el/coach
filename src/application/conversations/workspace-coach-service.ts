@@ -13,6 +13,7 @@ import type { WorkspaceContextHub } from '../workspaces/workspace-context-hub'
 import type { WorkspaceActionService } from '../workspaces/workspace-action-service'
 import type { MaterialSearchResult } from '../../shared/contracts/material-contract'
 import { extractJsonDocument } from '../ai/structured-json'
+import type { HeavyGenerationRunner } from '../ai/heavy-generation-queue'
 
 type StudyLessonAdapter = {
   adaptSection(input: { workspaceId: string; roadmapId: string; moduleId: string; topicId: string; lessonId: string; blockId: string; instruction: string; mode?: StudyPresentationIntent }, signal?: AbortSignal): Promise<StudyLessonAdaptation>
@@ -42,6 +43,17 @@ export interface WorkspaceCoachServiceDependencies {
   readonly exerciseService?: ExerciseHelper
   readonly now?: () => number
   readonly createId?: () => string
+  readonly admission?: HeavyGenerationRunner
+}
+
+export type WorkspaceChatIntent = 'current_topic' | 'planning' | 'materials' | 'action'
+export type WorkspaceChatProgress = 'context_started' | 'context_ready' | 'provider_request_started' | 'provider_first_token' | 'provider_completed' | 'persistence_completed' | 'executing'
+
+export function workspaceChatIntent(input: Pick<StreamWorkspaceMessageInput, 'content' | 'activePage' | 'activeMaterial'>): WorkspaceChatIntent {
+  if (/\b(adicione|registre|anote|salve|recalcule|refaça|refaca|conclu[íi]|finalizei|terminei|adapte|incorpore|integre)\b/i.test(input.content)) return 'action'
+  if (input.activeMaterial || input.activePage === 'materials' || /\b(material|apostila|pdf|slide|documento|fonte)\b/i.test(input.content)) return 'materials'
+  if (input.activePage === 'plan' || /\b(plano|planej|prazo|agenda|semana|hoje|amanhã|amanha)\b/i.test(input.content)) return 'planning'
+  return 'current_topic'
 }
 
 const PRESENTATION_INTENTS: ReadonlyArray<[StudyPresentationIntent, RegExp]> = [
@@ -126,8 +138,14 @@ export class WorkspaceCoachService {
     return this.dependencies.repository.listMessages(threadId, 100)
   }
 
-  async *streamMessage(workspaceId: string, input: StreamWorkspaceMessageInput, signal: AbortSignal, onMetadata?: (metadata: WorkspaceCoachResponseMetadata) => void): AsyncIterable<string> {
-    const { workspace, threadId } = await this.ensureThread(workspaceId)
+  async *streamMessage(workspaceId: string, input: StreamWorkspaceMessageInput, signal: AbortSignal, onMetadata?: (metadata: WorkspaceCoachResponseMetadata) => void, onProgress?: (stage: WorkspaceChatProgress, metadata?: Record<string, unknown>) => void): AsyncIterable<string> {
+    onProgress?.('context_started')
+    const threadId = threadIdFor(workspaceId)
+    const intent = workspaceChatIntent(input)
+    const historyLimit = intent === 'current_topic' ? 6 : 4
+    const [workspace, recentMessages, current] = await Promise.all([this.dependencies.getWorkspace(workspaceId), this.dependencies.repository.listMessages(threadId, historyLimit), this.dependencies.getCurrentContext?.(workspaceId)])
+    if (!workspace || workspace.status !== 'active') throw new Error('Workspace not found')
+    await this.dependencies.repository.ensureWorkspaceThread(threadId, workspaceId, workspace.name, this.now())
     const exerciseId = input.activePage === 'exercises' ? input.activeExercise?.exerciseId : undefined
     let activeExercise = exerciseId ? this.dependencies.exerciseService?.getPublicContext({ workspaceId, exerciseId }) ?? null : null
     const exerciseHelpRequested = Boolean(activeExercise && EXERCISE_HELP_REQUEST.test(input.content) && !EXERCISE_HELP_DENIAL.test(input.content))
@@ -137,9 +155,8 @@ export class WorkspaceCoachService {
       activeExercise = this.dependencies.exerciseService.getPublicContext({ workspaceId, exerciseId: activeExercise!.exerciseId })
     }
     const routedInput = { ...input, activeExercise: undefined }
-    const current = await this.dependencies.getCurrentContext?.(workspaceId)
     const presentationRequest = input.activePage === 'studies' && input.activeStudy ? presentationRequestFor(input.content) : null
-    const immediateContext = await this.dependencies.contextHub?.immediate(workspaceId, { activePage: input.activePage ?? 'coach', activeStudy: input.activeStudy, currentBlockId: input.activeStudy?.currentBlockId, currentExcerpt: input.activeStudy?.currentExcerpt })
+    const immediateContext = await this.dependencies.contextHub?.immediate(workspaceId, { activePage: input.activePage ?? 'coach', activeStudy: input.activeStudy, currentBlockId: input.activeStudy?.currentBlockId, currentExcerpt: input.activeStudy?.currentExcerpt, includePlanning: intent === 'planning', ...(current ? { current } : {}) })
     if (current && presentationRequest && input.activeStudy && !input.activeInteractiveCode && this.dependencies.studyLessonService) {
       if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
       const study = input.activeStudy
@@ -152,6 +169,7 @@ export class WorkspaceCoachService {
         const now = this.now()
         await this.dependencies.repository.addTurn({ threadId, user: { id: this.createId(), threadId, role: 'user', content: input.content.trim(), providerId: null, modelId: null, createdAt: now }, assistant: { id: this.createId(), threadId, role: 'assistant', content: response, providerId: 'coach-local', modelId: 'lesson-adaptation-v1', createdAt: now + 1 } })
         onMetadata?.({ lessonAdapted: { lessonId: study.lessonId, blockId: study.currentBlockId } })
+        onProgress?.('persistence_completed')
         return
       } catch (error) {
         if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) throw error
@@ -159,6 +177,7 @@ export class WorkspaceCoachService {
         yield response
         const now = this.now()
         await this.dependencies.repository.addTurn({ threadId, user: { id: this.createId(), threadId, role: 'user', content: input.content.trim(), providerId: null, modelId: null, createdAt: now }, assistant: { id: this.createId(), threadId, role: 'assistant', content: response, providerId: 'coach-local', modelId: 'lesson-adaptation-v1', createdAt: now + 1 } })
+        onProgress?.('persistence_completed')
         return
       }
     }
@@ -170,6 +189,7 @@ export class WorkspaceCoachService {
       yield response
       if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
       await this.dependencies.repository.addTurn({ threadId, user: { id: this.createId(), threadId, role: 'user', content: input.content.trim(), providerId: null, modelId: null, createdAt: this.now() }, assistant: { id: this.createId(), threadId, role: 'assistant', content: response, providerId: null, modelId: null, createdAt: this.now() } })
+      onProgress?.('persistence_completed')
       return
     }
     const provider = this.dependencies.providerManager.route('tutor')
@@ -184,22 +204,31 @@ export class WorkspaceCoachService {
       activeExercise: activeExercise ?? undefined,
     } : undefined
     const routed = (this.dependencies.contextRouter ?? new ContextRouter()).route(routedInput, observer, authorizedContext)
-    const recentMessages = await this.dependencies.repository.listMessages(threadId, 4)
     const userContent = input.content.trim()
     let supplementalContext: unknown[] = []
     let proposedAction: { type: 'notes.add' | 'plan.recalculate' | 'plan.complete' | 'roadmap.preview-materials'; arguments: Record<string, unknown> } | null = null
-    if (provider.sendMessage && this.dependencies.contextHub) { try { let chars = 0; for (let round = 0; round < 2; round += 1) { const response = await provider.sendMessage({ messages: [{ role: 'system', content: 'Retorne somente JSON: {"kind":"final_response"}, {"kind":"context_read","requests":[{"resource":"materials|academic|roadmap|progress|lesson|plan|notes|workspace","id"?:string,"offset"?:number,"limit"?:number,"pageNumber"?:number,"query"?:string}]}, ou {"kind":"workspace_action","action":{"type":"notes.add|plan.recalculate|plan.complete|roadmap.preview-materials","arguments":{"itemId"?:string,"materialIds"?:string[],"instruction"?:string}}}. roadmap.preview-materials é a ação material para adaptar currículo/estudo com PDFs aprovados: use somente IDs reais obtidos de materials e gere uma prévia persistida, nunca aplique o Roadmap diretamente. Para plan.complete, use somente o id exato do item no contexto autorizado. Para analisar material citado ou ativo, primeiro liste/busque e depois leia conteúdo. Para mudar notas/plano ou gerar prévia curricular, proponha ação material; não afirme que ela já ocorreu. Máximo 3 leituras por rodada.' }, { role: 'user', content: JSON.stringify({ message: userContent, immediateContext, activeMaterial: input.activeMaterial ?? null, activeInteractiveCode: input.activeInteractiveCode ?? null, activeExercise, contextReadResults: supplementalContext }) }], maxOutputTokens: 500, signal }); const decision = workspaceCoachDecisionSchema.parse(extractJsonDocument(response.content)); if (decision.kind === 'final_response') break; if (decision.kind === 'workspace_action') { proposedAction = decision.action; break } for (const request of decision.requests) { const result = await this.dependencies.contextHub.read(workspaceId, request.resource, request); console.info('[WorkspaceCoach] context read', { workspaceId, resource: request.resource, hasId: Boolean(request.id), pageNumber: request.pageNumber ?? null }); const json = JSON.stringify(result).slice(0, Math.max(0, 12_000 - chars)); chars += json.length; supplementalContext.push(JSON.parse(json || 'null')); if (chars >= 12_000) break } if (chars >= 12_000) break } } catch { supplementalContext = [] } }
+    if (this.dependencies.contextHub && intent === 'materials') {
+      const options = input.activeMaterial?.materialId
+        ? { id: input.activeMaterial.materialId, ...(input.activeMaterial.pageOrSlide ? { pageNumber: input.activeMaterial.pageOrSlide } : {}), limit: 6000 }
+        : { query: userContent, limit: 6000 }
+      supplementalContext = [await this.dependencies.contextHub.read(workspaceId, 'materials', options)]
+    } else if (this.dependencies.contextHub && intent === 'planning') {
+      supplementalContext = await Promise.all([this.dependencies.contextHub.read(workspaceId, 'plan', { limit: 20 }), this.dependencies.contextHub.read(workspaceId, 'academic', { limit: 20 })])
+    }
+    if (intent === 'action' && provider.sendMessage && this.dependencies.contextHub) { try { const response = await provider.sendMessage({ messages: [{ role: 'system', content: 'Retorne somente JSON com final_response, uma única context_read de até 3 recursos independentes, ou workspace_action. Nunca afirme que uma ação ocorreu antes do resultado autoritativo.' }, { role: 'user', content: JSON.stringify({ message: userContent, immediateContext }) }], maxOutputTokens: 500, signal }); const decision = workspaceCoachDecisionSchema.parse(extractJsonDocument(response.content)); if (decision.kind === 'workspace_action') proposedAction = decision.action; else if (decision.kind === 'context_read') supplementalContext = await Promise.all(decision.requests.map((request) => this.dependencies.contextHub!.read(workspaceId, request.resource, request))) } catch (error) { if (signal.aborted) throw error } }
     if (proposedAction) {
       const denied = /\b(?:não|nao|nunca|não quero|nao quero|não faça|nao faca)\b/i.test(userContent)
       const noteContent = String(proposedAction.arguments.content ?? '').trim()
       const noteWords = noteContent.match(/[\p{L}\p{N}]{3,}/gu) ?? []
       const explicitlyAuthorized = !denied && (proposedAction.type === 'notes.add' ? /\b(?:adicione|registre|anote|salve)\b/i.test(userContent) && /\b(?:nota|notas|anotaç(?:ão|ões)|anotac(?:ao|oes))\b/i.test(userContent) && noteContent.length >= 10 && noteWords.length >= 2 && userContent.toLocaleLowerCase('pt-BR').includes(noteContent.toLocaleLowerCase('pt-BR')) : proposedAction.type === 'plan.complete' ? /\b(?:conclu[íi]|finalizei|terminei|complete)\b.{0,50}\b(?:atividade|item|plano)\b|\b(?:atividade|item)\b.{0,50}\b(?:conclu[íi]d[ao]|finalizad[ao]|terminad[ao])\b/i.test(userContent) : proposedAction.type === 'roadmap.preview-materials' ? /\b(?:adapte|incorpore|integre|use|baseie)\b.{0,80}\b(?:pdf|material|apostila|slides?|curr[ií]culo|trilha|estudo)\b/i.test(userContent) : /\b(?:recalcule|refaça|refaca|atualize)\b.{0,40}\bplano\b/i.test(userContent))
+      if (explicitlyAuthorized) onProgress?.('executing')
       const result = explicitlyAuthorized && this.dependencies.workspaceActions ? await this.dependencies.workspaceActions.execute({ workspaceId, ...proposedAction }) : null
       const response = result?.message ?? (proposedAction.type === 'notes.add' ? `Posso adicionar às notas: "${String(proposedAction.arguments.content ?? '').slice(0, 300)}". Peça explicitamente para eu adicionar essa nota.` : proposedAction.type === 'plan.complete' ? 'Posso concluir a atividade do plano. Diga explicitamente que terminou essa atividade.' : proposedAction.type === 'roadmap.preview-materials' ? 'Posso gerar uma prévia persistida da Trilha usando os materiais aprovados. Peça explicitamente para integrar esse material ao estudo.' : 'Posso recalcular o plano. Peça explicitamente para eu recalculá-lo.')
       if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
       yield response
       const now = this.now()
       await this.dependencies.repository.addTurn({ threadId, user: { id: this.createId(), threadId, role: 'user', content: userContent, providerId: null, modelId: null, createdAt: now }, assistant: { id: this.createId(), threadId, role: 'assistant', content: response, providerId: 'coach-local', modelId: 'workspace-action-proposal-v1', createdAt: now + 1 } })
+      onProgress?.('persistence_completed')
       return
     }
     let content = ''
@@ -207,6 +236,10 @@ export class WorkspaceCoachService {
     let modelId = 'unknown'
     let completed = false
 
+    onProgress?.('context_ready', { intent, contextResources: intent === 'materials' ? ['materials'] : intent === 'planning' ? ['plan', 'academic'] : [], historyCount: recentMessages.length, snippetCount: supplementalContext.length })
+    const releaseForeground = this.dependencies.admission?.reserveForeground?.()
+    onProgress?.('provider_request_started')
+    let firstToken = false
     try {
       for await (const event of provider.streamMessage({
         messages: [
@@ -220,6 +253,8 @@ export class WorkspaceCoachService {
       })) {
         if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
         if (event.type === 'text-delta') {
+          if (!event.content) continue
+          if (!firstToken) { firstToken = true; onProgress?.('provider_first_token') }
           content += event.content
           if (content.length > 64_000) throw new Error('Provider response exceeded the safe limit')
           yield event.content
@@ -232,9 +267,12 @@ export class WorkspaceCoachService {
       }
       if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
       if (!completed || !content.trim()) throw new Error('Provider stream ended before completion')
+      onProgress?.('provider_completed')
     } catch (error) {
       if (!signal.aborted) await this.persistFailure(threadId, userContent)
       throw error
+    } finally {
+      releaseForeground?.()
     }
 
     if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
@@ -244,6 +282,7 @@ export class WorkspaceCoachService {
       user: { id: this.createId(), threadId, role: 'user', content: userContent, createdAt: now, providerId: null, modelId: null },
       assistant: { id: this.createId(), threadId, role: 'assistant', content, createdAt: now + 1, providerId, modelId },
     })
+    onProgress?.('persistence_completed')
   }
 
   private async ensureThread(workspaceId: string): Promise<{ workspace: Workspace; threadId: string }> {

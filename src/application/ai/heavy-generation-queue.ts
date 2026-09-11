@@ -2,6 +2,13 @@ export class HeavyGenerationQueue {
   private readonly foreground: Array<QueuedTask<unknown>> = []
   private readonly background: Array<QueuedTask<unknown>> = []
   private running = false
+  private foregroundReservations = 0
+
+  reserveForeground(): () => void {
+    this.foregroundReservations += 1
+    let released = false
+    return () => { if (released) return; released = true; this.foregroundReservations -= 1; this.drain() }
+  }
 
   run<T>(task: () => Promise<T>, options: { priority?: 'foreground' | 'background'; signal?: AbortSignal } = {}): Promise<T> {
     if (options.signal?.aborted) return Promise.reject(new DOMException('Request cancelled', 'AbortError'))
@@ -16,10 +23,10 @@ export class HeavyGenerationQueue {
 
   private drain(): void {
     if (this.running) return
-    let queued = this.foreground.shift() ?? this.background.shift()
+    let queued = this.foreground.shift() ?? (this.foregroundReservations === 0 ? this.background.shift() : undefined)
     while (queued?.signal?.aborted) {
       queued.reject(new DOMException('Request cancelled', 'AbortError'))
-      queued = this.foreground.shift() ?? this.background.shift()
+      queued = this.foreground.shift() ?? (this.foregroundReservations === 0 ? this.background.shift() : undefined)
     }
     if (!queued) return
     this.running = true
@@ -37,4 +44,4 @@ interface QueuedTask<T> {
   readonly signal?: AbortSignal
 }
 
-export interface HeavyGenerationRunner { run<T>(task: () => Promise<T>, options?: { priority?: 'foreground' | 'background'; signal?: AbortSignal }): Promise<T> }
+export interface HeavyGenerationRunner { run<T>(task: () => Promise<T>, options?: { priority?: 'foreground' | 'background'; signal?: AbortSignal }): Promise<T>; reserveForeground?(): () => void }

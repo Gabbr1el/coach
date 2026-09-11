@@ -9,8 +9,9 @@ import type { WorkspaceActionService } from '../../application/workspaces/worksp
 import type { CoachDatabase } from '../database/connection'
 import { interactiveCodeStateSchema, parseInteractiveValidation, type InteractiveCodeBlock, type InteractiveCodeState } from '../../shared/contracts/code-execution-contract'
 import { studyLessonContentSchema } from '../../shared/contracts/study-lesson-contract'
+import type { PerformanceTimelineStore } from '../telemetry/performance-timeline'
 
-export function registerConversationHandlers(service: HomePlannerService, workspaceService: WorkspaceCoachService, organizer: HomeOrganizerService, workspaceActions?: WorkspaceActionService, database?: CoachDatabase): void {
+export function registerConversationHandlers(service: HomePlannerService, workspaceService: WorkspaceCoachService, organizer: HomeOrganizerService, workspaceActions?: WorkspaceActionService, database?: CoachDatabase, timelines?: PerformanceTimelineStore): void {
   const activeStreams = new Map<string, { controller: AbortController; senderId: number; threadKey: string }>()
   let homeStreamActive = false
   if (workspaceActions) ipcMain.handle(CONVERSATION_CHANNELS.executeWorkspaceAction, (event, payload) => { assertTrustedSender(event); return workspaceActions.execute(payload) })
@@ -42,7 +43,7 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
     const send = (streamEvent: HomeStreamEvent) => {
       if (!event.sender.isDestroyed()) event.sender.send(CONVERSATION_CHANNELS.homeStreamEvent, streamEvent)
     }
-    send({ requestId: input.requestId, type: 'started' })
+    send({ requestId: input.requestId, type: 'started', state: 'sending' })
     try {
       const turn = await organizer.organize(input)
       if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
@@ -109,10 +110,18 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
     const send = (streamEvent: HomeStreamEvent) => {
       if (!event.sender.isDestroyed()) event.sender.send(CONVERSATION_CHANNELS.workspaceStreamEvent, streamEvent)
     }
-    send({ requestId: input.requestId, type: 'started' })
+    const timeline = timelines?.startChat(input.requestId, input.workspaceId)
+    timeline?.mark('message_received')
+    send({ requestId: input.requestId, type: 'started', state: 'sending' })
     try {
       let metadata: Extract<HomeStreamEvent, { type: 'completed' }>['metadata']
-      for await (const content of workspaceService.streamMessage(input.workspaceId, input, controller.signal, (value) => { metadata = value })) send({ requestId: input.requestId, type: 'text-delta', content })
+      for await (const content of workspaceService.streamMessage(input.workspaceId, input, controller.signal, (value) => { metadata = value }, (stage, details) => {
+        if (stage === 'context_started') send({ requestId: input.requestId, type: 'state', state: 'context' })
+        if (stage === 'context_ready') send({ requestId: input.requestId, type: 'state', state: 'context', metadata: details })
+        if (stage === 'provider_request_started') send({ requestId: input.requestId, type: 'state', state: 'generating' })
+        if (stage === 'executing') send({ requestId: input.requestId, type: 'state', state: 'executing' })
+        if (stage !== 'executing') timeline?.mark(stage, details)
+      })) send({ requestId: input.requestId, type: 'text-delta', content })
       send({ requestId: input.requestId, type: 'completed', messages: await workspaceService.listMessages(input.workspaceId), ...(metadata ? { metadata } : {}) })
     } catch {
       send(controller.signal.aborted ? { requestId: input.requestId, type: 'cancelled' } : { requestId: input.requestId, type: 'error', code: 'PROVIDER_UNAVAILABLE' })
@@ -127,5 +136,10 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
     const input = cancelWorkspaceStreamInputSchema.parse(payload)
     const stream = activeStreams.get(input.requestId)
     if (stream?.senderId === event.sender.id) stream.controller.abort()
+  })
+  ipcMain.handle(CONVERSATION_CHANNELS.rendererFirstToken, (event, payload: unknown) => {
+    assertTrustedSender(event)
+    const input = cancelWorkspaceStreamInputSchema.parse(payload)
+    timelines?.markRendererFirstToken(input.requestId)
   })
 }

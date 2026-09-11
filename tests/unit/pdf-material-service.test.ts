@@ -14,6 +14,7 @@ beforeEach(() => {
     CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, objective TEXT NOT NULL);
     CREATE TABLE materials (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, media_type TEXT NOT NULL, page_count INTEGER NOT NULL, status TEXT NOT NULL, relevance INTEGER NOT NULL, role TEXT NOT NULL DEFAULT 'reference', semantic_analysis_json TEXT, extraction_fingerprint TEXT, analysis_fingerprint TEXT, source_url TEXT, content_hash TEXT, error_message TEXT, created_at INTEGER NOT NULL);
     CREATE TABLE material_chunks (id TEXT PRIMARY KEY, material_id TEXT NOT NULL, page_number INTEGER NOT NULL, content TEXT NOT NULL);
+    CREATE TABLE material_analysis_cache (analysis_fingerprint TEXT PRIMARY KEY, content_hash TEXT NOT NULL, extraction_fingerprint TEXT NOT NULL, parser_revision TEXT NOT NULL, schema_revision TEXT NOT NULL, role_context_hash TEXT NOT NULL, analysis_json TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER NOT NULL);
     CREATE TABLE roadmaps (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, status TEXT NOT NULL);
     CREATE TABLE roadmap_modules (id TEXT PRIMARY KEY, roadmap_id TEXT NOT NULL, topics_json TEXT NOT NULL);
   `)
@@ -90,6 +91,18 @@ describe('PDF material pipeline', () => {
     expect(second.id).toBe(first.id)
     expect(extractPages).toHaveBeenCalledTimes(1)
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM materials').get()).toEqual({ count: 1 })
+  })
+
+  it('reuses semantic analysis for identical content and workspace context across imports', async () => {
+    const analyze = vi.fn(async () => semantic('high'))
+    const first = new PdfMaterialService(database, { extractPages: async () => ['Árvores e filas'], analyzeSemantic: analyze, createId: () => `id-${++sequence}` })
+    await importPdf(first, 'cached.pdf')
+    sqlite.prepare('DELETE FROM material_chunks').run()
+    sqlite.prepare('DELETE FROM materials').run()
+    const second = new PdfMaterialService(database, { extractPages: async () => ['Árvores e filas'], analyzeSemantic: analyze, createId: () => `id-${++sequence}` })
+    const reused = await importPdf(second, 'cached.pdf')
+    expect(reused.semanticAnalysis).toMatchObject({ subject: 'Estruturas de Dados' })
+    expect(analyze).toHaveBeenCalledTimes(1)
   })
 
   it('does not map a chunk to a topic when multiple topics match', async () => {

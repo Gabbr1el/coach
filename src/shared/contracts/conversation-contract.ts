@@ -64,7 +64,8 @@ export interface ConversationApi {
 }
 
 export type HomeStreamEvent =
-  | { readonly requestId: string; readonly type: 'started' }
+  | { readonly requestId: string; readonly type: 'started'; readonly state: 'sending' }
+  | { readonly requestId: string; readonly type: 'state'; readonly state: 'context' | 'generating' | 'executing'; readonly metadata?: { readonly intent?: 'current_topic' | 'planning' | 'materials' | 'action'; readonly contextResources?: readonly string[]; readonly historyCount?: number; readonly snippetCount?: number } }
   | { readonly requestId: string; readonly type: 'text-delta'; readonly content: string }
   | { readonly requestId: string; readonly type: 'completed'; readonly messages: ConversationMessage[]; readonly metadata?: { readonly lessonAdapted: { readonly lessonId: string; readonly blockId: string } } }
   | { readonly requestId: string; readonly type: 'cancelled' }

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { CONTENT_GENERATOR_VERSIONS, contentJobKey, type WorkspaceContentRepository } from '../../application/workspaces/workspace-content-repository'
 import type { ContentJob } from '../../shared/contracts/workspace-content-contract'
 import type { CoachDatabase } from '../database/connection'
+import type { PerformanceTimelineStore } from '../telemetry/performance-timeline'
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
@@ -10,7 +11,7 @@ function canonical(value: unknown): string {
 }
 
 export class InitialProvisioningCoordinator {
-  constructor(private readonly database: CoachDatabase, private readonly repository: WorkspaceContentRepository, private readonly wake: () => void, private readonly now = Date.now) {}
+  constructor(private readonly database: CoachDatabase, private readonly repository: WorkspaceContentRepository, private readonly wake: () => void, private readonly now = Date.now, private readonly timelines?: PerformanceTimelineStore) {}
 
   initialize(workspaceId: string): void {
     const now = this.now()
@@ -18,10 +19,14 @@ export class InitialProvisioningCoordinator {
     if (existing && existing.inputHash !== 'legacy-unavailable') { this.advance(workspaceId); return }
     const workspace = this.database.sqlite.prepare('SELECT name,objective FROM workspaces WHERE id=?').get(workspaceId) as { name: string; objective: string }
     const override = this.database.sqlite.prepare('SELECT canonical_focus AS focus,canonical_context AS context,declared_level AS level,declared_knowledge_json AS knowledge,declared_difficulties_json AS difficulties,goals_json AS goals,onboarding_analysis_revision AS analysisRevision,onboarding_analysis_fingerprint AS analysisFingerprint FROM workspace_learning_overrides WHERE workspace_id=?').get(workspaceId) as Record<string, unknown>
+    this.timelines?.markProvisioning(workspaceId, 'analyze', { outcome: override.analysisFingerprint ? 'validated' : 'unavailable' })
     const materials = this.database.sqlite.prepare("SELECT id,content_hash AS contentHash,analysis_fingerprint AS analysisFingerprint,role,relevance,semantic_analysis_json AS analysis FROM materials WHERE workspace_id=? AND status='ready' ORDER BY CASE role WHEN 'priority' THEN 0 WHEN 'base' THEN 1 ELSE 2 END,created_at,id").all(workspaceId)
+    this.timelines?.markProvisioning(workspaceId, 'context')
+    this.timelines?.markProvisioning(workspaceId, 'material_analysis', { cache: materials.length && materials.every((item: any) => Boolean(item.analysisFingerprint)) ? 'hit' : 'unavailable' })
     const inputHash = createHash('sha256').update(canonical({ workspace, override, materials })).digest('hex')
     const revision = this.repository.createRevision({ workspaceId, inputHash, now })
     this.enqueue(workspaceId, revision.revision, inputHash, 'roadmap_generate', 'roadmap', 900, [])
+    this.timelines?.markProvisioning(workspaceId, 'roadmap', { outcome: 'queued' })
     this.stage(workspaceId, 'roadmap')
     this.wake()
   }
@@ -68,9 +73,14 @@ export class InitialProvisioningCoordinator {
     if (state.state === 'PROVISIONING') return
     const pending = this.database.sqlite.prepare("SELECT COUNT(*) AS count FROM content_jobs WHERE workspace_id=? AND revision=? AND status IN ('pending','queued','generating')").get(workspaceId, revision.revision) as { count: number }
     this.database.sqlite.prepare("UPDATE workspace_provisioning SET status='ready',stage=?,completed_at=COALESCE(completed_at,?),stage_updated_at=?,retry_after=NULL,error_code=NULL,error_message=NULL WHERE workspace_id=?").run(state.state === 'FULLY_PROVISIONED' ? 'ready' : pending.count ? 'background' : 'ready', this.now(), this.now(), workspaceId)
+    this.timelines?.markProvisioning(workspaceId, 'persistence', { outcome: state.state === 'FULLY_PROVISIONED' ? 'fully_provisioned' : 'usable' })
   }
 
-  onPublished(job: ContentJob): void { this.advance(job.workspaceId) }
+  onPublished(job: ContentJob): void {
+    const stage = job.kind === 'roadmap_generate' ? 'roadmap' : job.kind === 'lesson_generate' ? 'lesson' : job.kind === 'exercise_generate' ? 'exercises' : job.kind === 'plan_recalculate' ? 'planning' : null
+    if (stage) this.timelines?.markProvisioning(job.workspaceId, stage, { jobKind: job.kind, outcome: 'published' })
+    this.advance(job.workspaceId)
+  }
   private stage(workspaceId: string, stage: string): void { this.database.sqlite.prepare("UPDATE workspace_provisioning SET status='running',stage=?,stage_updated_at=?,retry_after=NULL,error_code=NULL,error_message=NULL WHERE workspace_id=? AND status<>'draft'").run(stage, this.now(), workspaceId) }
   private jobReady(workspaceId: string, revision: number, kind: string, unitKey: string): boolean { return Boolean(this.database.sqlite.prepare("SELECT 1 FROM content_jobs WHERE workspace_id=? AND revision=? AND kind=? AND unit_key=? AND status='ready'").get(workspaceId, revision, kind, unitKey)) }
   private key(workspaceId: string, revision: number, inputHash: string, kind: keyof typeof CONTENT_GENERATOR_VERSIONS, unitKey: string): string { return contentJobKey({ workspaceId, revision, inputHash, kind, unitKey, generatorContractVersion: CONTENT_GENERATOR_VERSIONS[kind] }) }

@@ -5,8 +5,8 @@ import { resolve } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openCoachDatabase } from '../../src/main/database/connection'
-import { CURRENT_MIGRATION_COUNT, validateCoachDatabaseSchema } from '../../src/main/database/restore-recovery'
-import { repairExerciseSchema, repairInteractiveCodeStateSchema } from '../../src/main/database/migrate'
+import { validateCoachDatabaseSchema } from '../../src/main/database/restore-recovery'
+import { migrationCount, repairExerciseSchema, repairInteractiveCodeStateSchema } from '../../src/main/database/migrate'
 import { repairLegacyExerciseData } from '../../src/main/database/exercise-data-repair'
 import { DrizzleWorkspaceRepository } from '../../src/main/repositories/drizzle-workspace-repository'
 import { DrizzleConversationRepository } from '../../src/main/repositories/drizzle-conversation-repository'
@@ -29,6 +29,7 @@ import { DrizzlePlanningRepository } from '../../src/main/repositories/drizzle-p
 
 const temporaryDirectories: string[] = []
 const migrationsFolder = resolve('drizzle/migrations')
+const currentJournalMigrationCount = migrationCount(migrationsFolder)
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -55,6 +56,10 @@ function migrationsThrough0028(): string {
 }
 
 describe('Coach database migrations', () => {
+  it('keeps journal timestamps strictly increasing so upgrades cannot skip migrations', () => {
+    const entries = (JSON.parse(readFileSync(join(migrationsFolder, 'meta/_journal.json'), 'utf8')) as { entries: Array<{ when: number }> }).entries
+    expect(entries.every((entry, index) => index === 0 || entry.when > entries[index - 1]!.when)).toBe(true)
+  })
   it('repairs legacy prediction labels without inventing expected output', () => {
     const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
     database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES ('legacy-workspace','Python','','active',1,1)").run()
@@ -145,7 +150,7 @@ describe('Coach database migrations', () => {
     expect(database.sqlite.prepare("SELECT current_code AS currentCode, attempts FROM exercise_progress WHERE exercise_id = 'repair-exercise'").get()).toEqual({ currentCode: 'print(2)', attempts: 3 })
     expect((database.sqlite.pragma('table_info(exercises)') as Array<{ name: string }>).map(({ name }) => name)).toEqual(expect.arrayContaining(['prediction_prompt', 'code_to_observe', 'expected_prediction']))
     expect(database.sqlite.pragma('foreign_key_check')).toEqual([])
-    validateCoachDatabaseSchema(database.sqlite)
+    validateCoachDatabaseSchema(database.sqlite, currentJournalMigrationCount)
     database.close()
 
     const reopened = openCoachDatabase({ databasePath: database.path, migrationsFolder })
@@ -170,7 +175,7 @@ describe('Coach database migrations', () => {
     expect(database.sqlite.prepare("SELECT id FROM exercise_sets WHERE id = 'orphan-set'").get()).toBeUndefined()
     expect(database.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'exercise%' ORDER BY name").all()).toEqual([{ name: 'exercise_attempts' }, { name: 'exercise_progress' }, { name: 'exercise_sets' }, { name: 'exercises' }])
     expect(database.sqlite.pragma('foreign_key_check')).toEqual([])
-    validateCoachDatabaseSchema(database.sqlite)
+    validateCoachDatabaseSchema(database.sqlite, currentJournalMigrationCount)
     database.close()
   })
 
@@ -185,7 +190,7 @@ describe('Coach database migrations', () => {
     repairInteractiveCodeStateSchema(database.sqlite)
     expect(database.sqlite.pragma('table_info(study_interactive_code_states)')).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'evidence_granted_at' })]))
     expect(database.sqlite.prepare("SELECT current_code AS currentCode, attempts FROM study_interactive_code_states WHERE block_id = 'block'").get()).toEqual({ currentCode: 'print(1)', attempts: 2 })
-    validateCoachDatabaseSchema(database.sqlite)
+    validateCoachDatabaseSchema(database.sqlite, currentJournalMigrationCount)
     database.close()
   })
 
@@ -223,8 +228,8 @@ describe('Coach database migrations', () => {
     database = openCoachDatabase({ databasePath, migrationsFolder })
     expect(database.sqlite.prepare("SELECT name, objective FROM workspaces WHERE id = '00000000-0000-4000-8000-000000000029'").get()).toEqual({ name: 'Sentinela 0028', objective: 'Preservar no upgrade' })
     expect(database.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('study_lesson_adaptations', 'workspace_study_preferences') ORDER BY name").all()).toEqual([{ name: 'study_lesson_adaptations' }, { name: 'workspace_study_preferences' }])
-    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: CURRENT_MIGRATION_COUNT })
-    validateCoachDatabaseSchema(database.sqlite)
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: currentJournalMigrationCount })
+    validateCoachDatabaseSchema(database.sqlite, currentJournalMigrationCount)
     database.close()
   })
 
@@ -236,7 +241,7 @@ describe('Coach database migrations', () => {
 
     database = openCoachDatabase({ databasePath, migrationsFolder })
     expect((database.sqlite.pragma('table_info(study_lesson_adaptations)') as Array<{ name: string }>).map((column) => column.name)).toEqual(['id', 'workspace_id', 'lesson_id', 'source_block_id', 'revision', 'reason', 'mode', 'adapted_block_json', 'is_active', 'provider_id', 'model_id', 'created_at'])
-    validateCoachDatabaseSchema(database.sqlite)
+    validateCoachDatabaseSchema(database.sqlite, currentJournalMigrationCount)
     database.close()
   })
 
@@ -302,8 +307,8 @@ describe('Coach database migrations', () => {
       { name: 'workspace_study_states' },
       { name: 'workspaces' },
     ])
-    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: CURRENT_MIGRATION_COUNT })
-    expect(() => validateCoachDatabaseSchema(sqlite)).not.toThrow()
+    expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: currentJournalMigrationCount })
+    expect(() => validateCoachDatabaseSchema(sqlite, currentJournalMigrationCount)).not.toThrow()
     database.close()
   })
 

@@ -2,8 +2,6 @@ import { closeSync, existsSync, fsyncSync, openSync, renameSync, rmSync } from '
 import { dirname } from 'node:path'
 import type Database from 'better-sqlite3'
 
-export const CURRENT_MIGRATION_COUNT = 44
-
 function syncDirectory(path: string): void {
   const descriptor = openSync(dirname(path), 'r')
   try { fsyncSync(descriptor) } finally { closeSync(descriptor) }
@@ -39,13 +37,15 @@ export function rollbackPendingRestore(databasePath: string): void {
   syncDirectory(databasePath)
 }
 
-export function validateCoachDatabaseSchema(sqlite: Database.Database): void {
+export function validateCoachDatabaseSchema(sqlite: Database.Database, expectedMigrationCount?: number): void {
   const integrity = sqlite.pragma('quick_check') as Array<{ quick_check: string }>
   if (integrity.length !== 1 || integrity[0]?.quick_check !== 'ok') throw new Error('Coach database integrity check failed')
   const foreignKeyErrors = sqlite.pragma('foreign_key_check') as unknown[]
   if (foreignKeyErrors.length) throw new Error('Coach database contains invalid relationships')
-  const migrationCount = (sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get() as { count: number }).count
-  if (migrationCount !== CURRENT_MIGRATION_COUNT) throw new Error('Coach backup version is incompatible with this application')
+  if (expectedMigrationCount !== undefined) {
+    const migrationCount = (sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get() as { count: number }).count
+    if (migrationCount !== expectedMigrationCount) throw new Error('Coach backup version is incompatible with this application')
+  }
   const requirements: Record<string, string[]> = {
     workspaces: ['id', 'name', 'objective'], conversation_threads: ['id', 'workspace_id'], conversation_messages: ['id', 'thread_id', 'content'],
     academic_subject_contexts: ['subject', 'declared_level', 'declared_knowledge_json', 'declared_difficulties_json', 'goals_json', 'source_evidence_json'],

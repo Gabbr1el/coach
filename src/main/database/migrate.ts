@@ -182,3 +182,7 @@ export function migrateDatabase<TSchema extends Record<string, unknown>>(
   readMigrationFiles(config)
   migrate(database, config)
 }
+
+export function migrationCount(migrationsFolder: string): number {
+  return readMigrationFiles({ migrationsFolder }).length
+}

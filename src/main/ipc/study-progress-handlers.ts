@@ -10,6 +10,7 @@ import { applyLearningEvidence, emptyTopicLearningState, shouldReplan, type Topi
 import { parseInteractiveValidation, type ToolchainStatus } from '../../shared/contracts/code-execution-contract'
 import type { AIProviderManager } from '../../application/ai/ai-provider-manager'
 import { evaluateCheckpointReasoning, pendingAssessment } from '../../application/study-progress/checkpoint-reasoning'
+import type { PedagogicalPrefetchScheduler } from '../../application/workspaces/pedagogical-prefetch-scheduler'
 
 type ProgressRow = { workspaceId: string; roadmapId: string; currentModuleId: string; currentTopicId: string; currentLessonId: string; currentCheckpointId: string | null; topicStatusesJson: string; lessonPositionsJson: string; checkpointStatesJson?: string; updatedAt: number }
 type LessonBlockRow = { contentJson: string }
@@ -78,7 +79,7 @@ export function mapStudyProgressState(row: ProgressRow): StudyProgressState {
   return { ...row, moduleId: row.currentModuleId, topicId: row.currentTopicId, lessonId: row.currentLessonId, checkpointId: row.currentCheckpointId, topicStatuses: JSON.parse(row.topicStatusesJson) as StudyProgressState['topicStatuses'], lessonPositions: positions, checkpointStates, currentPosition: positions[row.currentLessonId] ?? null }
 }
 
-export function registerStudyProgressHandlers(database: CoachDatabase, getToolchains: () => ToolchainStatus[] = () => [], providerManager?: AIProviderManager): void {
+export function registerStudyProgressHandlers(database: CoachDatabase, getToolchains: () => ToolchainStatus[] = () => [], providerManager?: AIProviderManager, prefetch?: PedagogicalPrefetchScheduler): void {
   const get = (workspaceId: string) => {
     const row = database.sqlite.prepare('SELECT workspace_id AS workspaceId, roadmap_id AS roadmapId, current_module_id AS currentModuleId, current_topic_id AS currentTopicId, current_lesson_id AS currentLessonId, current_checkpoint_id AS currentCheckpointId, topic_statuses_json AS topicStatusesJson, lesson_positions_json AS lessonPositionsJson, checkpoint_states_json AS checkpointStatesJson, updated_at AS updatedAt FROM study_progress WHERE workspace_id = ?').get(workspaceId) as ProgressRow | undefined
     return row ? mapStudyProgressState(row) : null
@@ -100,6 +101,7 @@ export function registerStudyProgressHandlers(database: CoachDatabase, getToolch
       database.sqlite.prepare(`INSERT INTO study_progress (workspace_id, roadmap_id, current_module_id, current_topic_id, current_lesson_id, current_checkpoint_id, topic_statuses_json, lesson_positions_json, checkpoint_states_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET roadmap_id=excluded.roadmap_id, current_module_id=excluded.current_module_id, current_topic_id=excluded.current_topic_id, current_lesson_id=excluded.current_lesson_id, current_checkpoint_id=excluded.current_checkpoint_id, topic_statuses_json=excluded.topic_statuses_json, lesson_positions_json=excluded.lesson_positions_json, checkpoint_states_json=excluded.checkpoint_states_json, updated_at=excluded.updated_at`).run(input.workspaceId, input.roadmapId, input.moduleId, input.topicId, input.lessonId, checkpointId, JSON.stringify(statuses), JSON.stringify(positions), JSON.stringify(sameRoadmap ? existing?.checkpointStates ?? {} : {}), now)
       if (started) database.sqlite.prepare('INSERT INTO study_progress_events (id, workspace_id, type, module_id, topic_id, lesson_id, checkpoint_id, correct, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)').run(crypto.randomUUID(), input.workspaceId, 'TOPIC_STARTED', input.moduleId, input.topicId, input.lessonId, checkpointId, now)
     })()
+    prefetch?.schedule({ type: 'topic_selected', workspaceId: input.workspaceId, topicId: input.topicId })
     return get(input.workspaceId)
   })
   ipcMain.handle(STUDY_PROGRESS_CHANNELS.updatePosition, (event, payload) => {
@@ -158,6 +160,7 @@ export function registerStudyProgressHandlers(database: CoachDatabase, getToolch
       }
     })()
     const persisted = get(input.workspaceId)!
+    prefetch?.schedule({ type: 'checkpoint_interacted', workspaceId: input.workspaceId, topicId: persisted.topicId })
     return responseFor(persisted, checkpoint, persisted.checkpointStates?.[input.checkpointId]?.correct ?? correct, persisted.checkpointStates?.[input.checkpointId]?.attempt ?? attempt, input, persisted.checkpointStates?.[input.checkpointId]?.reasoningAssessment ?? assessment, replan)
   }
   ipcMain.handle(STUDY_PROGRESS_CHANNELS.answerCheckpoint, async (event, payload) => {
@@ -208,6 +211,7 @@ export function registerStudyProgressHandlers(database: CoachDatabase, getToolch
       if (currentIndex === currentTopics.length - 1) { database.sqlite.prepare("UPDATE roadmap_modules SET status = 'completed' WHERE id = ? AND roadmap_id = ?").run(active.moduleId, active.roadmapId); if (nextTarget) database.sqlite.prepare("UPDATE roadmap_modules SET status = 'active' WHERE id = ? AND roadmap_id = ? AND status = 'locked'").run(nextTarget.moduleId, active.roadmapId) }
       database.sqlite.prepare('UPDATE study_progress SET current_module_id = ?, current_topic_id = ?, current_lesson_id = ?, current_checkpoint_id = NULL, topic_statuses_json = ?, updated_at = ? WHERE workspace_id = ?').run(nextTarget?.moduleId ?? active.moduleId, nextTarget?.topicId ?? active.topicId, nextTarget?.lessonId ?? active.lessonId, JSON.stringify(statuses), now, input.workspaceId)
     })()
+    if (nextTarget) prefetch?.schedule({ type: 'topic_unlocked', workspaceId: input.workspaceId, topicId: nextTarget.topicId })
     return { state: get(input.workspaceId)!, nextTarget, shouldReplan: true }
   })
   ipcMain.handle(STUDY_PROGRESS_CHANNELS.record, (event, payload) => {

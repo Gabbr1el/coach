@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from 'electron'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { registerApplicationHandlers } from './ipc/application-handlers'
 import { createMainWindow } from './windows/create-main-window'
 import { openCoachDatabase, type CoachDatabase } from './database/connection'
@@ -75,8 +76,13 @@ import { semanticSubjectKey } from '../application/workspaces/subject-normalizer
 import { AcademicLifeService } from '../application/academic-life/academic-life-service'
 import { SqliteAcademicLifeRepository } from './repositories/sqlite-academic-life-repository'
 import { registerAcademicLifeHandlers } from './ipc/academic-life-handlers'
+import { SqliteWorkspaceContentRepository } from './repositories/sqlite-workspace-content-repository'
+import { ContentGenerationWorker } from '../application/workspaces/content-generation-worker'
+import { createContentJobHandlers } from './content/content-job-handlers'
+import { PedagogicalPrefetchScheduler } from '../application/workspaces/pedagogical-prefetch-scheduler'
 
 let database: CoachDatabase | null = null
+let contentWorker: ContentGenerationWorker | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
@@ -151,7 +157,9 @@ void app.whenReady().then(async () => {
     const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory, getCurrentContext: (id) => currentWorkspaceContext.get(id), contextHub: workspaceContextHub, workspaceActions, searchMaterials: (id, query) => materialService.search(id, query), studyLessonService, exerciseService })
     registerApplicationHandlers()
     registerExerciseHandlers(exerciseService)
-    registerStudyProgressHandlers(database, () => toolchainManager.getStatuses(), providerManager)
+    const contentRepository = new SqliteWorkspaceContentRepository(database)
+    const prefetch = new PedagogicalPrefetchScheduler({ repository: contentRepository, getRoadmap: (id) => roadmapRepository.findCurrent(id), onJobsChanged: () => contentWorker?.wake() })
+    registerStudyProgressHandlers(database, () => toolchainManager.getStatuses(), providerManager, prefetch)
     registerStudyLessonHandlers(studyLessonService)
     registerWorkspaceHandlers(workspaceService)
     registerStudyWorkspaceHandlers(studyWorkspaceService)
@@ -164,6 +172,13 @@ void app.whenReady().then(async () => {
     registerBackupHandlers(database)
     registerProjectHandlers(new ProjectService(projectRepository, async (id) => Boolean(await workspaceRepository.findById(id))))
     roadmapService = new RoadmapService(roadmapRepository, providerManager, (id) => workspaceRepository.findById(id), (id) => { const difficulties = (database!.sqlite.prepare("SELECT topic_id AS topicId FROM topic_learning_states WHERE workspace_id = ? AND (difficulty_level IN ('medium','high') OR needs_review = 1) ORDER BY difficulty_level DESC").all(id) as Array<{ topicId: string }>).map((item) => item.topicId.split(':').at(-1) ?? item.topicId); const deadline = (database!.sqlite.prepare('SELECT due_at AS dueAt FROM academic_events WHERE workspace_id = ? AND due_at >= ? ORDER BY due_at LIMIT 1').get(id, Date.now()) as { dueAt: number } | undefined)?.dueAt ?? null; const availability = database!.sqlite.prepare('SELECT weekday, minutes FROM academic_availability ORDER BY weekday').all() as Array<{ weekday: number; minutes: number }>; const workspace = database!.sqlite.prepare('SELECT name FROM workspaces WHERE id = ?').get(id) as { name: string } | undefined; const override = database!.sqlite.prepare('SELECT subject, declared_level AS declaredLevel, declared_knowledge_json AS knowledge, declared_difficulties_json AS difficulties, goals_json AS goals FROM workspace_learning_overrides WHERE workspace_id = ?').get(id) as { subject: string; declaredLevel: string | null; knowledge: string; difficulties: string; goals: string } | undefined; const academic = workspace ? academicSubjectContext.get(workspace.name) : null; const related = (database!.sqlite.prepare("SELECT subject, relation FROM workspace_academic_contexts WHERE workspace_id = ? AND relation != 'primary'").all(id) as Array<{ subject: string; relation: string }>).flatMap((item) => { const context = academicSubjectContext.get(item.subject); return context ? [{ ...context, relation: item.relation }] : [] }); const knownContext = [...(override ? [`Contexto local: ${override.subject}`, `Nível local declarado: ${override.declaredLevel ?? 'não informado'}`, ...(JSON.parse(override.knowledge) as string[]), ...(JSON.parse(override.difficulties) as string[]).map((item) => `Dificuldade local: ${item}`), ...(JSON.parse(override.goals) as string[]).map((item) => `Objetivo local: ${item}`)] : []), ...(academic ? [`Contexto principal: ${academic.subject}`, `Nível declarado: ${academic.declaredLevel ?? 'não informado'}`, ...academic.declaredKnowledge, ...academic.declaredDifficulties.map((item) => `Dificuldade declarada: ${item}`), ...academic.goals.map((item) => `Objetivo: ${item}`)] : []), ...related.flatMap((context) => [`Contexto relacionado (${context.relation}): ${context.subject}`, ...context.declaredKnowledge.map((item) => `${context.subject}: ${item}`), ...context.declaredDifficulties.map((item) => `Dificuldade declarada em ${context.subject}: ${item}`), ...context.goals.map((item) => `Objetivo em ${context.subject}: ${item}`)])]; return { difficulties, deadline, availability, knownContext } }, curriculumSourceService, Date.now, () => crypto.randomUUID(), materialService, heavyGenerationQueue)
+    contentWorker = new ContentGenerationWorker({ repository: contentRepository, admission: heavyGenerationQueue, handlers: createContentJobHandlers({ database, roadmap: roadmapService, lessons: studyLessonService, exercises: exerciseService, planning: planningService }) })
+    contentWorker.start()
+    roadmapService.setRoadmapChangedHandler((roadmap) => {
+      const inputHash = createHash('sha256').update(JSON.stringify(roadmap.modules)).digest('hex')
+      contentRepository.createRevision({ workspaceId: roadmap.workspaceId, inputHash, now: Date.now() })
+      contentWorker?.cancelWorkspace(roadmap.workspaceId)
+    })
     workspaceProvisioning = new WorkspaceProvisioningService({ repository: new SqliteWorkspaceProvisioningRepository(database), ensureRoadmap: (id, materialIds) => roadmapService.ensureLearningPathWithMaterials(id, materialIds), getRoadmap: (id) => roadmapService.get(id), ensureLesson: (input) => studyLessonService.getOrCreate(input), listReadyMaterialIds: (id) => materialService.list(id).filter((item) => item.status === 'ready').map((item) => item.id) })
     registerRoadmapHandlers(roadmapService)
     workspaceService.setLearningPathEnsurer((workspaceId) => roadmapService.ensureLearningPath(workspaceId))
@@ -199,7 +214,14 @@ void app.whenReady().then(async () => {
   app.exit(1)
 })
 
-app.on('will-quit', () => {
+app.on('will-quit', (event) => {
+  if (contentWorker) {
+    event.preventDefault()
+    const worker = contentWorker
+    contentWorker = null
+    void worker.stop().finally(() => app.quit())
+    return
+  }
   database?.close()
   database = null
 })

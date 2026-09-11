@@ -136,6 +136,10 @@ export class SqliteWorkspaceContentRepository implements WorkspaceContentReposit
     })
   }
 
+  invalidateWorkspace(workspaceId: string, inputHash: string, now: number): WorkspaceContentRevision {
+    return this.createRevision({ workspaceId, inputHash, now })
+  }
+
   reconcile(now: number): { requeued: number; obsoleted: number } {
     return this.immediate(() => this.reconcileWithinTransaction(now))
   }

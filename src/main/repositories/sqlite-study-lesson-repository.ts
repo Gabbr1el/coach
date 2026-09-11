@@ -106,6 +106,8 @@ export class SqliteStudyLessonRepository implements StudyLessonRepository {
     return persisted
   }
 
+  setContentRevision(lessonId: string, revision: number, inputHash: string): void { this.database.sqlite.prepare('UPDATE study_lessons SET content_revision=?,input_hash=? WHERE id=?').run(revision, inputHash, lessonId) }
+
   createAdaptation(value: NewStudyLessonAdaptation, signal?: AbortSignal): StudyLessonAdaptation {
     return this.database.sqlite.transaction(() => {
       if (signal?.aborted) throw new DOMException('Request cancelled', 'AbortError')

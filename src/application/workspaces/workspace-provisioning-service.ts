@@ -18,6 +18,7 @@ export interface WorkspaceProvisioningDependencies {
   readonly ensureLesson: (input: { workspaceId: string; roadmapId: string; moduleId: string; topicId: string }) => Promise<StudyLessonLoadResult>
   readonly listReadyMaterialIds: (workspaceId: string) => string[]
   readonly now?: () => number
+  readonly initializeContent?: (workspaceId: string) => void
 }
 
 function safeMessage(error: unknown): string { return (error instanceof Error ? error.message : 'Falha desconhecida').replace(/[\r\n\t]+/g, ' ').slice(0, 500) }
@@ -29,7 +30,7 @@ export class WorkspaceProvisioningService {
 
   createDraft(workspaceId: string): WorkspaceProvisioningState {
     const now = this.now()
-    return this.dependencies.repository.save({ workspaceId, status: 'draft', stage: 'workspace', materialIds: [], attemptCount: 0, createdAt: now, startedAt: null, stageUpdatedAt: now, completedAt: null, retryAfter: null, errorCode: null, errorMessage: null })
+    return this.dependencies.repository.save({ workspaceId, status: 'draft', stage: 'workspace', materialIds: [], readinessState: 'PROVISIONING', backgroundPending: 0, legacyState: null, attemptCount: 0, createdAt: now, startedAt: null, stageUpdatedAt: now, completedAt: null, retryAfter: null, errorCode: null, errorMessage: null })
   }
   get(workspaceId: string): WorkspaceProvisioningState | null { return this.dependencies.repository.find(workspaceId) }
   discardDraft(workspaceId: string): void { if (!this.dependencies.repository.removeDraft(workspaceId)) throw new Error('Workspace draft not found') }
@@ -38,6 +39,7 @@ export class WorkspaceProvisioningService {
     if (current.status === 'ready') return current
     const now = this.now(); const materialIds = this.dependencies.listReadyMaterialIds(workspaceId)
     const queued = this.dependencies.repository.save({ ...current, status: 'queued', stage: materialIds.length ? 'materials' : 'workspace', materialIds, stageUpdatedAt: now, retryAfter: null, errorCode: null, errorMessage: null })
+    if (this.dependencies.initializeContent) { this.dependencies.initializeContent(workspaceId); return this.require(workspaceId) }
     void this.resume(workspaceId)
     return queued
   }
@@ -45,6 +47,7 @@ export class WorkspaceProvisioningService {
   resumePending(): void { for (const workspaceId of this.dependencies.repository.listResumable(this.now())) { const state = this.dependencies.repository.find(workspaceId); if (state?.status === 'running') this.dependencies.repository.save({ ...state, status: 'failed_retryable', retryAfter: null, errorCode: 'INTERRUPTED', errorMessage: 'A preparação foi interrompida e será retomada.', stageUpdatedAt: this.now() }); void this.resume(workspaceId) } }
   resume(workspaceId: string): Promise<WorkspaceProvisioningState> {
     const active = this.running.get(workspaceId); if (active) return active
+    if (this.dependencies.initializeContent) { this.dependencies.initializeContent(workspaceId); return Promise.resolve(this.require(workspaceId)) }
     const task = this.run(workspaceId).finally(() => this.running.delete(workspaceId)); this.running.set(workspaceId, task); return task
   }
   private async run(workspaceId: string): Promise<WorkspaceProvisioningState> {

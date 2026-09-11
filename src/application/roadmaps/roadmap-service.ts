@@ -102,11 +102,11 @@ export class RoadmapService {
     }
   }
   generate(workspaceId: string, instruction?: string): Promise<Roadmap> { const task = () => this.generateWithProvider(workspaceId, this.providers.route('roadmap'), instruction); return this.heavyQueue?.run(task) ?? task() }
-  async prepareGeneration(workspaceId: string, revision: number, inputHash: string, signal: AbortSignal): Promise<{ publish(): Roadmap }> {
+  async prepareGeneration(workspaceId: string, revision: number, inputHash: string, signal: AbortSignal, materialIds: string[] = []): Promise<{ publish(): Roadmap }> {
     const workspace = await this.requireWorkspace(workspaceId)
     const provider = this.providers.route('roadmap')
     if (!provider) throw new LearningPathGenerationError('PROVIDER_UNAVAILABLE', 'provider_route', 'Roadmap provider is unavailable')
-    const candidate = await this.generateCandidate(workspace, provider, undefined, [], signal)
+    const candidate = await this.generateCandidate(workspace, provider, undefined, materialIds, signal)
     return { publish: () => {
       const now = this.now()
       const roadmap = this.repository.activate({ id: this.createId(), workspaceId, title: candidate.proposal.title, status: 'accepted', generationKind: 'ai_generated', version: this.repository.nextVersion(workspaceId), providerId: candidate.response.providerId, modelId: candidate.response.modelId, modules: candidate.proposal.modules.map((item, index) => ({ id: this.createId(), ...item, position: index + 1, status: index === 0 ? 'active' : 'locked' })), createdAt: now, updatedAt: now })

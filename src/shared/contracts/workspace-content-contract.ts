@@ -19,6 +19,7 @@ export const workspaceContentRevisionSchema = z.object({
   updatedAt: z.number().int().nonnegative(),
   usableAt: z.number().int().nonnegative().nullable(),
   fullyProvisionedAt: z.number().int().nonnegative().nullable(),
+  legacyState: z.literal('legacy_accessible').nullable(),
 }).strict()
 
 export const requiredContentUnitSchema = z.object({

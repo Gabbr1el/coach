@@ -42,7 +42,7 @@ describe('SqliteWorkspaceContentRepository', () => {
     const directory = mkdtempSync(join(tmpdir(), 'coach-content-upgrade-')); directories.push(directory)
     const path = join(directory, 'coach.sqlite'); const sqlite = new Database(path); sqlite.pragma('foreign_keys = ON'); migrate(drizzle(sqlite), { migrationsFolder: migrationsThrough0044() }); const id = '00000000-0000-4000-8000-000000000001'; sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,'C','Ponteiros','active',1,1)").run(id); sqlite.close()
     const reopened = openCoachDatabase({ databasePath: path, migrationsFolder })
-    expect(new SqliteWorkspaceContentRepository(reopened).getRevision(id)).toMatchObject({ revision: 1, inputHash: 'legacy-unavailable', state: 'PROVISIONING' })
+    expect(new SqliteWorkspaceContentRepository(reopened).getRevision(id)).toMatchObject({ revision: 1, inputHash: 'legacy-unavailable', state: 'PROVISIONING', legacyState: 'legacy_accessible' })
     expect(reopened.sqlite.pragma('quick_check')).toEqual([{ quick_check: 'ok' }])
     expect(reopened.sqlite.pragma('foreign_key_check')).toEqual([])
     reopened.close()

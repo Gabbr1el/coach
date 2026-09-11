@@ -28,6 +28,7 @@ export interface PlanningRepository {
   listWeeklyPlanningTopics?(now: number): WeeklyPlanningTopic[]
   listWeeklyAvailability?(now: number): Array<{ weekday: number; minutes: number }>
   saveWeeklyPlan?(input: { id: string; weekStart: string; timezone: string; revision: number; generatedAt: number; items: ExistingWeeklyItem[] }): void
+  ensureAuthoritativeNextStudyItem?(workspaceId: string, now: number, timezone: string): boolean
   listLegacyDailyItems?(dateKey: string): ExistingWeeklyItem[]
   getCanonicalPlanningTimezone?(fallback: string): string
 }
@@ -152,6 +153,15 @@ export class PlanningService {
     const persisted = this.repository.findWeeklyPlan(weekStart, timezone)
     if (!persisted || persisted.revision !== revision) throw new Error('Weekly plan was not persisted')
     return this.presentWeeklyPlan(persisted.id, weekStart, timezone, revision, persisted.generatedAt, persisted.items, now)
+  }
+  ensureAuthoritativeNextStudyItem(workspaceId: string, timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): WeeklyPlan {
+    timezone = this.repository.getCanonicalPlanningTimezone?.(timezone) ?? timezone
+    const plan = this.replanWeek(timezone)
+    const today = zonedDateKey(this.now(), timezone)
+    if (!plan.days.find((day) => day.dateKey === today)?.items.some((item) => item.workspaceId === workspaceId && item.status !== 'completed')) {
+      if (!this.repository.ensureAuthoritativeNextStudyItem?.(workspaceId, this.now(), timezone)) throw new Error('No unlocked roadmap topic is available for deterministic plan reconciliation')
+    }
+    return this.getWeeklyPlan(timezone)
   }
   getTodayPlan(workspaceId: string, timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): import('../../shared/contracts/study-workspace-contract').StudyPlanItem[] { const plan = this.getWeeklyPlan(timezone); const today = zonedDateKey(this.now(), plan.timezone); const items = plan.days.find((day) => day.dateKey === today)?.items.filter((item) => item.workspaceId === workspaceId) ?? []; const hasActive = items.some((item) => item.status === 'in_progress'); const firstPending = items.find((item) => item.status === 'pending')?.id; return items.map((item) => ({ id: item.id, title: item.title, durationMinutes: item.durationMinutes, position: item.position, status: item.status === 'in_progress' || (!hasActive && item.id === firstPending) ? 'active' : item.status, moduleId: item.moduleId ?? undefined, topicId: item.topicId ?? undefined, activityType: item.activityType, scheduledStartMinutes: item.scheduledStartMinutes })) }
   private presentWeeklyPlan(id: string, weekStart: string, timezone: string, revision: number, generatedAt: number, items: ExistingWeeklyItem[], now: number): WeeklyPlan {

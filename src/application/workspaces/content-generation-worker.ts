@@ -26,6 +26,7 @@ export interface ContentGenerationWorkerOptions {
   readonly leaseMs?: number
   readonly renewAfterMs?: number
   readonly timeoutMs?: number
+  readonly onPublished?: (job: ContentJob) => void
 }
 
 const systemClock: WorkerClock = {
@@ -52,6 +53,7 @@ export class ContentGenerationWorker {
   private readonly leaseMs: number
   private readonly renewAfterMs: number
   private readonly timeoutMs: number
+  private readonly onPublished?: (job: ContentJob) => void
   private pollHandle: unknown = null
   private running = false
   private stopping: Promise<void> | null = null
@@ -68,6 +70,7 @@ export class ContentGenerationWorker {
     this.leaseMs = options.leaseMs ?? CONTENT_JOB_DEFAULTS.leaseMs
     this.renewAfterMs = options.renewAfterMs ?? CONTENT_JOB_DEFAULTS.renewAfterMs
     this.timeoutMs = options.timeoutMs ?? this.leaseMs * 3
+    this.onPublished = options.onPublished
   }
 
   start(): void {
@@ -123,7 +126,8 @@ export class ContentGenerationWorker {
     const task = (async () => { try {
       const output = await this.admission.run(() => handler(job, controller.signal), { priority: 'background', signal: controller.signal })
       if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
-      this.repository.publishLease({ jobId: job.id, leaseToken, now: this.clock.now(), publish: output.publish })
+      const published = this.repository.publishLease({ jobId: job.id, leaseToken, now: this.clock.now(), publish: output.publish })
+      if (published !== null) this.onPublished?.(job)
     } catch (error) {
       const current = this.repository.getJob(job.id)
       if (current?.status === 'generating' && current.leaseToken === leaseToken) {

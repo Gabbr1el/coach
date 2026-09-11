@@ -26,9 +26,9 @@ export const createWorkspaceInputSchema = z.object({
 export const prepareWorkspaceDraftInputSchema = createWorkspaceInputSchema.omit({ draftId: true })
 
 export type WorkspaceProvisioningStatus = 'draft' | 'queued' | 'running' | 'waiting_for_provider' | 'failed_retryable' | 'ready'
-export type WorkspaceProvisioningStage = 'workspace' | 'materials' | 'roadmap' | 'lesson' | 'ready'
+export type WorkspaceProvisioningStage = 'workspace' | 'materials' | 'roadmap' | 'lesson' | 'exercises' | 'plan' | 'background' | 'ready'
 export interface WorkspaceLearningOverrides { readonly subject: string; readonly declaredLevel: CreateWorkspaceInput['declaredLevel'] | null; readonly declaredKnowledge: readonly string[]; readonly declaredDifficulties: readonly string[]; readonly goals: readonly string[] }
-export interface WorkspaceProvisioningState { readonly workspaceId: string; readonly status: WorkspaceProvisioningStatus; readonly stage: WorkspaceProvisioningStage; readonly materialIds: readonly string[]; readonly attemptCount: number; readonly createdAt: number; readonly startedAt: number | null; readonly stageUpdatedAt: number; readonly completedAt: number | null; readonly retryAfter: number | null; readonly errorCode: string | null; readonly errorMessage: string | null }
+export interface WorkspaceProvisioningState { readonly workspaceId: string; readonly status: WorkspaceProvisioningStatus; readonly stage: WorkspaceProvisioningStage; readonly materialIds: readonly string[]; readonly readinessState: 'PROVISIONING' | 'USABLE' | 'FULLY_PROVISIONED'; readonly backgroundPending: number; readonly legacyState: 'legacy_accessible' | null; readonly attemptCount: number; readonly createdAt: number; readonly startedAt: number | null; readonly stageUpdatedAt: number; readonly completedAt: number | null; readonly retryAfter: number | null; readonly errorCode: string | null; readonly errorMessage: string | null }
 
 export type CreateWorkspaceInput = z.infer<typeof createWorkspaceInputSchema>
 

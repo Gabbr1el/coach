@@ -11,6 +11,8 @@ export const workspaceLearningOverrides = sqliteTable('workspace_learning_overri
   declaredKnowledgeJson: text('declared_knowledge_json').notNull().default('[]'),
   declaredDifficultiesJson: text('declared_difficulties_json').notNull().default('[]'),
   goalsJson: text('goals_json').notNull().default('[]'),
+  onboardingAnalysisRevision: integer('onboarding_analysis_revision'),
+  onboardingAnalysisFingerprint: text('onboarding_analysis_fingerprint'),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
 }, (table) => [check('workspace_learning_overrides_level_check', sql`${table.declaredLevel} is null or ${table.declaredLevel} in ('beginner','intermediate','advanced')`)])
@@ -18,7 +20,7 @@ export const workspaceLearningOverrides = sqliteTable('workspace_learning_overri
 export const workspaceProvisioning = sqliteTable('workspace_provisioning', {
   workspaceId: text('workspace_id').primaryKey().references(() => workspaces.id, { onDelete: 'cascade' }),
   status: text('status', { enum: ['draft', 'queued', 'running', 'waiting_for_provider', 'failed_retryable', 'ready'] }).notNull(),
-  stage: text('stage', { enum: ['workspace', 'materials', 'roadmap', 'lesson', 'ready'] }).notNull(),
+  stage: text('stage', { enum: ['workspace', 'materials', 'roadmap', 'lesson', 'exercises', 'plan', 'background', 'ready'] }).notNull(),
   materialIdsJson: text('material_ids_json').notNull().default('[]'),
   attemptCount: integer('attempt_count').notNull().default(0),
   createdAt: integer('created_at').notNull(),
@@ -28,7 +30,7 @@ export const workspaceProvisioning = sqliteTable('workspace_provisioning', {
   retryAfter: integer('retry_after'),
   errorCode: text('error_code'),
   errorMessage: text('error_message'),
-}, (table) => [check('workspace_provisioning_status_check', sql`${table.status} in ('draft','queued','running','waiting_for_provider','failed_retryable','ready')`), check('workspace_provisioning_stage_check', sql`${table.stage} in ('workspace','materials','roadmap','lesson','ready')`), index('workspace_provisioning_resume_idx').on(table.status, table.retryAfter)])
+}, (table) => [check('workspace_provisioning_status_check', sql`${table.status} in ('draft','queued','running','waiting_for_provider','failed_retryable','ready')`), check('workspace_provisioning_stage_check', sql`${table.stage} in ('workspace','materials','roadmap','lesson','exercises','plan','background','ready')`), index('workspace_provisioning_resume_idx').on(table.status, table.retryAfter)])
 
 export const workspaceContentRevisions = sqliteTable('workspace_content_revisions', {
   workspaceId: text('workspace_id').primaryKey().references(() => workspaces.id, { onDelete: 'cascade' }),
@@ -43,6 +45,7 @@ export const workspaceContentRevisions = sqliteTable('workspace_content_revision
   updatedAt: integer('updated_at').notNull(),
   usableAt: integer('usable_at'),
   fullyProvisionedAt: integer('fully_provisioned_at'),
+  legacyState: text('legacy_state', { enum: ['legacy_accessible'] }),
 }, (table) => [
   check('workspace_content_revisions_revision_check', sql`${table.revision} > 0`),
   check('workspace_content_revisions_state_check', sql`${table.state} in ('provisioning','usable','fully_provisioned')`),

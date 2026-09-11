@@ -17,7 +17,10 @@ function topicContext(database: CoachDatabase, job: ContentJob) {
 
 export function createContentJobHandlers(input: { database: CoachDatabase; roadmap: RoadmapService; lessons: StudyLessonService; exercises: ExerciseService; planning: PlanningService }): Partial<Record<ContentJob['kind'], ContentJobHandler>> {
   return {
-    roadmap_generate: (job, signal) => input.roadmap.prepareGeneration(job.workspaceId, job.revision, job.inputHash, signal),
+    roadmap_generate: (job, signal) => {
+      const materials = input.database.sqlite.prepare("SELECT id FROM materials WHERE workspace_id=? AND status='ready' ORDER BY CASE role WHEN 'priority' THEN 0 WHEN 'base' THEN 1 ELSE 2 END,created_at,id").all(job.workspaceId) as Array<{ id: string }>
+      return input.roadmap.prepareGeneration(job.workspaceId, job.revision, job.inputHash, signal, materials.map((item) => item.id))
+    },
     lesson_generate: (job, signal) => input.lessons.prepareGeneration({ ...topicContext(input.database, job), revision: job.revision, inputHash: job.inputHash }, signal),
     exercise_generate: async (job, signal) => {
       const context = topicContext(input.database, job)
@@ -25,6 +28,6 @@ export function createContentJobHandlers(input: { database: CoachDatabase; roadm
       if (!lesson) throw new Error('Current revision lesson unavailable')
       return input.exercises.prepareGeneration({ ...context, lessonId: lesson.id, revision: job.revision, inputHash: job.inputHash }, signal)
     },
-    plan_recalculate: async () => ({ publish: () => input.planning.replanWeek() }),
+    plan_recalculate: async (job) => ({ publish: () => input.planning.ensureAuthoritativeNextStudyItem(job.workspaceId) }),
   }
 }

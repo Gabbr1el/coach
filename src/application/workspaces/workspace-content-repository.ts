@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { ContentJob, ContentUnitKind, RequiredContentUnit, WorkspaceContentRevision } from '../../shared/contracts/workspace-content-contract'
 
 export const CONTENT_JOB_DEFAULTS = {
@@ -12,6 +13,14 @@ export const CONTENT_UNIT_KEYS = {
   roadmap: 'roadmap',
   topic: (topicId: string) => topicId,
 } as const
+
+export const CONTENT_GENERATOR_VERSIONS: Record<ContentUnitKind, string> = {
+  material_extract: 'material-v1', material_analyze: 'material-analysis-v1', roadmap_generate: 'roadmap-material-first-v2', lesson_generate: 'lesson-v1', exercise_generate: 'exercise-v1', plan_recalculate: 'plan-v1',
+}
+
+export function contentJobKey(input: Pick<EnqueueContentJobInput, 'workspaceId' | 'revision' | 'kind' | 'unitKey' | 'inputHash' | 'generatorContractVersion'>): string {
+  return createHash('sha256').update([input.workspaceId, input.revision, input.kind, input.unitKey, input.inputHash, input.generatorContractVersion].join('|')).digest('hex')
+}
 
 export interface EnqueueContentJobInput {
   readonly workspaceId: string

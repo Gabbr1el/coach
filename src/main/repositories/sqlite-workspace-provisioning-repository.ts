@@ -2,9 +2,9 @@ import type { WorkspaceProvisioningRepository } from '../../application/workspac
 import type { WorkspaceProvisioningState } from '../../shared/contracts/workspace-contract'
 import type { CoachDatabase } from '../database/connection'
 
-type Row = Omit<WorkspaceProvisioningState, 'materialIds'> & { materialIdsJson: string }
-const select = 'SELECT workspace_id AS workspaceId,status,stage,material_ids_json AS materialIdsJson,attempt_count AS attemptCount,created_at AS createdAt,started_at AS startedAt,stage_updated_at AS stageUpdatedAt,completed_at AS completedAt,retry_after AS retryAfter,error_code AS errorCode,error_message AS errorMessage FROM workspace_provisioning'
-function map(row: Row): WorkspaceProvisioningState { return { ...row, materialIds: JSON.parse(row.materialIdsJson) as string[] } }
+type Row = Omit<WorkspaceProvisioningState, 'materialIds' | 'readinessState' | 'backgroundPending' | 'legacyState'> & { materialIdsJson: string; readinessState: 'provisioning' | 'usable' | 'fully_provisioned' | null; backgroundPending: number; legacyState: 'legacy_accessible' | null }
+const select = `SELECT p.workspace_id AS workspaceId,p.status,p.stage,p.material_ids_json AS materialIdsJson,p.attempt_count AS attemptCount,p.created_at AS createdAt,p.started_at AS startedAt,p.stage_updated_at AS stageUpdatedAt,p.completed_at AS completedAt,p.retry_after AS retryAfter,p.error_code AS errorCode,p.error_message AS errorMessage,r.state AS readinessState,r.legacy_state AS legacyState,COALESCE((SELECT COUNT(*) FROM content_jobs j WHERE j.workspace_id=p.workspace_id AND j.revision=r.revision AND j.status IN ('pending','queued','generating')),0) AS backgroundPending FROM workspace_provisioning p LEFT JOIN workspace_content_revisions r ON r.workspace_id=p.workspace_id`
+function map(row: Row): WorkspaceProvisioningState { const { materialIdsJson, readinessState, ...rest } = row; return { ...rest, materialIds: JSON.parse(materialIdsJson) as string[], readinessState: readinessState?.toUpperCase() as WorkspaceProvisioningState['readinessState'] ?? 'PROVISIONING' } }
 
 export class SqliteWorkspaceProvisioningRepository implements WorkspaceProvisioningRepository {
   constructor(private readonly database: CoachDatabase) {}

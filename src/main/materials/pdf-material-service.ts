@@ -15,6 +15,8 @@ const MAX_PAGE_CHARACTERS = 100_000
 const MAX_REVIEW_CHARACTERS = 4_000
 const CHUNK_CHARACTERS = 2_400
 const CHUNK_OVERLAP = 300
+const EXTRACTION_CONTRACT_VERSION = 'extract-v1:chunk-v1'
+const ANALYSIS_CONTRACT_VERSION = 'semantic-v1:schema-v1'
 const STOP_WORDS = new Set(['a', 'as', 'o', 'os', 'de', 'da', 'das', 'do', 'dos', 'e', 'em', 'no', 'nos', 'na', 'nas', 'para', 'por', 'com', 'uma', 'um', 'aprender', 'estudar', 'basico', 'avancado'])
 
 type RelevanceDecision = 'relevant' | 'irrelevant' | 'ambiguous'
@@ -127,7 +129,8 @@ export class PdfMaterialService {
     const createdAt = this.now()
     const name = basename(path).slice(0, 240)
     const mediaType = isPdf ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
-    this.database.sqlite.prepare("INSERT INTO materials (id, workspace_id, name, media_type, page_count, status, relevance, content_hash, error_message, created_at) VALUES (?, ?, ?, ?, 0, 'staged', 0, ?, NULL, ?)").run(materialId, workspaceId, name, mediaType, hash, createdAt)
+    const extractionFingerprint = createHash('sha256').update(`${hash}|${EXTRACTION_CONTRACT_VERSION}`).digest('hex')
+    this.database.sqlite.prepare("INSERT INTO materials (id, workspace_id, name, media_type, page_count, status, relevance, content_hash, extraction_fingerprint, error_message, created_at) VALUES (?, ?, ?, ?, 0, 'staged', 0, ?, ?, NULL, ?)").run(materialId, workspaceId, name, mediaType, hash, extractionFingerprint, createdAt)
     try {
       const pages = isPdf ? await this.extractPages(data) : await (this.options.extractPptxSlides ? this.options.extractPptxSlides(path) : extractPptxSlides(data))
       const extracted = prepareExtractedPages(pages)
@@ -137,7 +140,10 @@ export class PdfMaterialService {
       const request = { workspaceName: workspace.name, workspaceObjective: workspace.objective, fileName: name, excerpt: samplePages(extracted, MAX_REVIEW_CHARACTERS), lexicalRelevance: assessment.relevance }
       let semantic: MaterialSemanticAnalysis | null = null
       try { semantic = this.options.analyzeSemantic ? materialSemanticAnalysisSchema.parse(await this.options.analyzeSemantic(request)) : null } catch { semantic = null }
-      if (semantic) this.database.sqlite.prepare('UPDATE materials SET semantic_analysis_json = ? WHERE id = ?').run(JSON.stringify(semantic), materialId)
+      if (semantic) {
+        const analysisFingerprint = createHash('sha256').update(`${extractionFingerprint}|${normalize(`${workspace.name}|${workspace.objective}`)}|${ANALYSIS_CONTRACT_VERSION}`).digest('hex')
+        this.database.sqlite.prepare('UPDATE materials SET semantic_analysis_json = ?, analysis_fingerprint = ? WHERE id = ?').run(JSON.stringify(semantic), analysisFingerprint, materialId)
+      }
       if (semantic?.relevance === 'unrelated' && semantic.confidence >= 0.8) return this.rejectMaterial(materialId, 'Este documento não parece relacionado ao estudo.')
       return this.getMaterial(materialId)
     } catch (error) {

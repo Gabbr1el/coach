@@ -116,7 +116,8 @@ export class ContentGenerationWorker {
     const renewal = this.clock.setInterval(() => {
       if (!this.repository.renewLease({ jobId: job.id, leaseToken, now: this.clock.now(), leaseMs: this.leaseMs })) controller.abort()
     }, this.renewAfterMs)
-    const timeout = this.clock.setTimeout(() => controller.abort(), this.timeoutMs)
+    let timedOut = false
+    const timeout = this.clock.setTimeout(() => { timedOut = true; controller.abort() }, this.timeoutMs)
     const active = { job, controller, renewal, timeout }
     this.active = active
     const task = (async () => { try {
@@ -126,7 +127,8 @@ export class ContentGenerationWorker {
     } catch (error) {
       const current = this.repository.getJob(job.id)
       if (current?.status === 'generating' && current.leaseToken === leaseToken) {
-        if (!this.running || controller.signal.aborted && this.clock.now() < (job.leaseExpiresAt ?? 0)) this.repository.releaseLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: this.running ? 'GENERATION_TIMEOUT' : 'WORKER_SHUTDOWN' })
+        if (!this.running) this.repository.releaseLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: 'WORKER_SHUTDOWN' })
+        else if (timedOut) this.repository.failLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: 'GENERATION_TIMEOUT' })
         else this.repository.failLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: errorCode(error), errorMessage: error instanceof Error ? error.message : undefined })
       }
     } finally {

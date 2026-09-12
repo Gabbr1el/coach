@@ -34,6 +34,7 @@ export interface PlannerActionDependencies {
   readonly setWeekdayAvailability?: (input: { weekday: number; minutes: number; timezone: string }) => unknown
   readonly recalculatePlan?: (timezone: string) => unknown
   readonly setPlanItemCompletion?: (workspaceId: string, itemId: string, completed: boolean) => Promise<unknown>
+  readonly onResolved?: (action: PlannerAction) => Promise<void> | void
   readonly now?: () => number
   readonly createId?: () => string
 }
@@ -101,6 +102,7 @@ export class PlannerActionService {
       }
       const completed = this.dependencies.repository.complete(actionId, 'applied', result, this.now())
       this.dependencies.repository.invalidateSiblings(action.originMessageId, action.id, this.now())
+      try { await this.dependencies.onResolved?.(completed) } catch {}
       return completed
     } catch (error) {
       if (this.dependencies.repository.find(actionId)?.status === 'applying') this.dependencies.repository.release(actionId)

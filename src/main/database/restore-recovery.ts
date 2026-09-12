@@ -47,7 +47,7 @@ export function validateCoachDatabaseSchema(sqlite: Database.Database, expectedM
     if (migrationCount !== expectedMigrationCount) throw new Error('Coach backup version is incompatible with this application')
   }
   const requirements: Record<string, string[]> = {
-    workspaces: ['id', 'name', 'objective'], conversation_threads: ['id', 'workspace_id'], conversation_messages: ['id', 'thread_id', 'content'],
+    workspaces: ['id', 'name', 'objective'], conversation_threads: ['id', 'workspace_id'], conversation_messages: ['id', 'thread_id', 'content'], organizer_conversation_states: ['thread_id', 'state_json', 'updated_at'],
     academic_subject_contexts: ['subject', 'declared_level', 'declared_knowledge_json', 'declared_difficulties_json', 'goals_json', 'source_evidence_json'],
     workspace_academic_contexts: ['workspace_id', 'subject', 'relation'],
     workspace_learning_overrides: ['workspace_id', 'subject', 'canonical_focus', 'canonical_context', 'declared_level', 'declared_knowledge_json', 'declared_difficulties_json', 'goals_json'],

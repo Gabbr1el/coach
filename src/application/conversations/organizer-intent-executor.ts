@@ -15,6 +15,9 @@ interface OrganizerExecutionContext {
   readonly academicLife: AcademicLifeItem[]
   readonly deadlines: AcademicEvent[]
   readonly plan: WeeklyPlan | null
+  readonly originMessageId?: string
+  readonly originContent?: string
+  readonly focusedAcademicEventId?: string | null
 }
 
 export type OrganizerExecution = { readonly result: HomeOrganizerResult; readonly assistantId?: string } | null
@@ -68,7 +71,8 @@ export class OrganizerIntentExecutor {
     const proposal = eventResolution ?? this.mutationProposal(capability, intent.entities, workspace, context)
     const parsed = plannerActionProposalSchema.parse({ type: proposal.type, payload: proposal.payload })
     const assistantId = crypto.randomUUID()
-    const action = this.actions.propose({ type: parsed.type as PlannerActionType, payload: parsed.payload, label: proposal.label, originMessageId: assistantId, contextVersion: context.version })
+    const originMessageId = context.originMessageId ?? assistantId
+    const action = this.actions.propose({ type: parsed.type as PlannerActionType, payload: parsed.payload, label: proposal.label, originMessageId, contextVersion: context.version, idempotencyScope: `organizer:${originMessageId}:${parsed.type}:${JSON.stringify(parsed.payload)}` })
     const workspaceIds = workspace ? [workspace.id] : []
     return { assistantId, result: { outcome: 'needs_decision', operations: [], actions: [action], affectedWorkspaceIds: workspaceIds, message: `Posso ${proposal.label.toLocaleLowerCase('pt-BR')}. Confirme pelo botão; nada mudou ainda.` } }
   }
@@ -100,23 +104,28 @@ export class OrganizerIntentExecutor {
     if (capability === 'academic.event.linkWorkspace' || capability === 'academic.event.unlinkWorkspace') return this.eventWorkspaceMutation(capability, entities, context)
     const operation = capability === 'academic.event.create' || capability === 'academic-life.save' ? 'create' : capability === 'academic.event.update' ? 'update' : capability === 'academic.event.cancel' ? 'cancel' : null
     if (!operation) return null
-    const statedSubject = subjectFrom(context.content)
-    if (!entities.subject || !statedSubject || searchNormalized(entities.subject) !== searchNormalized(statedSubject)) throw new Error('Organizer subject does not correspond to the user message')
-    const statedKind = this.eventKindFrom(context.content)
+    const semanticContent = context.originContent ?? context.content
+    const focused = context.focusedAcademicEventId ? context.academicLife.find((item) => item.id === context.focusedAcademicEventId && item.status === 'active' && item.replacedById === null) : null
+    const focusedMetadata = focused ? storedEvent(focused) : null
+    const statedSubject = subjectFrom(semanticContent)
+    const contextualReference = Boolean(context.focusedAcademicEventId) && !subjectFrom(context.content)
+    if (!entities.subject || (contextualReference ? !focusedMetadata || searchNormalized(entities.subject) !== searchNormalized(focusedMetadata.subject) : !statedSubject || searchNormalized(entities.subject) !== searchNormalized(statedSubject))) throw new Error('Organizer subject does not correspond to the user message or focused event')
+    const statedKind = contextualReference ? focusedMetadata?.eventKind ?? null : this.eventKindFrom(semanticContent) ?? focusedMetadata?.eventKind ?? null
     const eventKind = entities.eventKind ?? (capability === 'academic-life.save' ? statedKind : null)
     if (!eventKind || statedKind !== eventKind) throw new Error('Organizer event kind does not correspond to the user message')
     let targetDate: number | null = null; let nextDate: number | null = null
     try {
-      if (operation === 'create') nextDate = extractAcademicDate(context.content, context).timestamp
-      else if (operation === 'update') { const change = extractAcademicDateChange(context.content, context); targetDate = change.from.timestamp; nextDate = change.to.timestamp }
-      else { try { targetDate = extractAcademicDate(context.content, context).timestamp } catch (error) { if (!(error instanceof Error) || error.message !== 'Data ausente') throw error } }
+      if (operation === 'create') nextDate = extractAcademicDate(semanticContent, context).timestamp
+      else if (operation === 'update' && focused) { nextDate = extractAcademicDate(semanticContent, context).timestamp }
+      else if (operation === 'update') { const change = extractAcademicDateChange(semanticContent, context); targetDate = change.from.timestamp; nextDate = change.to.timestamp }
+      else { try { targetDate = extractAcademicDate(semanticContent, context).timestamp } catch (error) { if (!(error instanceof Error) || error.message !== 'Data ausente') throw error } }
     } catch (error) {
       return { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: error instanceof Error ? `${error.message}. Informe uma data válida e inequívoca.` : 'Informe uma data válida e inequívoca.' }
     }
     const title = `${eventKind === 'exam' ? 'Prova' : eventKind === 'assignment' ? 'Trabalho' : 'Prazo'} ${entities.subject.trim()}`
     const formattedNextDate = nextDate === null ? null : new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long', timeZone: context.timezone }).format(nextDate)
     if (operation === 'create') return { type: 'academic-life.save', payload: { kind: this.lifeKind(eventKind), title, details: eventDetails(eventKind, entities.subject, context.content), workspaceId: null, startsAt: null, endsAt: nextDate, expiresAt: nextDate, timezone: context.timezone, weekday: null, minutes: null, shareWithAi: false, provenance: { source: 'conversation', reference: null } }, label: `Salvar ${title} em ${formattedNextDate}` }
-    const matches = context.academicLife.filter((item) => { const stored = storedEvent(item); return item.status === 'active' && item.replacedById === null && stored?.eventKind === eventKind && searchNormalized(stored.subject) === searchNormalized(entities.subject!) && (targetDate === null || item.endsAt === targetDate) })
+    const matches = context.academicLife.filter((item) => { const stored = storedEvent(item); return item.status === 'active' && item.replacedById === null && stored?.eventKind === eventKind && searchNormalized(stored.subject) === searchNormalized(entities.subject!) && (targetDate === null || item.endsAt === targetDate) && (!context.focusedAcademicEventId || item.id === context.focusedAcademicEventId) })
     if (!matches.length) return { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: 'Não encontrei um evento acadêmico ativo correspondente. Nenhuma alteração foi proposta.' }
     if (matches.length > 1) return { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: 'Encontrei mais de um evento acadêmico correspondente. Informe a data atual para eu identificar o evento exato.' }
     const match = matches[0]!

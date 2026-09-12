@@ -379,6 +379,13 @@
       "when": 1789239600000,
       "tag": "0053_event_workspace_actions",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "6",
+      "when": 1789243200000,
+      "tag": "0054_organizer_conversation_state",
+      "breakpoints": true
     }
   ]
 }

@@ -6,6 +6,11 @@ export interface OrganizerInterpretationContext {
   readonly currentTime: number
   readonly currentDate: string
   readonly timezone: string
+  readonly conversation?: {
+    readonly focus: { readonly academicEvent: boolean; readonly workspace: boolean; readonly subject: string | null }
+    readonly pending: { readonly capability: string; readonly entities: unknown; readonly missingFields: readonly string[] } | null
+    readonly recentUserMessages: ReadonlyArray<{ readonly content: string; readonly createdAt: number }>
+  }
 }
 
 export interface OrganizerIntentInterpreter {
@@ -66,7 +71,7 @@ export class ProviderOrganizerIntentInterpreter implements OrganizerIntentInterp
       const response = await provider.sendMessage({
         messages: [
           { role: 'system', content: 'Interpret intent; never execute/write. Return only strict JSON matching OrganizerIntent: mode query|mutation|clarification|conversation, capability from the supplied catalog or null, semantic entities limited to subject, query, eventKind (exam|assignment|deadline), dateExpression, dateFromExpression, dateToExpression, weekday, minutes, completed, target and status, confidence 0..1, missingFields string[], summary string. Dates must remain verbatim semantic expressions. Never output timestamps, IDs, ownership, persisted records, PlannerAction payloads, provenance, privacy flags, titles or details. A query mentioning prova, prazo, trabalho or evento is never a create. Use academic.event.cancel for cancellation and academic.event.update for rescheduling. Legacy academic-life aliases remain available only for compatibility.' },
-          { role: 'user', content: JSON.stringify({ message: content, capabilities: ORGANIZER_CAPABILITY_CATALOG, currentDate: context.currentDate, timezone: context.timezone }) },
+          { role: 'user', content: JSON.stringify({ message: content, capabilities: ORGANIZER_CAPABILITY_CATALOG, currentDate: context.currentDate, timezone: context.timezone, conversation: context.conversation ?? null }) },
         ],
         maxOutputTokens: 700,
       })

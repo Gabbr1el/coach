@@ -10,6 +10,7 @@ import { migrationCount, repairExerciseSchema, repairInteractiveCodeStateSchema,
 import { repairLegacyExerciseData } from '../../src/main/database/exercise-data-repair'
 import { DrizzleWorkspaceRepository } from '../../src/main/repositories/drizzle-workspace-repository'
 import { DrizzleConversationRepository } from '../../src/main/repositories/drizzle-conversation-repository'
+import { SqliteOrganizerConversationStateRepository } from '../../src/main/repositories/sqlite-organizer-conversation-state-repository'
 import { DrizzleStudyWorkspaceRepository } from '../../src/main/repositories/drizzle-study-workspace-repository'
 import { DrizzlePlannerActionRepository } from '../../src/main/repositories/drizzle-planner-action-repository'
 import { DrizzleRoadmapRepository } from '../../src/main/repositories/drizzle-roadmap-repository'
@@ -342,6 +343,7 @@ describe('Coach database migrations', () => {
       { name: 'material_analysis_cache' },
       { name: 'material_chunks' },
       { name: 'materials' },
+      { name: 'organizer_conversation_states' },
       { name: 'performance_timeline_events' },
       { name: 'plan_item_completion_history' },
       { name: 'planner_actions' },
@@ -537,6 +539,12 @@ describe('Coach database migrations', () => {
 
     expect(row).toEqual({ scope: 'workspace', workspaceId: workspace.id, title: workspace.name })
     database.close()
+  })
+
+  it('persists Organizer state by Home thread and clears invalid schema on read', async () => {
+    const databasePath = createDatabasePath(); let database = openCoachDatabase({ databasePath, migrationsFolder }); const conversations = new DrizzleConversationRepository(database); const threadId = '00000000-0000-4000-8000-000000000000'; await conversations.ensureHomeThread(threadId, 1)
+    let repository = new SqliteOrganizerConversationStateRepository(database); repository.save(threadId, { focusedAcademicEventId: null, focusedWorkspaceId: null, focusedSubject: 'POO', pending: null, recentResolvedAcademicEventIds: [], recentResolvedWorkspaceIds: [], updatedAt: 2 }); database.close()
+    database = openCoachDatabase({ databasePath, migrationsFolder }); repository = new SqliteOrganizerConversationStateRepository(database); expect(repository.load(threadId)).toMatchObject({ focusedSubject: 'POO', updatedAt: 2 }); database.sqlite.prepare('UPDATE organizer_conversation_states SET state_json=? WHERE thread_id=?').run('{"invalid":true}', threadId); expect(repository.load(threadId)).toMatchObject({ focusedSubject: null, pending: null }); expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM organizer_conversation_states').get()).toEqual({ count: 0 }); database.close()
   })
 
   it('persists the complete study workspace state', async () => {

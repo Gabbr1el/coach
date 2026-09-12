@@ -3,7 +3,7 @@ import type { ConversationRepository } from './conversation-repository'
 import type { AIProviderManager } from '../ai/ai-provider-manager'
 import { COACH_POLICY } from '../ai/coach-policy'
 
-const HOME_THREAD_ID = '00000000-0000-4000-8000-000000000000'
+export const HOME_THREAD_ID = '00000000-0000-4000-8000-000000000000'
 
 export interface HomePlannerServiceDependencies {
   readonly repository: ConversationRepository
@@ -40,6 +40,12 @@ export class HomePlannerService {
     await this.repository.ensureHomeThread(HOME_THREAD_ID, this.now())
     return this.repository.listMessages(HOME_THREAD_ID, 100)
   }
+  get threadId(): string { return HOME_THREAD_ID }
+  createMessageId(): string { return this.createId() }
+  async listRecentUserMessages(limit = 4): Promise<Array<Pick<ConversationMessage, 'content' | 'createdAt'>>> {
+    await this.repository.ensureHomeThread(HOME_THREAD_ID, this.now())
+    return (await this.repository.listMessages(HOME_THREAD_ID, Math.min(8, Math.max(2, limit * 2)))).filter((message) => message.role === 'user').slice(-Math.min(4, Math.max(2, limit))).map(({ content, createdAt }) => ({ content: content.slice(0, 300), createdAt }))
+  }
 
   async sendMessage(input: SendHomeMessageInput): Promise<ConversationMessage[]> { return this.sendMessageWithAuthority(input, { currentTime: this.now(), currentDate: new Date(this.now()).toISOString().slice(0, 10), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, state: {}, operationResult: null, constraints: [] }) }
   async sendMessageWithAuthority(input: SendHomeMessageInput, authority: { currentTime: number; currentDate: string; timezone: string; state: unknown; operationResult: unknown; constraints: string[] }): Promise<ConversationMessage[]> {
@@ -60,7 +66,7 @@ export class HomePlannerService {
     let modelId = 'planner-rules-v1'
 
     if (provider) {
-      const recentMessages = await this.repository.listMessages(HOME_THREAD_ID, 10)
+      const recentMessages = (await this.repository.listMessages(HOME_THREAD_ID, 8)).filter((message) => message.role === 'user').slice(-4).map((message) => ({ ...message, content: message.content.slice(0, 300) }))
       try {
         const response = await provider.sendMessage({
           messages: [
@@ -103,7 +109,7 @@ export class HomePlannerService {
     }
     if (!provider.streamMessage) throw new Error('Active provider does not support streaming')
 
-    const recentMessages = await this.repository.listMessages(HOME_THREAD_ID, 10)
+    const recentMessages = (await this.repository.listMessages(HOME_THREAD_ID, 8)).filter((message) => message.role === 'user').slice(-4).map((message) => ({ ...message, content: message.content.slice(0, 300) }))
     let content = ''
     let providerId = provider.id
     let modelId = 'unknown'
@@ -152,6 +158,6 @@ export class HomePlannerService {
       assistant: { id: this.createId(), threadId: HOME_THREAD_ID, role: 'assistant', content, createdAt: now + 1, providerId, modelId },
     })
   }
-  async saveAuthoritativeTurn(content: string, assistantContent: string, assistantId?: string): Promise<ConversationMessage[]> { const now = this.now(); await this.repository.ensureHomeThread(HOME_THREAD_ID, now); return this.repository.addTurn({ threadId: HOME_THREAD_ID, user: { id: this.createId(), threadId: HOME_THREAD_ID, role: 'user', content, createdAt: now, providerId: null, modelId: null }, assistant: { id: assistantId ?? this.createId(), threadId: HOME_THREAD_ID, role: 'assistant', content: assistantContent, createdAt: now + 1, providerId: 'coach-local', modelId: 'home-organizer-v1' } }) }
+  async saveAuthoritativeTurn(content: string, assistantContent: string, assistantId?: string, userId?: string): Promise<ConversationMessage[]> { const now = this.now(); await this.repository.ensureHomeThread(HOME_THREAD_ID, now); return this.repository.addTurn({ threadId: HOME_THREAD_ID, user: { id: userId ?? this.createId(), threadId: HOME_THREAD_ID, role: 'user', content, createdAt: now, providerId: null, modelId: null }, assistant: { id: assistantId ?? this.createId(), threadId: HOME_THREAD_ID, role: 'assistant', content: assistantContent, createdAt: now + 1, providerId: 'coach-local', modelId: 'home-organizer-v1' } }) }
   saveSystemResult(content: string): Promise<ConversationMessage[]> { return this.saveAuthoritativeTurn('Ação aplicada pelo botão da Organizadora.', content) }
 }

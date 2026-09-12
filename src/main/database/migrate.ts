@@ -190,13 +190,28 @@ function tableColumns(sqlite: Database.Database, table: string): Set<string> {
   return new Set((sqlite.pragma(`table_info(${table})`) as Array<{ name: string }>).map((column) => column.name))
 }
 
+export function preflightPublishedReviewMigration(sqlite: Database.Database): void {
+  const migrationTable = sqlite.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='__drizzle_migrations'").get()
+  if (!migrationTable) return
+  const latest = sqlite.prepare('SELECT MAX(created_at) AS createdAt FROM __drizzle_migrations').get() as { createdAt: number | null }
+  if (latest.createdAt === null || latest.createdAt < 1789160400000 || latest.createdAt >= 1789164000000) return
+  const columns = tableColumns(sqlite, 'assessment_variants')
+  const duplicateColumns = ['public_payload_json', 'evaluator_json'].filter((column) => columns.has(column))
+  if (!duplicateColumns.length) return
+  const reviewTables = ['review_sessions', 'review_items', 'review_help_events'].filter((table) => tableColumns(sqlite, table).size > 0)
+  if (reviewTables.length) throw new Error(`Unsupported partial 0050 schema; review tables already exist: ${reviewTables.join(', ')}`)
+  requireLegacyColumns('assessment_variants before 0050', columns, ['id', 'workspace_id', 'intent_id', 'environment', 'source_ref', 'source_revision', 'difficulty', 'prerequisite_concept_ids_json', 'public_metadata_json', 'created_at', 'updated_at'])
+  // One known pre-0050 build added these columns without journaling 0050. Remove only that drift so the published migration can run unchanged.
+  sqlite.transaction(() => { for (const column of [...duplicateColumns].reverse()) sqlite.exec(`ALTER TABLE assessment_variants DROP COLUMN ${column}`) })()
+}
+
 function requireLegacyColumns(table: string, existing: Set<string>, required: string[]): void {
   const missing = required.filter((column) => !existing.has(column))
   if (missing.length) throw new Error(`Unsupported published ${table} schema; missing ${missing.join(', ')}`)
 }
 
-function source(existing: Set<string>, column: string, fallback: string): string {
-  return existing.has(column) ? column : fallback
+function source(existing: Set<string>, column: string, fallback: string, qualifier = ''): string {
+  return existing.has(column) ? `${qualifier}${column}` : fallback
 }
 
 function normalizedSql(sqlite: Database.Database, type: 'table' | 'index', name: string): string {
@@ -245,8 +260,8 @@ export function repairPublishedEvidenceSchema(sqlite: Database.Database): void {
           INSERT INTO __coach_repair_assessment_variants
             (id,workspace_id,intent_id,environment,source_ref,source_revision,difficulty,prerequisite_concept_ids_json,public_metadata_json,public_payload_json,evaluator_json,created_at,updated_at)
           SELECT v.id,${variants.has('workspace_id') ? 'v.workspace_id' : 'i.workspace_id'},v.intent_id,v.environment,v.source_ref,v.source_revision,v.difficulty,
-            ${source(variants, 'prerequisite_concept_ids_json', "'[]'")},${source(variants, 'public_metadata_json', "'{}'")},
-            ${source(variants, 'public_payload_json', "'{}'")},${source(variants, 'evaluator_json', "'{}'")},v.created_at,v.updated_at
+            ${source(variants, 'prerequisite_concept_ids_json', "'[]'", 'v.')},${source(variants, 'public_metadata_json', "'{}'", 'v.')},
+            ${source(variants, 'public_payload_json', "'{}'", 'v.')},${source(variants, 'evaluator_json', "'{}'", 'v.')},v.created_at,v.updated_at
           FROM assessment_variants v JOIN assessment_intents i ON i.id=v.intent_id;
           DROP TABLE assessment_variants;
           ALTER TABLE __coach_repair_assessment_variants RENAME TO assessment_variants;

@@ -111,6 +111,8 @@ export class SqliteLearningEvidenceService implements LearningEvidenceRecorder {
       if (!owned) throw new Error('Concept does not belong to workspace')
       return owned.id
     }
+    const assessed = this.database.sqlite.prepare('SELECT i.concept_id AS conceptId FROM assessment_variants v JOIN assessment_intents i ON i.id=v.intent_id WHERE v.workspace_id=? AND v.environment=? AND v.source_ref=? ORDER BY v.updated_at DESC LIMIT 1').get(input.workspaceId, input.environment, input.sourceRef) as { conceptId: string } | undefined
+    if (assessed) return assessed.conceptId
     if (input.topicId) {
       const mapped = this.database.sqlite.prepare("SELECT concept_id AS conceptId FROM topic_concepts WHERE workspace_id=? AND topic_id=? AND mapping_status='mapped' AND concept_id IS NOT NULL ORDER BY confidence DESC,id LIMIT 1").get(input.workspaceId, input.topicId) as { conceptId: string } | undefined
       if (mapped) return mapped.conceptId
@@ -143,10 +145,16 @@ export class SqliteLearningEvidenceService implements LearningEvidenceRecorder {
   }
 
   private ensureAssessment(input: RecordLearningAttempt, conceptId: string): { intentId: string | null; variantId: string | null } {
+    const authoritative = this.database.sqlite.prepare('SELECT v.id AS variantId,v.intent_id AS intentId,i.concept_id AS conceptId FROM assessment_variants v JOIN assessment_intents i ON i.id=v.intent_id WHERE v.workspace_id=? AND v.environment=? AND v.source_ref=? ORDER BY v.updated_at DESC LIMIT 1').get(input.workspaceId, input.environment, input.sourceRef) as { variantId: string; intentId: string; conceptId: string } | undefined
+    if (authoritative) {
+      if (authoritative.conceptId !== conceptId) throw new Error('Assessment variant concept does not match the mapped topic concept')
+      return { intentId: authoritative.intentId, variantId: authoritative.variantId }
+    }
     if (!input.difficulty) return { intentId: null, variantId: null }
     const prerequisites = input.prerequisiteConceptIds ?? []
     const invalidPrerequisite = prerequisites.find((id) => !this.database.sqlite.prepare("SELECT 1 FROM concepts c WHERE c.id=? AND c.workspace_id=? AND (c.id=? OR EXISTS (SELECT 1 FROM topic_concepts tc WHERE tc.workspace_id=c.workspace_id AND tc.concept_id=c.id AND tc.mapping_status='mapped'))").get(id, input.workspaceId, conceptId))
     if (invalidPrerequisite) throw new Error('Prerequisite concept is not taught or mapped in workspace')
+    if (input.mappingProvenance !== 'explicit') return { intentId: null, variantId: null }
     const kind = input.environment === 'checkpoint' ? 'conceptual_recall' : input.environment === 'exercise' ? 'applied_problem' : 'guided_practice'
     const intentId = input.assessmentIntentId ?? stableId('intent', input.workspaceId, conceptId, kind)
     if (input.assessmentIntentId && !this.database.sqlite.prepare('SELECT 1 FROM assessment_intents WHERE id=? AND workspace_id=? AND concept_id=?').get(intentId, input.workspaceId, conceptId)) throw new Error('Assessment intent does not belong to workspace concept')

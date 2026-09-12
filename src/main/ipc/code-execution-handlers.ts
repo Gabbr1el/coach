@@ -149,18 +149,20 @@ export function registerCodeExecutionHandlers(workspaceExists: (id: string) => P
       const execution = { ...result, observerState }
       const now = Date.now()
       const currentSourceRevision = interactiveSourceRevision(input.currentCode, input.prediction)
-      const validationResult = validateInteractiveExecution(block, execution, currentSourceRevision, input.prediction, now)
+      let validationResult = { ...validateInteractiveExecution(block, execution, currentSourceRevision, input.prediction, now), learningAttemptId: null as string | null }
       const previous = database.sqlite.prepare('SELECT attempts, evidence_granted_at AS evidenceGrantedAt FROM study_interactive_code_states WHERE workspace_id = ? AND lesson_id = ? AND block_id = ?').get(input.workspaceId, input.lessonId, input.blockId) as { attempts: number; evidenceGrantedAt: number | null } | undefined
       const state = interactiveCodeStateSchema.parse({ lessonId: input.lessonId, blockId: input.blockId, currentCode: input.currentCode, prediction: input.prediction, currentSourceRevision, attempts: (previous?.attempts ?? 0) + 1, lastExecution: execution, validationResult, applicable: true, unavailableReason: null, updatedAt: now })
       database.sqlite.transaction(() => {
+        if (validationResult.status === 'passed' && evidenceRecorder) {
+          const context = database.sqlite.prepare('SELECT topic_id AS topicId,created_at AS createdAt FROM study_lessons WHERE id=? AND workspace_id=?').get(input.lessonId, input.workspaceId) as { topicId: string; createdAt: number } | undefined
+          const recorded = evidenceRecorder.record({ workspaceId: input.workspaceId, environment: 'study_interactive', sourceRef: input.blockId, sourceRevision: currentSourceRevision, firstSeenAt: context?.createdAt ?? null, idempotencyKey: `interactive:${input.lessonId}:${input.blockId}:${currentSourceRevision}`, occurredAt: now, outcome: 'correct', correct: true, independent: state.attempts === 1, topicId: context?.topicId, reasoningQuality: 'not_assessed', events: [{ type: 'answer_correct', strength: state.attempts === 1 ? 'strong' : 'moderate', ordinal: 0, metadata: {} }] })
+          const authoritative = database.sqlite.prepare('SELECT 1 FROM learning_attempts WHERE id=? AND concept_id IS NOT NULL AND assessment_intent_id IS NOT NULL AND assessment_variant_id IS NOT NULL').get(recorded.attemptId)
+          validationResult = { ...validationResult, learningAttemptId: authoritative ? recorded.attemptId : null }
+        }
         database.sqlite.prepare(`INSERT INTO study_interactive_code_states (workspace_id, lesson_id, block_id, current_code, prediction, current_source_revision, attempts, last_execution_json, validation_result_json, evidence_granted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id, lesson_id, block_id) DO UPDATE SET current_code=excluded.current_code,prediction=excluded.prediction,current_source_revision=excluded.current_source_revision,attempts=excluded.attempts,last_execution_json=excluded.last_execution_json,validation_result_json=excluded.validation_result_json,evidence_granted_at=COALESCE(study_interactive_code_states.evidence_granted_at,excluded.evidence_granted_at),updated_at=excluded.updated_at`).run(input.workspaceId, input.lessonId, input.blockId, input.currentCode, input.prediction, currentSourceRevision, state.attempts, JSON.stringify(execution), JSON.stringify(validationResult), validationResult.status === 'passed' ? now : null, now)
         if (validationResult.status === 'passed' && previous?.evidenceGrantedAt == null) writeLearningState(database, applyLearningEvidence(readLearningState(database, input.workspaceId, active.topicId, now), { type: 'INTERACTIVE_CODE_VALIDATED', occurredAt: now }))
       })()
-      if (validationResult.status === 'passed' && evidenceRecorder) {
-        const context = database.sqlite.prepare('SELECT topic_id AS topicId,created_at AS createdAt FROM study_lessons WHERE id=? AND workspace_id=?').get(input.lessonId, input.workspaceId) as { topicId: string; createdAt: number } | undefined
-        evidenceRecorder.record({ workspaceId: input.workspaceId, environment: 'study_interactive', sourceRef: input.blockId, sourceRevision: currentSourceRevision, firstSeenAt: context?.createdAt ?? null, idempotencyKey: `interactive:${input.lessonId}:${input.blockId}:${currentSourceRevision}`, occurredAt: now, outcome: 'correct', correct: true, independent: state.attempts === 1, topicId: context?.topicId, mappingProvenance: 'legacy_backfill', mappingConfidence: 0, prerequisiteConceptIds: [], reasoningQuality: 'not_assessed', events: [{ type: 'answer_correct', strength: state.attempts === 1 ? 'strong' : 'moderate', ordinal: 0, metadata: {} }] })
-      }
-      return state
+      return interactiveCodeStateSchema.parse({ ...state, validationResult })
     } finally { event.sender.removeListener('destroyed', destroyed); activeSenders.delete(event.sender.id) }
   })
   ipcMain.handle(CODE_EXECUTION_CHANNELS.executeProject, async (event, payload: unknown) => {

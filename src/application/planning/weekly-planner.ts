@@ -1,6 +1,6 @@
 import type { WeeklyPlanItem, WeeklyPlanItemStatus } from '../../shared/contracts/planning-contract'
 
-export interface WeeklyPlanningTopic { workspaceId: string; workspaceName: string; moduleId: string; modulePosition: number; topicId: string; topic: string; progress: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED'; evidenceCount: number; masteryEstimate: number | null; confidence: 'low' | 'medium' | 'high'; needsReview: boolean; difficultyLevel: 'low' | 'medium' | 'high'; dueAt: number | null; deadlineTitle: string | null }
+export interface WeeklyPlanningTopic { workspaceId: string; workspaceName: string; moduleId: string; modulePosition: number; topicId: string; topic: string; progress: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED'; evidenceCount: number; masteryEstimate: number | null; confidence: 'low' | 'medium' | 'high'; needsReview: boolean; difficultyLevel: 'low' | 'medium' | 'high'; conceptMemory: { performance: 'unknown' | 'struggling' | 'developing' | 'secure'; retention: 'unknown' | 'fragile' | 'developing' | 'durable'; confidence: 'low' | 'medium' | 'high'; nextReviewAt: number | null } | null; dueAt: number | null; deadlineTitle: string | null }
 export interface WeeklyPlanningReview { workspaceId: string; workspaceName: string; conceptId: string; conceptName: string; nextReviewAt: number | null; retention: 'unknown' | 'fragile' | 'developing' | 'durable'; performance: 'unknown' | 'struggling' | 'developing' | 'secure'; dueAt: number | null }
 export interface ExistingWeeklyItem extends Omit<WeeklyPlanItem, 'workspaceName'> { sourceKey: string; workspaceName?: string }
 export interface WeeklyPlanDraftItem { id: string; sourceKey: string; workspaceId: string; workspaceName: string; dateKey: string; title: string; durationMinutes: number; position: number; status: WeeklyPlanItemStatus; moduleId: string | null; topicId: string | null; activityType: 'introduction' | 'review' | 'exercise'; scheduledStartMinutes: number; reason: string }
@@ -16,12 +16,18 @@ export function weekdayForDateKey(dateKey: string): number { return new Date(`${
 export function weekStartKey(value: number, timezone: string): string { const today = zonedDateKey(value, timezone); const weekday = weekdayForDateKey(today); return shiftDateKey(today, -(weekday === 0 ? 6 : weekday - 1)) }
 
 function activityTypes(topic: WeeklyPlanningTopic): Array<'introduction' | 'review' | 'exercise'> {
+  if (topic.conceptMemory) return topic.evidenceCount > 0 || topic.conceptMemory.performance !== 'unknown' ? ['exercise'] : ['introduction', 'exercise']
   if (topic.progress === 'IN_PROGRESS' || topic.needsReview || topic.difficultyLevel === 'high') return ['review', 'exercise']
   if (topic.evidenceCount > 0 || topic.masteryEstimate !== null) return ['exercise']
   return ['introduction', 'exercise']
 }
 function preferredDuration(topic: WeeklyPlanningTopic, type: 'introduction' | 'review' | 'exercise'): number {
   const base = type === 'introduction' ? 30 : type === 'review' ? 25 : 35
+  if (topic.conceptMemory) {
+    if (topic.conceptMemory.performance === 'secure' && topic.conceptMemory.retention === 'durable' && topic.conceptMemory.confidence === 'high') return Math.max(15, Math.round(base * 0.6))
+    if (topic.conceptMemory.performance === 'struggling' || topic.conceptMemory.retention === 'fragile') return Math.round(base * 1.4)
+    return base
+  }
   if (topic.confidence === 'high' && (topic.masteryEstimate ?? 0) >= 80) return Math.max(15, Math.round(base * 0.6))
   if (topic.difficultyLevel === 'high' || topic.needsReview) return Math.round(base * 1.4)
   return base
@@ -29,12 +35,13 @@ function preferredDuration(topic: WeeklyPlanningTopic, type: 'introduction' | 'r
 function priority(topic: WeeklyPlanningTopic, now: number): number {
   const days = topic.dueAt === null ? 30 : Math.max(0.25, (topic.dueAt - now) / DAY)
   const deadline = topic.dueAt === null ? 0 : 240 / days
-  const evidenceNeed = topic.evidenceCount === 0 ? 35 : Math.max(0, 80 - (topic.masteryEstimate ?? 50))
-  const weakness = topic.needsReview ? 55 : topic.difficultyLevel === 'high' ? 45 : topic.difficultyLevel === 'medium' ? 20 : 0
+  const evidenceNeed = topic.evidenceCount === 0 ? 35 : topic.conceptMemory ? ({ unknown: 35, struggling: 60, developing: 25, secure: 0 } as const)[topic.conceptMemory.performance] : Math.max(0, 80 - (topic.masteryEstimate ?? 50))
+  const weakness = topic.conceptMemory ? (topic.conceptMemory.retention === 'fragile' ? 55 : topic.conceptMemory.performance === 'struggling' ? 45 : 0) : topic.needsReview ? 55 : topic.difficultyLevel === 'high' ? 45 : topic.difficultyLevel === 'medium' ? 20 : 0
   return deadline + evidenceNeed + weakness - topic.modulePosition
 }
 function reason(topic: WeeklyPlanningTopic): string {
   if (topic.dueAt !== null) return `${topic.deadlineTitle ?? 'Prazo'} priorizado por data e evidência disponível.`
+  if (topic.conceptMemory?.performance === 'struggling' || topic.conceptMemory?.retention === 'fragile') return 'Reforço priorizado pela memória qualitativa do conceito.'
   if (topic.needsReview || topic.difficultyLevel === 'high') return 'Reforço priorizado por evidência de dificuldade.'
   if (topic.evidenceCount === 0) return 'Próximo passo da Trilha ainda sem evidência observada.'
   return 'Continuidade da Trilha conforme progresso observado.'

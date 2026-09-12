@@ -63,7 +63,7 @@ describe('SqliteWorkspaceContentRepository', () => {
     const sourceDirectory = mkdtempSync(join(tmpdir(), 'coach-profile-source-')); directories.push(sourceDirectory)
     const sourcePath = join(sourceDirectory, 'coach.sqlite'); const source = openCoachDatabase({ databasePath: sourcePath, migrationsFolder: migrationsThrough0045() }); workspace(source); source.close()
     const before = readFileSync(sourcePath); const copyDirectory = mkdtempSync(join(tmpdir(), 'coach-profile-copy-')); directories.push(copyDirectory); const copyPath = join(copyDirectory, 'coach.sqlite'); cpSync(sourcePath, copyPath)
-    const copy = openCoachDatabase({ databasePath: copyPath, migrationsFolder }); expect((copy.sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get() as { count: number }).count).toBe(52); expect(copy.sqlite.pragma('integrity_check', { simple: true })).toBe('ok'); copy.close()
+    const copy = openCoachDatabase({ databasePath: copyPath, migrationsFolder }); expect((copy.sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get() as { count: number }).count).toBe(53); expect(copy.sqlite.pragma('integrity_check', { simple: true })).toBe('ok'); copy.close()
     expect(readFileSync(sourcePath)).toEqual(before)
   }, 15_000)
 

@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 import Database from 'better-sqlite3'
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { app } from 'electron'
-import { migrateDatabase, repairDraftAdaptiveStudyMigration, repairExerciseSchema, repairInteractiveCodeStateSchema, repairPublishedEvidenceSchema } from './migrate'
+import { migrateDatabase, preflightPublishedReviewMigration, repairDraftAdaptiveStudyMigration, repairExerciseSchema, repairInteractiveCodeStateSchema, repairPublishedEvidenceSchema } from './migrate'
 import { repairLegacyExerciseData } from './exercise-data-repair'
 import * as workspaceSchema from './schema/workspaces'
 import * as conversationSchema from './schema/conversations'
@@ -53,6 +53,7 @@ export function openCoachDatabase(options: OpenCoachDatabaseOptions = {}): Coach
     sqlite.pragma('busy_timeout = 5000')
 
     const orm = drizzle(sqlite, { schema })
+    preflightPublishedReviewMigration(sqlite)
     migrateDatabase(orm, { migrationsFolder })
     repairPublishedEvidenceSchema(sqlite)
     repairDraftAdaptiveStudyMigration(sqlite)

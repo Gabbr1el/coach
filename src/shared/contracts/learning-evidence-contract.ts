@@ -19,7 +19,7 @@ export const learningEvidenceTypeSchema = z.enum([
 ])
 export const evidenceStrengthSchema = z.enum(['none', 'weak', 'moderate', 'strong'])
 export const conceptMappingStatusSchema = z.enum(['mapped', 'unknown', 'rejected'])
-export const conceptMappingProvenanceSchema = z.enum(['explicit', 'legacy_backfill', 'manual'])
+export const conceptMappingProvenanceSchema = z.enum(['explicit', 'curriculum_declared', 'legacy_backfill', 'manual'])
 
 export const recordLearningAttemptSchema = z.object({
   workspaceId: workspaceIdSchema,

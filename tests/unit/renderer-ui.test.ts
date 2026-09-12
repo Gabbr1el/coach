@@ -120,10 +120,18 @@ describe('renderer UI safeguards', () => {
     expect(home).toContain('Fonte de estudo da semana')
     expect(home).toContain('Selecione um dia para ver cada próximo passo')
     expect(home).toContain('Ajuste contexto e prioridades')
-    expect(home).toContain('2xl:grid-cols-[minmax(0,1fr)_340px]')
+    expect(home).toContain('2xl:grid-cols-[minmax(0,1fr)_minmax(300px,340px)]')
+    expect(home).toContain("data-organizer-state={streamedContent ? 'stream' : messages.length ? 'history' : 'zero'}")
+    expect(home).toContain('coach-scroll-pane min-h-0 flex-1')
+    expect(home).toContain('max-h-[calc(100dvh-12rem)]')
+    expect(home).not.toMatch(/setTimeout|requestAnimationFrame|ResizeObserver/)
+    expect(home).not.toContain("?? 'Workspace'")
+    expect(home).toContain('priorityContext.flatMap')
     expect(home).not.toContain('Plano de estudo')
     expect(home).not.toContain('priorities.slice(0, 4)')
   })
+
+  it('returns from a workspace to HOME without fabricating an assistant message', () => { const app = read('src/renderer/app/App.tsx'); expect(app).toContain("setSelected(null); setHomeSection('home')"); const start = app.indexOf('onHome={() =>'); const onHome = app.slice(start, app.indexOf('onSettings={() =>', start)); expect(onHome).not.toContain("role: 'assistant'") })
 
   it('documents non-obvious fields and protects editable keyboard targets', () => {
     const app = read('src/renderer/app/App.tsx')

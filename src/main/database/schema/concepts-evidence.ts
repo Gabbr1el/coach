@@ -4,8 +4,8 @@ import { workspaces } from './workspaces'
 import { exercises } from './exercises'
 
 export const concepts = sqliteTable('concepts', {
-  id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }), canonicalName: text('canonical_name').notNull(), domain: text('domain').notNull(), parentConceptId: text('parent_concept_id'), metadataJson: text('metadata_json').notNull().default('{}'), createdAt: integer('created_at').notNull(), updatedAt: integer('updated_at').notNull(),
-}, (table) => [uniqueIndex('concepts_workspace_domain_name_unique').on(table.workspaceId, table.domain, table.canonicalName), index('concepts_parent_idx').on(table.parentConceptId)])
+  id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }), stableKey: text('stable_key'), canonicalName: text('canonical_name').notNull(), domain: text('domain').notNull(), parentConceptId: text('parent_concept_id'), metadataJson: text('metadata_json').notNull().default('{}'), createdAt: integer('created_at').notNull(), updatedAt: integer('updated_at').notNull(),
+}, (table) => [uniqueIndex('concepts_workspace_domain_name_unique').on(table.workspaceId, table.domain, table.canonicalName), uniqueIndex('concepts_workspace_domain_key_unique').on(table.workspaceId, table.domain, table.stableKey), index('concepts_parent_idx').on(table.parentConceptId)])
 
 export const conceptAliases = sqliteTable('concept_aliases', {
   id: text('id').primaryKey(), conceptId: text('concept_id').notNull().references(() => concepts.id, { onDelete: 'cascade' }), alias: text('alias').notNull(), normalizedAlias: text('normalized_alias').notNull(), provenance: text('provenance').notNull(), createdAt: integer('created_at').notNull(),
@@ -16,7 +16,7 @@ export const topicConcepts = sqliteTable('topic_concepts', {
 }, (table) => [uniqueIndex('topic_concepts_topic_concept_unique').on(table.workspaceId, table.topicId, table.conceptId), index('topic_concepts_concept_idx').on(table.conceptId), check('topic_concepts_confidence_check', sql`${table.confidence} >= 0 and ${table.confidence} <= 1`), check('topic_concepts_status_check', sql`${table.mappingStatus} in ('mapped','unknown','rejected')`)])
 
 export const assessmentIntents = sqliteTable('assessment_intents', {
-  id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }), conceptId: text('concept_id').notNull().references(() => concepts.id, { onDelete: 'cascade' }), kind: text('kind').notNull(), objective: text('objective').notNull(), createdAt: integer('created_at').notNull(), updatedAt: integer('updated_at').notNull(),
+  id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }), conceptId: text('concept_id').notNull().references(() => concepts.id, { onDelete: 'cascade' }), stableKey: text('stable_key'), kind: text('kind').notNull(), objective: text('objective').notNull(), evidenceType: text('evidence_type'), difficulty: text('difficulty'), prerequisiteConceptIdsJson: text('prerequisite_concept_ids_json').notNull().default('[]'), createdAt: integer('created_at').notNull(), updatedAt: integer('updated_at').notNull(),
 }, (table) => [uniqueIndex('assessment_intents_identity_unique').on(table.workspaceId, table.conceptId, table.kind, table.objective)])
 
 export const assessmentVariants = sqliteTable('assessment_variants', {

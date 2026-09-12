@@ -37,7 +37,7 @@ export interface CodeExecutionResult {
   readonly observerState?: ObserverState
 }
 
-export const interactiveCodeValidationSchema = z.object({ status: z.enum(['not_applicable', 'passed', 'failed', 'stale', 'unavailable']), message: z.string().min(1).max(1000), sourceRevision: z.string().min(16).max(64), actualOutput: z.string().max(8000), predictionCorrect: z.boolean().nullable(), validatedAt: z.number().int().nonnegative() }).strict()
+export const interactiveCodeValidationSchema = z.object({ status: z.enum(['not_applicable', 'passed', 'failed', 'stale', 'unavailable']), message: z.string().min(1).max(1000), sourceRevision: z.string().min(16).max(64), actualOutput: z.string().max(8000), predictionCorrect: z.boolean().nullable(), learningAttemptId: z.string().min(1).max(420).nullable().optional(), validatedAt: z.number().int().nonnegative() }).strict()
 export function parseInteractiveValidation(value: unknown, currentSourceRevision: string): z.infer<typeof interactiveCodeValidationSchema> | null {
   if (!value || typeof value !== 'object') return null
   const parsed = interactiveCodeValidationSchema.safeParse(value)

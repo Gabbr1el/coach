@@ -1,6 +1,7 @@
 import { studyLessonBlockSchema, studyLessonContentSchema, studyPresentationPreferencesSchema, type NewStudyLessonAdaptation, type PersistedStudyLesson, type StudyLessonAdaptation, type StudyLessonBlock, type StudyPresentationPreferences } from '../../shared/contracts/study-lesson-contract'
 import { assertPresentationOnlyAdaptation, type StudyLessonRepository } from '../../application/study-lessons/study-lesson-service'
 import type { CoachDatabase } from '../database/connection'
+import { registerLessonAssessments } from '../../application/learning-evidence/authoritative-assessments'
 
 type LessonRow = { id: string; generationKind: PersistedStudyLesson['generationKind']; workspaceId: string; roadmapId: string; moduleId: string; topicId: string; contentJson: string; providerId: string | null; modelId: string | null; createdAt: number }
 type AdaptationRow = { id: string; workspaceId: string; lessonId: string; blockId: string; revision: number; reason: string; mode: StudyLessonAdaptation['mode']; adaptedBlockJson: string; isActive: number; providerId: string | null; modelId: string | null; createdAt: number }
@@ -93,6 +94,7 @@ export class SqliteStudyLessonRepository implements StudyLessonRepository {
     this.database.sqlite.prepare('INSERT OR IGNORE INTO study_lessons (id, workspace_id, roadmap_id, module_id, topic_id, generation_kind, content_json, provider_id, model_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(lesson.id, lesson.workspaceId, lesson.roadmapId, lesson.moduleId, lesson.topicId, lesson.generationKind, JSON.stringify({ title: lesson.title, level: lesson.level, objective: lesson.objective, blocks: lesson.blocks, sources: lesson.sources }), lesson.providerId, lesson.modelId, lesson.createdAt, lesson.createdAt)
     const persisted = this.findBase(lesson.roadmapId, lesson.topicId)
     if (!persisted || persisted.workspaceId !== lesson.workspaceId || persisted.moduleId !== lesson.moduleId || persisted.topicId !== lesson.topicId) throw new Error('Study lesson persistence verification failed')
+    registerLessonAssessments(this.database, persisted)
     return persisted
   }
 
@@ -103,6 +105,7 @@ export class SqliteStudyLessonRepository implements StudyLessonRepository {
     this.database.sqlite.prepare('UPDATE study_lessons SET workspace_id = ?, module_id = ?, generation_kind = ?, content_json = ?, provider_id = ?, model_id = ?, updated_at = ? WHERE roadmap_id = ? AND topic_id = ?').run(lesson.workspaceId, lesson.moduleId, lesson.generationKind, JSON.stringify({ title: lesson.title, level: lesson.level, objective: lesson.objective, blocks: contentBlocks, sources: lesson.sources }), lesson.providerId, lesson.modelId, Date.now(), lesson.roadmapId, lesson.topicId)
     const persisted = this.findBase(lesson.roadmapId, lesson.topicId)
     if (!persisted || persisted.workspaceId !== lesson.workspaceId || persisted.moduleId !== lesson.moduleId || persisted.topicId !== lesson.topicId) throw new Error('Study lesson persistence verification failed')
+    registerLessonAssessments(this.database, persisted)
     return persisted
   }
 

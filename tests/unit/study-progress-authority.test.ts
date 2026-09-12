@@ -3,6 +3,7 @@ import { openCoachDatabase } from '../../src/main/database/connection'
 import { assertTopicCompletionAllowed, mapStudyProgressState, nextTopicTarget } from '../../src/main/ipc/study-progress-handlers'
 import { resolve } from 'node:path'
 import { applyLearningEvidence, emptyTopicLearningState } from '../../src/application/study-progress/topic-learning'
+import { readFileSync } from 'node:fs'
 
 const migrationsFolder = resolve('drizzle/migrations')
 
@@ -14,7 +15,7 @@ const correctState = { selectedOptionId: 'option-0', studentJustification: 'Corr
 function databaseWithLesson(checkpointCount: number) {
   const database = openCoachDatabase({ databasePath: ':memory:', migrationsFolder })
   database.sqlite.prepare("INSERT INTO workspaces (id, name, objective, status, created_at, updated_at) VALUES (?, 'C', 'Ponteiros', 'active', 1, 1)").run('00000000-0000-4000-8000-000000000001')
-  const blocks = Array.from({ length: checkpointCount }, (_, index) => ({ id: `check-${index}`, type: 'checkpoint', questionType: 'multiple_choice', title: `Check ${index}`, question: 'Qual?', options: [{ id: 'option-0', text: 'A', rationale: 'Esta é a alternativa correta porque corresponde ao comportamento descrito.' }, { id: 'option-1', text: 'B', rationale: 'lacuna', misconceptionTag: 'distractor-1' }, { id: 'option-2', text: 'O comportamento seria sempre indefinido', rationale: 'Esta alternativa não corresponde ao comportamento avaliado.', misconceptionTag: 'distractor-2' }, { id: 'option-3', text: 'Uma condição diferente seria necessária', rationale: 'Esta alternativa não corresponde ao comportamento avaliado.', misconceptionTag: 'distractor-3' }, { id: 'option-4', text: 'Nenhuma mudança seria observada', rationale: 'Esta alternativa não corresponde ao comportamento avaliado.', misconceptionTag: 'distractor-4' }], correctOptionId: 'option-0', requiresJustification: true, hint: 'Pense', reinforcement: 'Revise' }))
+  const blocks = Array.from({ length: checkpointCount }, (_, index) => ({ id: `check-${index}`, type: 'checkpoint', questionType: 'multiple_choice', title: `Check ${index}`, question: 'Qual?', options: [{ id: 'option-0', text: 'A', rationale: 'Esta é a alternativa correta porque corresponde ao comportamento descrito.' }, { id: 'option-1', text: 'B', rationale: 'lacuna', misconceptionTag: 'distractor-1' }, { id: 'option-2', text: 'O comportamento seria sempre indefinido', rationale: 'Esta alternativa não corresponde ao comportamento avaliado.', misconceptionTag: 'distractor-2' }, { id: 'option-3', text: 'Uma condição diferente seria necessária', rationale: 'Esta alternativa não corresponde ao comportamento avaliado.', misconceptionTag: 'distractor-3' }, { id: 'option-4', text: 'Nenhuma mudança seria observada', rationale: 'Esta alternativa não corresponde ao comportamento avaliado.', misconceptionTag: 'distractor-4' }], correctOptionId: 'option-0', reasoningRequirement: 'required' as const, hint: 'Pense', reinforcement: 'Revise' }))
   while (blocks.length < 4) blocks.push({ id: `text-${blocks.length}`, type: 'explanation', title: 'Texto', content: 'Conteúdo' } as never)
   database.sqlite.prepare('INSERT INTO study_lessons (id, workspace_id, roadmap_id, module_id, topic_id, generation_kind, content_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)').run('lesson', '00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002', '00000000-0000-4000-8000-000000000003', 'topic', 'ai_generated', JSON.stringify({ title: 'Aula', level: 'basic', objective: 'Aprender', blocks }))
   return database
@@ -30,6 +31,20 @@ function addRequiredInteractive(database: ReturnType<typeof openCoachDatabase>, 
 }
 
 describe('authoritative topic completion gate', () => {
+  it('never mutates exact roadmap topics_json during repeated difficulty and completion updates', () => {
+    const database = databaseWithLesson(1)
+    const moduleId = '00000000-0000-4000-8000-000000000003'
+    database.sqlite.prepare("INSERT INTO roadmaps (id,workspace_id,title,status,generation_kind,version,content_revision,content_hash,created_at,updated_at) VALUES (?,'00000000-0000-4000-8000-000000000001','C','accepted','ai_generated',1,1,'test',1,1)").run('00000000-0000-4000-8000-000000000002')
+    database.sqlite.prepare("INSERT INTO roadmap_modules (id,roadmap_id,title,objective,estimated_minutes,position,status,topics_json,outcomes_json,practice,completion_criteria_json,resources_json) VALUES (?,'00000000-0000-4000-8000-000000000002','Ponteiros','Aprender',60,1,'active','[\"Ponteiros\"]','[]','','[]','[]')").run(moduleId)
+    const before = (database.sqlite.prepare('SELECT topics_json AS topicsJson FROM roadmap_modules WHERE id=?').get(moduleId) as { topicsJson: string }).topicsJson
+    let learning = emptyTopicLearningState('00000000-0000-4000-8000-000000000001', `${moduleId}:Ponteiros`, 1)
+    for (let attempt = 1; attempt <= 5; attempt++) learning = applyLearningEvidence(learning, { type: 'CHECKPOINT_ANSWERED', correct: false, attempt, hintUsed: true, reinforcementUsed: true, occurredAt: attempt + 1 })
+    for (let completion = 0; completion < 3; completion++) learning = applyLearningEvidence(learning, { type: 'TOPIC_COMPLETED', exerciseCompleted: false, occurredAt: 20 + completion })
+    expect(learning.difficultyLevel).toBe('high')
+    expect((database.sqlite.prepare('SELECT topics_json AS topicsJson FROM roadmap_modules WHERE id=?').get(moduleId) as { topicsJson: string }).topicsJson).toBe(before)
+    expect(readFileSync('src/main/ipc/study-progress-handlers.ts', 'utf8')).not.toContain('Reforço adaptativo:')
+    database.close()
+  })
   it('blocks required interactive work until its current revision is passed', () => {
     const database = databaseWithLesson(2)
     addRequiredInteractive(database)

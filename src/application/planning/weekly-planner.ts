@@ -1,6 +1,7 @@
 import type { WeeklyPlanItem, WeeklyPlanItemStatus } from '../../shared/contracts/planning-contract'
 
 export interface WeeklyPlanningTopic { workspaceId: string; workspaceName: string; moduleId: string; modulePosition: number; topicId: string; topic: string; progress: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED'; evidenceCount: number; masteryEstimate: number | null; confidence: 'low' | 'medium' | 'high'; needsReview: boolean; difficultyLevel: 'low' | 'medium' | 'high'; dueAt: number | null; deadlineTitle: string | null }
+export interface WeeklyPlanningReview { workspaceId: string; workspaceName: string; conceptId: string; conceptName: string; nextReviewAt: number | null; retention: 'unknown' | 'fragile' | 'developing' | 'durable'; performance: 'unknown' | 'struggling' | 'developing' | 'secure'; dueAt: number | null }
 export interface ExistingWeeklyItem extends Omit<WeeklyPlanItem, 'workspaceName'> { sourceKey: string; workspaceName?: string }
 export interface WeeklyPlanDraftItem { id: string; sourceKey: string; workspaceId: string; workspaceName: string; dateKey: string; title: string; durationMinutes: number; position: number; status: WeeklyPlanItemStatus; moduleId: string | null; topicId: string | null; activityType: 'introduction' | 'review' | 'exercise'; scheduledStartMinutes: number; reason: string }
 
@@ -39,8 +40,9 @@ function reason(topic: WeeklyPlanningTopic): string {
   return 'Continuidade da Trilha conforme progresso observado.'
 }
 
-export function distributeWeeklyPlan(input: { weekStart: string; today: string; timezone: string; now: number; availability: Map<number, number>; dayBudgets?: Map<string, number>; topics: WeeklyPlanningTopic[]; existing: ExistingWeeklyItem[]; createId(): string }): WeeklyPlanDraftItem[] {
-  const preserved = input.existing.filter((item) => item.dateKey < input.today || item.status !== 'pending')
+export function distributeWeeklyPlan(input: { weekStart: string; today: string; timezone: string; now: number; availability: Map<number, number>; dayBudgets?: Map<string, number>; topics: WeeklyPlanningTopic[]; reviews?: WeeklyPlanningReview[]; existing: ExistingWeeklyItem[]; createId(): string }): WeeklyPlanDraftItem[] {
+  const activeWorkspaceIds = new Set(input.topics.map((topic) => topic.workspaceId))
+  const preserved = input.existing.filter((item) => activeWorkspaceIds.has(item.workspaceId) && (item.dateKey < input.today || item.status !== 'pending'))
   const preservedKeys = new Set(preserved.map((item) => item.sourceKey))
   const reusable = new Map(input.existing.filter((item) => item.status === 'pending' && item.dateKey >= input.today).map((item) => [item.sourceKey, item]))
   const generated: WeeklyPlanDraftItem[] = []
@@ -66,11 +68,21 @@ export function distributeWeeklyPlan(input: { weekStart: string; today: string; 
     generated.push({ id: old?.id ?? input.createId(), sourceKey, workspaceId: topic.workspaceId, workspaceName: topic.workspaceName, dateKey: selected.dateKey, title, durationMinutes: selected.duration, position: 0, status: 'pending', moduleId: topic.moduleId, topicId: topic.topicId, activityType, scheduledStartMinutes: 0, reason: reason(topic) })
     dayUsage.set(selected.dateKey, (dayUsage.get(selected.dateKey) ?? 0) + selected.duration)
   }
+  for (const review of [...(input.reviews ?? [])].sort((a, b) => (a.nextReviewAt ?? Number.MAX_SAFE_INTEGER) - (b.nextReviewAt ?? Number.MAX_SAFE_INTEGER) || a.conceptId.localeCompare(b.conceptId))) {
+    const sourceKey = `${review.workspaceId}:concept:${review.conceptId}:review`
+    if (preservedKeys.has(sourceKey) || generated.some((item) => item.sourceKey === sourceKey)) continue
+    let selected: { dateKey: string; duration: number } | null = null
+    for (let offset = 0; offset < 7; offset++) { const dateKey = shiftDateKey(input.weekStart, offset); if (dateKey < input.today) continue; const available = input.dayBudgets?.get(dateKey) ?? input.availability.get(weekdayForDateKey(dateKey)) ?? 120; const free = available - (dayUsage.get(dateKey) ?? 0); if (free >= 15) { selected = { dateKey, duration: Math.min(20, free) }; break } }
+    if (!selected) continue
+    const old = reusable.get(sourceKey)
+    generated.push({ id: old?.id ?? input.createId(), sourceKey, workspaceId: review.workspaceId, workspaceName: review.workspaceName, dateKey: selected.dateKey, title: `${review.conceptName} / revisão`, durationMinutes: selected.duration, position: 0, status: 'pending', moduleId: null, topicId: null, activityType: 'review', scheduledStartMinutes: 0, reason: review.performance === 'struggling' ? 'Revisão por falhas recentes na memória do conceito.' : review.retention === 'fragile' ? 'Revisão por retenção frágil.' : 'Revisão de manutenção vencida.' })
+    dayUsage.set(selected.dateKey, (dayUsage.get(selected.dateKey) ?? 0) + selected.duration)
+  }
   const names = new Map(input.topics.map((topic) => [topic.workspaceId, topic.workspaceName]))
-  const combined: WeeklyPlanDraftItem[] = [...preserved.map((item) => ({ ...item, workspaceName: item.workspaceName ?? names.get(item.workspaceId) ?? 'Workspace' })), ...generated]
+  const combined: WeeklyPlanDraftItem[] = [...preserved.map((item) => ({ ...item, workspaceName: names.get(item.workspaceId)! })), ...generated]
   for (let offset = 0; offset < 7; offset++) {
     const dateKey = shiftDateKey(input.weekStart, offset); let start = 18 * 60; let position = 1
-    for (const item of combined.filter((entry) => entry.dateKey === dateKey).sort((a, b) => { const historyOrder = Number(a.status !== 'pending') - Number(b.status !== 'pending'); const rank = { introduction: 0, review: 1, exercise: 2 }; return -historyOrder || (a.status !== 'pending' && b.status !== 'pending' ? a.position - b.position : 0) || a.workspaceId.localeCompare(b.workspaceId) || a.topicId!.localeCompare(b.topicId!) || rank[a.activityType] - rank[b.activityType] })) { item.position = position++; item.scheduledStartMinutes = start; start += item.durationMinutes }
+    for (const item of combined.filter((entry) => entry.dateKey === dateKey).sort((a, b) => { const historyOrder = Number(a.status !== 'pending') - Number(b.status !== 'pending'); const rank = { introduction: 0, review: 1, exercise: 2 }; return -historyOrder || (a.status !== 'pending' && b.status !== 'pending' ? a.position - b.position : 0) || a.workspaceId.localeCompare(b.workspaceId) || (a.topicId ?? '').localeCompare(b.topicId ?? '') || rank[a.activityType] - rank[b.activityType] })) { item.position = position++; item.scheduledStartMinutes = start; start += item.durationMinutes }
   }
   return combined.sort((a, b) => a.dateKey.localeCompare(b.dateKey) || a.position - b.position)
 }

@@ -18,7 +18,7 @@ export const workspaceConversationInputSchema = z.object({ workspaceId: workspac
 export const streamWorkspaceMessageInputSchema = sendHomeMessageInputSchema.extend({
   requestId: z.uuid(),
   workspaceId: workspaceIdSchema,
-  activePage: z.enum(['overview', 'plan', 'studies', 'exercises', 'materials', 'practice', 'videos', 'reports']).optional(),
+  activePage: z.enum(['overview', 'plan', 'studies', 'exercises', 'review', 'materials', 'practice', 'videos', 'reports']).optional(),
   activeStudy: z.object({ roadmapId: z.uuid(), moduleId: z.string().max(100), module: z.string().max(160), topicId: z.string().max(300), topic: z.string().max(240), lessonId: z.string().max(360), currentBlockId: z.string().max(420), checkpointId: z.string().max(420).nullable(), currentExcerpt: z.string().max(4000).nullable() }).optional(),
   activeInteractiveCode: z.object({ lessonId: z.string().max(360), blockId: z.string().max(420), interactionType: z.enum(['PREDICT_AND_RUN', 'EDIT_AND_RUN', 'FIX_AND_RUN']), instruction: z.string().max(2000), language: z.enum(['python', 'c', 'java']), code: z.string().max(20_000), prediction: z.string().max(2000).nullable(), attempts: z.number().int().nonnegative(), lastExecution: z.object({ stdout: z.string().max(8000), stderr: z.string().max(8000), exitCode: z.number().int().nullable(), timedOut: z.boolean() }).nullable(), validationResult: z.object({ status: z.enum(['not_applicable', 'passed', 'failed', 'stale', 'unavailable']), message: z.string().max(1000) }).nullable() }).optional(),
   activeExercise: z.object({ exerciseId: z.string().min(1).max(420) }).strict().optional(),

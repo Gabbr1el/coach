@@ -15,4 +15,13 @@ describe('PedagogicalPrefetchScheduler', () => {
     const scheduler = new PedagogicalPrefetchScheduler({ repository: repository as never, getRoadmap: () => null })
     expect(scheduler.schedule({ type: 'topic_opened', workspaceId: '00000000-0000-4000-8000-000000000001', topicId: 'm:t' })).toEqual([])
   })
+
+  it('queues the complete N+1 unit from required exercise progress', () => {
+    const jobs: any[] = []; const revision = { workspaceId: '00000000-0000-4000-8000-000000000001', revision: 2, inputHash: 'a'.repeat(64) }
+    const repository = { getRevision: () => revision, enqueue: vi.fn((input) => { jobs.push(input); return input }) }
+    const scheduler = new PedagogicalPrefetchScheduler({ repository: repository as never, getRoadmap: () => ({ id: 'roadmap', workspaceId: revision.workspaceId, modules: [{ id: 'm', topics: ['one', 'two'] }] }) as never })
+    scheduler.schedule({ type: 'required_exercise_near_completion', workspaceId: revision.workspaceId, topicId: 'm:one' })
+    expect(jobs.map((job) => `${job.kind}:${job.unitKey}`)).toEqual(['exercise_generate:m:one', 'lesson_generate:m:two', 'exercise_generate:m:two'])
+    expect(jobs[2].dependencyKeys).toEqual([expect.any(String)])
+  })
 })

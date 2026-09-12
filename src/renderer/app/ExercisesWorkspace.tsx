@@ -72,7 +72,8 @@ export function ExercisesWorkspace({ workspaceId, roadmap, initialTopicId, onBac
     if (!loadGate.current.canEnsure(loadKey)) return
     const epoch = ++loadEpoch.current
     setBusy('load'); setError(null); setResult(null); setHint(null); setActiveId(null)
-    void window.coach.exercise.ensureSet({ workspaceId, roadmapId: roadmap.id, moduleId: location.module.id, topicId, lessonId: `${topicId}:lesson` }).then((next) => {
+    void window.coach.exercise.getSet({ workspaceId, topicId }).then((next) => {
+      if (!next) { setError('Os exercícios deste tópico ainda estão sendo preparados.'); return }
       if (loadEpoch.current !== epoch) return
       setSets((current) => ({ ...current, [topicId]: next }))
       loadGate.current.record(loadKey, next)
@@ -117,7 +118,7 @@ export function ExercisesWorkspace({ workspaceId, roadmap, initialTopicId, onBac
   async function refreshSet() { const refreshed = await window.coach.exercise.getSet({ workspaceId, topicId }); if (refreshed) setSets((current) => ({ ...current, [topicId]: refreshed })) }
   async function run() { if (!active || busy || (active.kind === 'PREDICT_OUTPUT' ? !prediction.trim() : !code.trim())) return; setBusy('run'); setError(null); try { await draftSaver.current?.flush(); setResult(await window.coach.exercise.run({ workspaceId, exerciseId: active.id, code: active.kind === 'PREDICT_OUTPUT' ? '' : code, stdin })); await refreshSet() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Não foi possível executar o código.') } finally { setBusy(null) } }
   async function submit() { if (!active || busy || (active.kind === 'PREDICT_OUTPUT' ? !prediction.trim() : !code.trim())) return; const revision = `${code}\0${prediction}`; const previous = submitIdentity.current; const identity = previous?.exerciseId === active.id && previous.revision === revision ? previous : { exerciseId: active.id, revision, key: crypto.randomUUID() }; submitIdentity.current = identity; setBusy('submit'); setError(null); try { await draftSaver.current?.flush(); const execution = await window.coach.exercise.submit({ workspaceId, exerciseId: active.id, code: active.kind === 'PREDICT_OUTPUT' ? '' : code, prediction: active.kind === 'PREDICT_OUTPUT' ? prediction : null, idempotencyKey: identity.key }); setResult(execution); await refreshSet() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Não foi possível avaliar a solução.') } finally { setBusy(null) } }
-  async function requestHelp() { if (!active || busy) return; setBusy('help'); setError(null); try { const response = await window.coach.exercise.requestHelp({ workspaceId, exerciseId: active.id }); setHint(response.hint); await refreshSet() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Não foi possível carregar a dica.') } finally { setBusy(null) } }
+  async function requestHelp() { if (!active || busy) return; setBusy('help'); setError(null); try { const response = await window.coach.exercise.requestHelp({ workspaceId, exerciseId: active.id, requestId: crypto.randomUUID(), type: 'hint_requested' }); setHint(response.hint); await refreshSet() } catch (cause) { setError(cause instanceof Error ? cause.message : 'Não foi possível carregar a dica.') } finally { setBusy(null) } }
   const nextExercise = active && set ? set.exercises.find((item) => item.position > active.position) ?? null : null
 
   return <div className="flex h-full min-h-0 bg-[#0b0c10] text-coach-ink">

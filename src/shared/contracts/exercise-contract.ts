@@ -16,7 +16,7 @@ export const getExerciseSetInputSchema = z.object({ workspaceId: workspaceIdSche
 export const exerciseSaveDraftInputSchema = z.object({ workspaceId: workspaceIdSchema, exerciseId: entityIdSchema, code: z.string().max(20_000) }).strict()
 export const exerciseRunInputSchema = z.object({ workspaceId: workspaceIdSchema, exerciseId: entityIdSchema, code: z.string().max(20_000).default(''), stdin: z.string().max(20_000).default('') }).strict()
 export const exerciseSubmitInputSchema = z.object({ workspaceId: workspaceIdSchema, exerciseId: entityIdSchema, code: z.string().max(20_000).default(''), prediction: z.string().trim().max(20_000).nullable().default(null), idempotencyKey: z.string().min(8).max(200) }).strict()
-export const exerciseHelpInputSchema = z.object({ workspaceId: workspaceIdSchema, exerciseId: entityIdSchema }).strict()
+export const exerciseHelpInputSchema = z.object({ workspaceId: workspaceIdSchema, exerciseId: entityIdSchema, requestId: z.string().min(8).max(200), type: z.enum(['hint_requested', 'coach_help_requested', 'worked_example_shown', 'solution_revealed']).default('hint_requested') }).strict()
 
 export const publicExerciseTestSchema = z.object({ id: entityIdSchema, input: z.string().max(20_000), expectedOutput: z.string().max(20_000) }).strict()
 export const exerciseKindSchema = z.enum(['PROGRAMMING_PROBLEM', 'FIX_CODE', 'COMPLETE_CODE', 'PREDICT_OUTPUT'])

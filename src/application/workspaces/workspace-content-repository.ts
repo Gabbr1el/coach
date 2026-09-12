@@ -38,6 +38,8 @@ export interface EnqueueContentJobInput {
 export interface WorkspaceContentRepository {
   getRevision(workspaceId: string): WorkspaceContentRevision | null
   createRevision(input: { workspaceId: string; inputHash: string; now: number }): WorkspaceContentRevision
+  ensureRevision(input: { workspaceId: string; inputHash: string; now: number }): WorkspaceContentRevision
+  adoptRoadmapRevision(input: { workspaceId: string; roadmapId: string; inputHash: string; now: number }): WorkspaceContentRevision
   replaceRequiredUnits(workspaceId: string, revision: number, units: readonly Omit<RequiredContentUnit, 'workspaceId' | 'revision' | 'createdAt'>[], now: number): RequiredContentUnit[]
   listRequiredUnits(workspaceId: string, revision: number): RequiredContentUnit[]
   enqueue(input: EnqueueContentJobInput, now: number): ContentJob

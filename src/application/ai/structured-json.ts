@@ -41,6 +41,7 @@ export function normalizeGeneratedLessonJson(value: unknown): unknown {
       block.correctOptionId = `option-${correctIndex}`
       block.questionType = 'multiple_choice'
       block.requiresJustification = true
+      block.reasoningRequirement = 'required'
       delete block.correctIndex
       delete block.difficultyByOption
     }

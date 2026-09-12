@@ -23,7 +23,7 @@ type StudyLessonAdapter = {
 
 type ExerciseHelper = {
   getPublicContext(input: { workspaceId: string; exerciseId: string }): PublicExerciseContext | null
-  requestHelp(input: { workspaceId: string; exerciseId: string }): { exerciseId: string; helpCount: number; hint: string }
+  requestHelp(input: { workspaceId: string; exerciseId: string; requestId: string; type: 'coach_help_requested' }): { exerciseId: string; helpCount: number; hint: string }
 }
 
 export interface WorkspaceCoachResponseMetadata { readonly lessonAdapted: { readonly lessonId: string; readonly blockId: string } }
@@ -139,6 +139,8 @@ export class WorkspaceCoachService {
   }
 
   async *streamMessage(workspaceId: string, input: StreamWorkspaceMessageInput, signal: AbortSignal, onMetadata?: (metadata: WorkspaceCoachResponseMetadata) => void, onProgress?: (stage: WorkspaceChatProgress, metadata?: Record<string, unknown>) => void): AsyncIterable<string> {
+    const releaseForeground = this.dependencies.admission?.reserveForeground?.()
+    try {
     onProgress?.('context_started')
     const threadId = threadIdFor(workspaceId)
     const intent = workspaceChatIntent(input)
@@ -151,7 +153,7 @@ export class WorkspaceCoachService {
     const exerciseHelpRequested = Boolean(activeExercise && EXERCISE_HELP_REQUEST.test(input.content) && !EXERCISE_HELP_DENIAL.test(input.content))
     if (exerciseHelpRequested && this.dependencies.exerciseService) {
       if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
-      this.dependencies.exerciseService.requestHelp({ workspaceId, exerciseId: activeExercise!.exerciseId })
+      this.dependencies.exerciseService.requestHelp({ workspaceId, exerciseId: activeExercise!.exerciseId, requestId: `coach-help:${input.requestId}`, type: 'coach_help_requested' })
       activeExercise = this.dependencies.exerciseService.getPublicContext({ workspaceId, exerciseId: activeExercise!.exerciseId })
     }
     const routedInput = { ...input, activeExercise: undefined }
@@ -237,7 +239,6 @@ export class WorkspaceCoachService {
     let completed = false
 
     onProgress?.('context_ready', { intent, contextResources: intent === 'materials' ? ['materials'] : intent === 'planning' ? ['plan', 'academic'] : [], historyCount: recentMessages.length, snippetCount: supplementalContext.length })
-    const releaseForeground = this.dependencies.admission?.reserveForeground?.()
     onProgress?.('provider_request_started')
     let firstToken = false
     try {
@@ -271,8 +272,6 @@ export class WorkspaceCoachService {
     } catch (error) {
       if (!signal.aborted) await this.persistFailure(threadId, userContent)
       throw error
-    } finally {
-      releaseForeground?.()
     }
 
     if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
@@ -283,6 +282,9 @@ export class WorkspaceCoachService {
       assistant: { id: this.createId(), threadId, role: 'assistant', content, createdAt: now + 1, providerId, modelId },
     })
     onProgress?.('persistence_completed')
+    } finally {
+      releaseForeground?.()
+    }
   }
 
   private async ensureThread(workspaceId: string): Promise<{ workspace: Workspace; threadId: string }> {

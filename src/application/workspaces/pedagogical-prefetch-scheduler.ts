@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto'
 import type { Roadmap } from '../../shared/contracts/roadmap-contract'
 import type { ContentJob, ContentUnitKind } from '../../shared/contracts/workspace-content-contract'
-import type { WorkspaceContentRepository } from './workspace-content-repository'
+import { CONTENT_GENERATOR_VERSIONS, contentJobKey, type WorkspaceContentRepository } from './workspace-content-repository'
 
 export type PedagogicalPrefetchTrigger =
   | { type: 'topic_selected' | 'topic_opened'; workspaceId: string; topicId: string }
@@ -15,12 +14,8 @@ export interface PedagogicalPrefetchSchedulerOptions {
   readonly now?: () => number
 }
 
-const versions: Record<ContentUnitKind, string> = {
-  material_extract: 'material-v1', material_analyze: 'material-analysis-v1', roadmap_generate: 'roadmap-v1', lesson_generate: 'lesson-v1', exercise_generate: 'exercise-v1', plan_recalculate: 'plan-v1',
-}
-
 function key(workspaceId: string, revision: number, kind: ContentUnitKind, unitKey: string, inputHash: string): string {
-  return createHash('sha256').update([workspaceId, revision, kind, unitKey, inputHash, versions[kind]].join('|')).digest('hex')
+  return contentJobKey({ workspaceId, revision, kind, unitKey, inputHash, generatorContractVersion: CONTENT_GENERATOR_VERSIONS[kind] })
 }
 
 export class PedagogicalPrefetchScheduler {
@@ -45,7 +40,8 @@ export class PedagogicalPrefetchScheduler {
       specs.push({ kind: 'exercise_generate', unitKey: current.topicId, priority: 700, dependencies: [key(trigger.workspaceId, revision.revision, 'lesson_generate', current.topicId, revision.inputHash)] })
     }
     if (next) specs.push({ kind: 'lesson_generate', unitKey: next.topicId, priority: trigger.type === 'topic_unlocked' ? 700 : 500 })
-    const jobs = specs.map((spec) => this.options.repository.enqueue({ workspaceId: trigger.workspaceId, revision: revision.revision, kind: spec.kind, unitKey: spec.unitKey, priority: spec.priority, inputHash: revision.inputHash, generatorContractVersion: versions[spec.kind], dependencyKeys: spec.dependencies }, this.now()))
+    if (next && trigger.type === 'required_exercise_near_completion') specs.push({ kind: 'exercise_generate', unitKey: next.topicId, priority: 500, dependencies: [key(trigger.workspaceId, revision.revision, 'lesson_generate', next.topicId, revision.inputHash)] })
+    const jobs = specs.map((spec) => this.options.repository.enqueue({ workspaceId: trigger.workspaceId, revision: revision.revision, kind: spec.kind, unitKey: spec.unitKey, priority: spec.priority, inputHash: revision.inputHash, generatorContractVersion: CONTENT_GENERATOR_VERSIONS[spec.kind], dependencyKeys: spec.dependencies }, this.now()))
     if (jobs.length) this.options.onJobsChanged?.()
     return jobs
   }

@@ -11,6 +11,7 @@ import { parseInteractiveValidation, type ToolchainStatus } from '../../shared/c
 import type { AIProviderManager } from '../../application/ai/ai-provider-manager'
 import { evaluateCheckpointReasoning, pendingAssessment } from '../../application/study-progress/checkpoint-reasoning'
 import type { PedagogicalPrefetchScheduler } from '../../application/workspaces/pedagogical-prefetch-scheduler'
+import type { LearningEvidenceRecorder } from '../../shared/contracts/learning-evidence-contract'
 
 type ProgressRow = { workspaceId: string; roadmapId: string; currentModuleId: string; currentTopicId: string; currentLessonId: string; currentCheckpointId: string | null; topicStatusesJson: string; lessonPositionsJson: string; checkpointStatesJson?: string; updatedAt: number }
 type LessonBlockRow = { contentJson: string }
@@ -79,7 +80,7 @@ export function mapStudyProgressState(row: ProgressRow): StudyProgressState {
   return { ...row, moduleId: row.currentModuleId, topicId: row.currentTopicId, lessonId: row.currentLessonId, checkpointId: row.currentCheckpointId, topicStatuses: JSON.parse(row.topicStatusesJson) as StudyProgressState['topicStatuses'], lessonPositions: positions, checkpointStates, currentPosition: positions[row.currentLessonId] ?? null }
 }
 
-export function registerStudyProgressHandlers(database: CoachDatabase, getToolchains: () => ToolchainStatus[] = () => [], providerManager?: AIProviderManager, prefetch?: PedagogicalPrefetchScheduler): void {
+export function registerStudyProgressHandlers(database: CoachDatabase, getToolchains: () => ToolchainStatus[] = () => [], providerManager?: AIProviderManager, prefetch?: PedagogicalPrefetchScheduler, evidenceRecorder?: LearningEvidenceRecorder): void {
   const get = (workspaceId: string) => {
     const row = database.sqlite.prepare('SELECT workspace_id AS workspaceId, roadmap_id AS roadmapId, current_module_id AS currentModuleId, current_topic_id AS currentTopicId, current_lesson_id AS currentLessonId, current_checkpoint_id AS currentCheckpointId, topic_statuses_json AS topicStatusesJson, lesson_positions_json AS lessonPositionsJson, checkpoint_states_json AS checkpointStatesJson, updated_at AS updatedAt FROM study_progress WHERE workspace_id = ?').get(workspaceId) as ProgressRow | undefined
     return row ? mapStudyProgressState(row) : null
@@ -123,8 +124,10 @@ export function registerStudyProgressHandlers(database: CoachDatabase, getToolch
     const checkpoint = lesson.blocks.find((item): item is LessonCheckpoint => item.type === 'checkpoint' && item.id === input.checkpointId)
     const selected = checkpoint?.options.find((option) => option.id === input.selectedOptionId)
     if (!checkpoint || !selected) throw new Error('Checkpoint option does not belong to the authoritative lesson')
+    const justification = input.studentJustification.trim()
+    if (checkpoint.reasoningRequirement === 'required' && justification.length < 3) throw new Error('Checkpoint reasoning is required')
     const previous = active.checkpointStates?.[input.checkpointId]
-    const signature = answerSignature(input.selectedOptionId, input.studentJustification)
+    const signature = answerSignature(input.selectedOptionId, justification)
     const replay = matchingHistory(previous, signature)
     if (!retry && replay) return responseFor(get(input.workspaceId)!, checkpoint, replay.correct, replay.attempt, input, replay.reasoningAssessment ?? previous?.reasoningAssessment ?? pendingAssessment(0, Date.now()), false)
     const pendingPrevious = previous?.reasoningAssessment?.status === 'reasoning_evaluation_pending' ? previous.reasoningAssessment : null
@@ -136,9 +139,11 @@ export function registerStudyProgressHandlers(database: CoachDatabase, getToolch
     const alternativeFeedback = correct ? 'Alternativa correta.' : `Alternativa incorreta. ${selected.rationale}`
     const answerId = retry ? previous!.history.at(-1)?.answerId ?? crypto.randomUUID() : crypto.randomUUID()
     const pending = pendingAssessment(pendingPrevious?.retryCount ?? 0, Date.now())
-    let assessment: CheckpointReasoningAssessment = providerManager
-      ? await evaluateCheckpointReasoning(providerManager, { topic: active.topicId.split(':').at(-1) ?? active.topicId, lesson, checkpoint, selectedOptionId: input.selectedOptionId, studentJustification: input.studentJustification })
-      : pending
+    const shouldEvaluateReasoning = checkpoint.reasoningRequirement !== 'none' && justification.length > 0
+    const evaluationStartedAt = Date.now()
+    let assessment: CheckpointReasoningAssessment = shouldEvaluateReasoning && providerManager
+      ? await evaluateCheckpointReasoning(providerManager, { topic: active.topicId.split(':').at(-1) ?? active.topicId, lesson, checkpoint, selectedOptionId: input.selectedOptionId, studentJustification: justification })
+      : shouldEvaluateReasoning ? pending : { status: 'not_evaluated', summary: 'Raciocínio não avaliado para este checkpoint.', misconception: null, feedback: 'A alternativa foi avaliada sem análise de raciocínio.', evaluatedAt: evaluationStartedAt, retryCount: 0, nextRetryAt: null }
     if (assessment.status === 'reasoning_evaluation_pending') assessment = pending
     const now = Date.now()
     let replan = false
@@ -156,7 +161,14 @@ export function registerStudyProgressHandlers(database: CoachDatabase, getToolch
       database.sqlite.prepare(`INSERT INTO checkpoint_reasoning_evidence (answer_id, workspace_id, topic_id, lesson_id, checkpoint_id, alternative_correct, reasoning_status, summary, misconception, feedback, evaluated_at, retry_count, next_retry_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(answer_id) DO UPDATE SET reasoning_status=excluded.reasoning_status,summary=excluded.summary,misconception=excluded.misconception,feedback=excluded.feedback,evaluated_at=excluded.evaluated_at,retry_count=excluded.retry_count,next_retry_at=excluded.next_retry_at,updated_at=excluded.updated_at`).run(answerId, input.workspaceId, active.topicId, input.lessonId, input.checkpointId, Number(correct), assessment.status, assessment.summary, assessment.misconception, assessment.feedback, assessment.evaluatedAt, assessment.retryCount, assessment.nextRetryAt, now, now)
       if (assessment.status !== 'reasoning_evaluation_pending') {
         const inserted = database.sqlite.prepare('INSERT OR IGNORE INTO study_progress_events (id, workspace_id, type, module_id, topic_id, lesson_id, checkpoint_id, correct, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(answerId, input.workspaceId, 'CHECKPOINT_ANSWERED', active.moduleId, active.topicId, active.lessonId, input.checkpointId, correct ? 1 : 0, now)
-        if (inserted.changes) { const before = readLearningState(database, input.workspaceId, active.topicId, now); const after = applyLearningEvidence(before, { type: 'CHECKPOINT_ANSWERED', correct, attempt, hintUsed: !correct, reinforcementUsed: reinforcement !== null, reasoningStatus: assessment.status, misconception: assessment.misconception, occurredAt: now }); replan = shouldReplan(before, after); writeLearningState(database, after) }
+        if (inserted.changes) { const before = readLearningState(database, input.workspaceId, active.topicId, now); const after = applyLearningEvidence(before, { type: 'CHECKPOINT_ANSWERED', correct, attempt, hintUsed: false, reinforcementUsed: reinforcement !== null, reasoningStatus: assessment.status === 'not_evaluated' ? undefined : assessment.status, misconception: assessment.misconception, occurredAt: now }); replan = shouldReplan(before, after); writeLearningState(database, after) }
+        if (inserted.changes && evidenceRecorder) {
+          const strong = correct && (checkpoint.reasoningRequirement === 'none' || assessment.status === 'coherent')
+          evidenceRecorder.record({ workspaceId: input.workspaceId, environment: 'checkpoint', sourceRef: input.checkpointId, sourceRevision: answerSignature(checkpoint.question, checkpoint.correctOptionId), firstSeenAt: (database.sqlite.prepare('SELECT created_at AS createdAt FROM study_lessons WHERE id=?').get(input.lessonId) as { createdAt: number } | undefined)?.createdAt ?? null, idempotencyKey: answerId, occurredAt: now, outcome: correct ? 'correct' : 'incorrect', correct, independent: attempt === 1, topicId: active.topicId, mappingProvenance: 'legacy_backfill', mappingConfidence: 0, difficulty: 'standard', prerequisiteConceptIds: [], reasoningQuality: shouldEvaluateReasoning && assessment.status !== 'not_evaluated' ? assessment.status : 'not_assessed', events: [
+            { type: correct ? 'answer_correct' : 'answer_incorrect', strength: strong ? 'strong' : correct ? 'weak' : 'moderate', ordinal: 0, metadata: {} },
+            ...(!correct && reinforcement !== null ? [{ type: 'reinforcement_shown' as const, strength: 'none' as const, ordinal: 1, metadata: {} }] : []),
+          ] })
+        }
       }
     })()
     const persisted = get(input.workspaceId)!
@@ -221,17 +233,17 @@ export function registerStudyProgressHandlers(database: CoachDatabase, getToolch
     const active = get(input.workspaceId)
     if (!active || active.moduleId !== input.moduleId || active.topicId !== input.topicId || active.lessonId !== input.lessonId) throw new Error('Study evidence does not match the active topic')
     if (input.type === 'CHECKPOINT_ANSWERED') throw new Error('Use answerCheckpoint for checkpoint evidence')
-    const id = crypto.randomUUID()
+    const id = input.type === 'HELP_USED' ? (input.requestId ?? crypto.randomUUID()) : crypto.randomUUID()
     const now = Date.now()
     let replan = false
     database.sqlite.transaction(() => {
-      database.sqlite.prepare('INSERT INTO study_progress_events (id, workspace_id, type, module_id, topic_id, lesson_id, checkpoint_id, correct, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, input.workspaceId, input.type, input.moduleId, input.topicId, input.lessonId, input.checkpointId, input.correct === undefined ? null : Number(input.correct), now)
+      const inserted = database.sqlite.prepare('INSERT OR IGNORE INTO study_progress_events (id, workspace_id, type, module_id, topic_id, lesson_id, checkpoint_id, correct, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, input.workspaceId, input.type, input.moduleId, input.topicId, input.lessonId, input.checkpointId, input.correct === undefined ? null : Number(input.correct), now)
       const row = database.sqlite.prepare('SELECT workspace_id AS workspaceId, topic_id AS topicId, evidence_count AS evidenceCount, assessments, correct_first_try AS correctFirstTry, correct_after_help AS correctAfterHelp, incorrect, hints_used AS hintsUsed, reinforcement_events AS reinforcementEvents, exercises_completed AS exercisesCompleted, lessons_completed AS lessonsCompleted, difficulty_level AS difficultyLevel, mastery_estimate AS masteryEstimate, confidence, needs_review AS needsReview, last_practiced_at AS lastPracticedAt, last_assessed_at AS lastAssessedAt, reasons_json AS reasonsJson, updated_at AS updatedAt FROM topic_learning_states WHERE workspace_id = ? AND topic_id = ?').get(input.workspaceId, input.topicId) as (Omit<TopicLearningState, 'reasons'> & { reasonsJson: string }) | undefined
       const previous = row ? { ...row, reasons: JSON.parse(row.reasonsJson) as string[] } : emptyTopicLearningState(input.workspaceId, input.topicId, now)
-      const next = input.type === 'TOPIC_STARTED' ? previous : applyLearningEvidence(previous, { type: input.type, correct: input.correct, attempt: input.attempt, hintUsed: input.hintUsed, reinforcementUsed: input.reinforcementUsed, exerciseCompleted: input.exerciseCompleted, occurredAt: now })
+      const next = input.type === 'TOPIC_STARTED' || !inserted.changes ? previous : applyLearningEvidence(previous, { type: input.type, correct: input.correct, attempt: input.attempt, hintUsed: input.hintUsed, reinforcementUsed: input.reinforcementUsed, exerciseCompleted: input.exerciseCompleted, occurredAt: now })
       replan = shouldReplan(previous, next)
+      if (inserted.changes && input.type === 'HELP_USED' && evidenceRecorder) evidenceRecorder.record({ workspaceId: input.workspaceId, environment: 'checkpoint', sourceRef: input.checkpointId ?? input.lessonId, sourceRevision: 'explicit-help-v1', firstSeenAt: null, idempotencyKey: id, occurredAt: now, outcome: 'observed', correct: null, independent: false, topicId: input.topicId, mappingProvenance: 'legacy_backfill', mappingConfidence: 0, prerequisiteConceptIds: [], reasoningQuality: 'not_assessed', events: [{ type: input.helpType ?? 'coach_help_requested', strength: 'none', ordinal: 0, metadata: {} }] })
       if (next !== previous) database.sqlite.prepare(`INSERT INTO topic_learning_states (workspace_id, topic_id, evidence_count, assessments, correct_first_try, correct_after_help, incorrect, hints_used, reinforcement_events, exercises_completed, lessons_completed, difficulty_level, mastery_estimate, confidence, needs_review, last_practiced_at, last_assessed_at, reasons_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id, topic_id) DO UPDATE SET evidence_count=excluded.evidence_count, assessments=excluded.assessments, correct_first_try=excluded.correct_first_try, correct_after_help=excluded.correct_after_help, incorrect=excluded.incorrect, hints_used=excluded.hints_used, reinforcement_events=excluded.reinforcement_events, exercises_completed=excluded.exercises_completed, lessons_completed=excluded.lessons_completed, difficulty_level=excluded.difficulty_level, mastery_estimate=excluded.mastery_estimate, confidence=excluded.confidence, needs_review=excluded.needs_review, last_practiced_at=excluded.last_practiced_at, last_assessed_at=excluded.last_assessed_at, reasons_json=excluded.reasons_json, updated_at=excluded.updated_at`).run(next.workspaceId, next.topicId, next.evidenceCount, next.assessments, next.correctFirstTry, next.correctAfterHelp, next.incorrect, next.hintsUsed, next.reinforcementEvents, next.exercisesCompleted, next.lessonsCompleted, next.difficultyLevel, next.masteryEstimate, next.confidence, Number(next.needsReview), next.lastPracticedAt, next.lastAssessedAt, JSON.stringify(next.reasons), next.updatedAt)
-      if (next.difficultyLevel === 'high' && !input.topicId.includes('Reforço adaptativo:')) { const moduleId = input.moduleId; const moduleRow = database.sqlite.prepare('SELECT roadmap_id AS roadmapId, topics_json AS topicsJson FROM roadmap_modules WHERE id = ?').get(moduleId) as { roadmapId: string; topicsJson: string } | undefined; if (moduleRow) { const topics = JSON.parse(moduleRow.topicsJson) as string[]; const original = input.topicId.slice(moduleId.length + 1); const reinforcement = `Reforço adaptativo: ${original}`; if (!topics.includes(reinforcement)) database.sqlite.prepare('UPDATE roadmap_modules SET topics_json = ? WHERE id = ?').run(JSON.stringify([...topics, reinforcement]), moduleId); database.sqlite.prepare("INSERT INTO roadmap_adaptations (id, roadmap_id, module_id, topic_id, kind, source, reason_json, created_at) VALUES (?, ?, ?, ?, 'reinforcement', 'adaptive_reinforcement', ?, ?) ON CONFLICT(module_id, topic_id, kind) DO UPDATE SET reason_json=excluded.reason_json, created_at=excluded.created_at").run(crypto.randomUUID(), moduleRow.roadmapId, moduleId, input.topicId, JSON.stringify(next.reasons), now) } }
     })()
     return { id, type: input.type, topicId: input.topicId, checkpointId: input.checkpointId, correct: input.correct ?? null, shouldReplan: replan, createdAt: now }
   })

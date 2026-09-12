@@ -22,6 +22,7 @@ import { STUDY_PROGRESS_CHANNELS } from '../shared/contracts/study-progress-chan
 import { STUDY_LESSON_CHANNELS } from '../shared/contracts/study-lesson-channels'
 import { EXERCISE_CHANNELS } from '../shared/contracts/exercise-channels'
 import { ACADEMIC_LIFE_CHANNELS } from '../shared/contracts/academic-life-channels'
+import { REVIEW_CHANNELS } from '../shared/contracts/review-channels'
 
 const api: CoachDesktopApi = {
   application: {
@@ -58,6 +59,12 @@ const api: CoachDesktopApi = {
     getProjection: () => ipcRenderer.invoke(ACADEMIC_LIFE_CHANNELS.getProjection),
     save: (input) => ipcRenderer.invoke(ACADEMIC_LIFE_CHANNELS.save, input),
     transition: (input) => ipcRenderer.invoke(ACADEMIC_LIFE_CHANNELS.transition, input),
+  },
+  review: {
+    getActive: (workspaceId) => ipcRenderer.invoke(REVIEW_CHANNELS.getActive, { workspaceId }),
+    start: (input) => ipcRenderer.invoke(REVIEW_CHANNELS.start, input),
+    submit: (input) => ipcRenderer.invoke(REVIEW_CHANNELS.submit, input),
+    requestHelp: (input) => ipcRenderer.invoke(REVIEW_CHANNELS.requestHelp, input),
   },
   workspace: {
     list: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.list),

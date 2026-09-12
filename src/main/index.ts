@@ -1,6 +1,6 @@
 import { app, BrowserWindow } from 'electron'
-import { join } from 'node:path'
 import { createHash } from 'node:crypto'
+import { join } from 'node:path'
 import { registerApplicationHandlers } from './ipc/application-handlers'
 import { createMainWindow } from './windows/create-main-window'
 import { openCoachDatabase, type CoachDatabase } from './database/connection'
@@ -60,6 +60,7 @@ import { AcademicSubjectContextService } from '../application/workspaces/academi
 import { SqliteAcademicSubjectContextRepository } from './repositories/sqlite-academic-subject-context-repository'
 import { registerWorkspaceOnboardingHandlers } from './ipc/workspace-onboarding-handlers'
 import { registerStudyProgressHandlers } from './ipc/study-progress-handlers'
+import { SqliteLearningEvidenceService } from '../application/learning-evidence/learning-evidence-service'
 import { ToolchainManager } from './code-execution/toolchain-manager'
 import { mapStudyProgressState } from './ipc/study-progress-handlers'
 import { registerStudyLessonHandlers } from './ipc/study-lesson-handlers'
@@ -82,6 +83,8 @@ import { createContentJobHandlers } from './content/content-job-handlers'
 import { PedagogicalPrefetchScheduler } from '../application/workspaces/pedagogical-prefetch-scheduler'
 import { InitialProvisioningCoordinator } from './content/initial-provisioning-coordinator'
 import { PerformanceTimelineStore } from './telemetry/performance-timeline'
+import { ReviewService } from '../application/review/review-service'
+import { registerReviewHandlers } from './ipc/review-handlers'
 
 let database: CoachDatabase | null = null
 let contentWorker: ContentGenerationWorker | null = null
@@ -139,7 +142,8 @@ void app.whenReady().then(async () => {
       providerManager,
     })
     const workspaceEventBus = new WorkspaceEventBus()
-    const roadmapRepository = new DrizzleRoadmapRepository(database)
+    let provisioningCoordinator: InitialProvisioningCoordinator
+    const roadmapRepository = new DrizzleRoadmapRepository(database, (roadmap) => provisioningCoordinator.adoptApprovedRoadmap(roadmap))
     const planningService = new PlanningService(new DrizzlePlanningRepository(database))
     const studyWorkspaceService = new StudyWorkspaceService({ repository: new DrizzleStudyWorkspaceRepository(database), getTodayPlan: (id) => planningService.getTodayPlan(id), replanWeek: () => { planningService.replanWeek() }, getWorkspace: (id) => workspaceRepository.findById(id), eventBus: workspaceEventBus, getRoadmap: (id) => roadmapRepository.findCurrent(id), getStudyProgress: (id) => { const row = database!.sqlite.prepare('SELECT workspace_id AS workspaceId, roadmap_id AS roadmapId, current_module_id AS currentModuleId, current_topic_id AS currentTopicId, current_lesson_id AS currentLessonId, current_checkpoint_id AS currentCheckpointId, topic_statuses_json AS topicStatusesJson, lesson_positions_json AS lessonPositionsJson, checkpoint_states_json AS checkpointStatesJson, updated_at AS updatedAt FROM study_progress WHERE workspace_id = ?').get(id) as Parameters<typeof mapStudyProgressState>[0] | undefined; return row ? mapStudyProgressState(row) : null }, getPlanContext: (id) => { const currentTime = Date.now(); const weekday = new Date(currentTime).getDay(); const minutes = (database!.sqlite.prepare("SELECT minutes FROM academic_life_items WHERE kind='availability' AND status='active' AND replaced_by_id IS NULL AND weekday=? AND (workspace_id IS NULL OR workspace_id=?) AND (expires_at IS NULL OR expires_at>?) ORDER BY CASE WHEN workspace_id=? THEN 0 ELSE 1 END,updated_at DESC LIMIT 1").get(weekday, id, currentTime, id) as { minutes: number } | undefined)?.minutes ?? (database!.sqlite.prepare('SELECT minutes FROM academic_availability WHERE weekday = ?').get(weekday) as { minutes: number } | undefined)?.minutes ?? 120; const deadline = database!.sqlite.prepare('SELECT due_at AS dueAt FROM study_deadlines WHERE workspace_id = ? AND completed = 0 AND due_at >= ? ORDER BY due_at LIMIT 1').get(id, Date.now()) as { dueAt: number } | undefined; const now = Date.now(); const phase = deadline ? academicEventPhase(deadline.dueAt, now) : null; const lastPlannedDayKey = (database!.sqlite.prepare('SELECT last_planned_day_key AS value FROM workspace_study_states WHERE workspace_id = ?').get(id) as { value: string | null } | undefined)?.value ?? null; const learningRows = database!.sqlite.prepare('SELECT workspace_id AS workspaceId, topic_id AS topicId, evidence_count AS evidenceCount, assessments, correct_first_try AS correctFirstTry, correct_after_help AS correctAfterHelp, incorrect, hints_used AS hintsUsed, reinforcement_events AS reinforcementEvents, exercises_completed AS exercisesCompleted, lessons_completed AS lessonsCompleted, difficulty_level AS difficultyLevel, mastery_estimate AS masteryEstimate, confidence, needs_review AS needsReview, last_practiced_at AS lastPracticedAt, last_assessed_at AS lastAssessedAt, reasons_json AS reasonsJson, updated_at AS updatedAt FROM topic_learning_states WHERE workspace_id = ?').all(id) as Array<any>; const learningStates = new Map(learningRows.map(({ reasonsJson, ...row }) => [row.topicId, { ...row, needsReview: Boolean(row.needsReview), reasons: JSON.parse(reasonsJson) }])); return { availableMinutes: minutes, phase, learningStates, startMinutes: 18 * 60, dayKey: academicDayKey(now), lastPlannedDayKey } } })
     const observerService = new ObserverService(new DrizzleObserverRepository(database))
@@ -156,19 +160,22 @@ void app.whenReady().then(async () => {
     }
     const studyLessonService = new StudyLessonService(new SqliteStudyLessonRepository(database), providerManager, (id) => workspaceRepository.findById(id), (id) => roadmapRepository.findCurrent(id), Date.now, curriculumSourceService, { getTopicLearningState, getWorkspaceMemory, searchMaterials: (id, query) => materialService.search(id, query) }, heavyGenerationQueue)
     const toolchainManager = new ToolchainManager()
-    const exerciseService = new ExerciseService(new SqliteExerciseRepository(database), providerManager, toolchainManager, (id) => workspaceRepository.findById(id), (id) => roadmapRepository.findCurrent(id), Date.now, () => crypto.randomUUID(), heavyGenerationQueue)
+    let prefetch: PedagogicalPrefetchScheduler
+    const learningEvidence = new SqliteLearningEvidenceService(database)
+    const reviewService = new ReviewService(database, learningEvidence)
+    const exerciseService = new ExerciseService(new SqliteExerciseRepository(database, Date.now, learningEvidence), providerManager, toolchainManager, (id) => workspaceRepository.findById(id), (id) => roadmapRepository.findCurrent(id), Date.now, () => crypto.randomUUID(), heavyGenerationQueue, (workspaceId, topicId) => { prefetch?.schedule({ type: 'required_exercise_near_completion', workspaceId, topicId }) })
     const workspaceCoachService = new WorkspaceCoachService({ repository: new DrizzleConversationRepository(database), providerManager, getWorkspace: (id) => workspaceRepository.findById(id), getObserverState: (id) => observerService.getState(id), getWorkspaceMemory, getCurrentContext: (id) => currentWorkspaceContext.get(id), contextHub: workspaceContextHub, workspaceActions, searchMaterials: (id, query) => materialService.search(id, query), studyLessonService, exerciseService, admission: heavyGenerationQueue })
     registerApplicationHandlers()
     registerExerciseHandlers(exerciseService)
+    registerReviewHandlers(reviewService)
     const contentRepository = new SqliteWorkspaceContentRepository(database)
-    let provisioningCoordinator: InitialProvisioningCoordinator
-    const prefetch = new PedagogicalPrefetchScheduler({ repository: contentRepository, getRoadmap: (id) => roadmapRepository.findCurrent(id), onJobsChanged: () => contentWorker?.wake() })
-    registerStudyProgressHandlers(database, () => toolchainManager.getStatuses(), providerManager, prefetch)
+    prefetch = new PedagogicalPrefetchScheduler({ repository: contentRepository, getRoadmap: (id) => roadmapRepository.findCurrent(id), onJobsChanged: () => contentWorker?.wake() })
+    registerStudyProgressHandlers(database, () => toolchainManager.getStatuses(), providerManager, prefetch, learningEvidence)
     registerStudyLessonHandlers(studyLessonService)
     registerWorkspaceHandlers(workspaceService)
     registerStudyWorkspaceHandlers(studyWorkspaceService)
     const projectRepository = new DrizzleProjectRepository(database)
-    registerCodeExecutionHandlers(async (id) => Boolean(await workspaceRepository.findById(id)), observerService, projectRepository, database, toolchainManager)
+    registerCodeExecutionHandlers(async (id) => Boolean(await workspaceRepository.findById(id)), observerService, projectRepository, database, toolchainManager, learningEvidence)
     registerObserverHandlers(observerService)
     registerPlanningHandlers(planningService)
     registerMaterialHandlers(materialService, async (id) => Boolean(await workspaceRepository.findById(id)))
@@ -179,11 +186,10 @@ void app.whenReady().then(async () => {
     provisioningCoordinator = new InitialProvisioningCoordinator(database, contentRepository, () => contentWorker?.wake(), Date.now, performanceTimelines)
     contentWorker = new ContentGenerationWorker({ repository: contentRepository, admission: heavyGenerationQueue, handlers: createContentJobHandlers({ database, roadmap: roadmapService, lessons: studyLessonService, exercises: exerciseService, planning: planningService }), onPublished: (job) => provisioningCoordinator.onPublished(job) })
     contentWorker.start()
-    roadmapService.setRoadmapChangedHandler((roadmap) => {
-      const inputHash = createHash('sha256').update(JSON.stringify(roadmap.modules)).digest('hex')
-      contentRepository.createRevision({ workspaceId: roadmap.workspaceId, inputHash, now: Date.now() })
+    roadmapService.setRoadmapChangedHandler((roadmap, atomicallyAdopted) => {
       contentWorker?.cancelWorkspace(roadmap.workspaceId)
-      provisioningCoordinator.advance(roadmap.workspaceId)
+      if (atomicallyAdopted) provisioningCoordinator.resumeApprovedRoadmap(roadmap.workspaceId)
+      else provisioningCoordinator.adoptAndResumeApprovedRoadmap(roadmap)
       contentWorker?.wake()
     })
     workspaceProvisioning = new WorkspaceProvisioningService({ repository: new SqliteWorkspaceProvisioningRepository(database), ensureRoadmap: (id, materialIds) => roadmapService.ensureLearningPathWithMaterials(id, materialIds), getRoadmap: (id) => roadmapService.get(id), ensureLesson: (input) => studyLessonService.getOrCreate(input), listReadyMaterialIds: (id) => materialService.list(id).filter((item) => item.status === 'ready').map((item) => item.id), initializeContent: (id) => provisioningCoordinator.initialize(id) })

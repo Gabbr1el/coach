@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { studyLessonContentSchema } from '../../shared/contracts/study-lesson-contract'
 import { contentJobSchema, requiredContentUnitSchema, workspaceContentRevisionSchema, type ContentJob, type RequiredContentUnit, type WorkspaceContentRevision } from '../../shared/contracts/workspace-content-contract'
-import { CONTENT_JOB_DEFAULTS, type EnqueueContentJobInput, type WorkspaceContentRepository } from '../../application/workspaces/workspace-content-repository'
+import { CONTENT_GENERATOR_VERSIONS, CONTENT_JOB_DEFAULTS, type EnqueueContentJobInput, type WorkspaceContentRepository } from '../../application/workspaces/workspace-content-repository'
 import type { CoachDatabase } from '../database/connection'
 import { validExerciseData } from '../database/exercise-data-repair'
 
@@ -46,6 +46,21 @@ export class SqliteWorkspaceContentRepository implements WorkspaceContentReposit
       this.database.sqlite.prepare("INSERT INTO workspace_content_revisions (workspace_id,revision,input_hash,state,cancellation_generation,created_at,updated_at,legacy_state) VALUES (?,?,?,'provisioning',?,?,?,NULL) ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision,input_hash=excluded.input_hash,roadmap_id=NULL,first_topic_id=NULL,first_lesson_id=NULL,state='provisioning',cancellation_generation=excluded.cancellation_generation,created_at=excluded.created_at,updated_at=excluded.updated_at,usable_at=NULL,fully_provisioned_at=NULL,legacy_state=NULL").run(input.workspaceId, revision, input.inputHash, cancellationGeneration, input.now, input.now)
       return this.getRevision(input.workspaceId)!
     })
+  }
+
+  ensureRevision(input: { workspaceId: string; inputHash: string; now: number }): WorkspaceContentRevision {
+    const current = this.getRevision(input.workspaceId)
+    return current?.inputHash === input.inputHash ? current : this.createRevision(input)
+  }
+
+  adoptRoadmapRevision(input: { workspaceId: string; roadmapId: string; inputHash: string; now: number }): WorkspaceContentRevision {
+    const roadmap = this.database.sqlite.prepare("SELECT id FROM roadmaps WHERE id=? AND workspace_id=? AND status='accepted'").get(input.roadmapId, input.workspaceId)
+    if (!roadmap) throw new Error('Accepted roadmap not found for content revision')
+    const revision = this.ensureRevision(input)
+    this.database.sqlite.prepare('UPDATE roadmaps SET content_revision=?,content_hash=? WHERE id=?').run(revision.revision, input.inputHash, input.roadmapId)
+    const job = this.enqueue({ workspaceId: input.workspaceId, revision: revision.revision, kind: 'roadmap_generate', unitKey: 'roadmap', priority: 900, inputHash: input.inputHash, generatorContractVersion: CONTENT_GENERATOR_VERSIONS.roadmap_generate }, input.now)
+    this.database.sqlite.prepare("UPDATE content_jobs SET status='ready',completed_at=?,updated_at=? WHERE id=?").run(input.now, input.now, job.id)
+    return this.getRevision(input.workspaceId)!
   }
 
   replaceRequiredUnits(workspaceId: string, revision: number, units: readonly Omit<RequiredContentUnit, 'workspaceId' | 'revision' | 'createdAt'>[], now: number): RequiredContentUnit[] {
@@ -151,18 +166,19 @@ export class SqliteWorkspaceContentRepository implements WorkspaceContentReposit
   evaluateReadiness(input: { workspaceId: string; expectedRevision: number; todayDateKey: string; now: number }): WorkspaceContentRevision {
     return this.immediate(() => {
       const revision = this.requireCurrent(input.workspaceId, input.expectedRevision)
-      const roadmap = this.database.sqlite.prepare("SELECT r.id,r.generation_kind AS generationKind,r.content_revision AS contentRevision FROM roadmaps r JOIN workspaces w ON w.id=r.workspace_id AND w.status='active' WHERE r.workspace_id=? AND r.status='accepted' AND r.generation_kind='ai_generated' AND r.content_revision=? ORDER BY r.version DESC LIMIT 1").get(input.workspaceId, input.expectedRevision) as { id: string; generationKind: string; contentRevision: number } | undefined
+      const roadmap = this.database.sqlite.prepare("SELECT r.id,r.generation_kind AS generationKind,r.content_revision AS contentRevision FROM roadmaps r JOIN workspaces w ON w.id=r.workspace_id AND w.status='active' WHERE r.workspace_id=? AND r.status='accepted' AND r.generation_kind='ai_generated' AND r.content_revision=? AND r.content_hash=? ORDER BY r.version DESC LIMIT 1").get(input.workspaceId, input.expectedRevision, revision.inputHash) as { id: string; generationKind: string; contentRevision: number } | undefined
       const first = roadmap ? this.firstRoadmapTopic(roadmap.id) : null
-      const lesson = first ? this.database.sqlite.prepare("SELECT id,content_json AS contentJson FROM study_lessons WHERE workspace_id=? AND roadmap_id=? AND module_id=? AND topic_id=? AND generation_kind='ai_generated' AND content_revision=? ORDER BY updated_at DESC LIMIT 1").get(input.workspaceId, roadmap!.id, first.moduleId, first.topicId, input.expectedRevision) as { id: string; contentJson: string } | undefined : undefined
+      const lesson = first ? this.database.sqlite.prepare("SELECT id,content_json AS contentJson FROM study_lessons WHERE workspace_id=? AND roadmap_id=? AND module_id=? AND topic_id=? AND generation_kind='ai_generated' AND content_revision=? AND input_hash=? ORDER BY updated_at DESC LIMIT 1").get(input.workspaceId, roadmap!.id, first.moduleId, first.topicId, input.expectedRevision, revision.inputHash) as { id: string; contentJson: string } | undefined : undefined
       const lessonValid = lesson ? this.validActionableLesson(lesson.contentJson) : false
-      const exerciseValid = lesson && first ? this.validExerciseSet(input.workspaceId, roadmap!.id, first.moduleId, first.topicId, lesson.id, input.expectedRevision) : false
+      const exerciseValid = lesson && first ? this.validExerciseSet(input.workspaceId, roadmap!.id, first.moduleId, first.topicId, lesson.id, input.expectedRevision, revision.inputHash) : false
       const planValid = first ? Boolean(this.database.sqlite.prepare("SELECT 1 FROM weekly_plan_items WHERE workspace_id=? AND date_key=? AND topic_id=? AND status<>'completed' LIMIT 1").get(input.workspaceId, input.todayDateKey, first.topicId) ?? this.database.sqlite.prepare("SELECT 1 FROM study_plan_items WHERE workspace_id=? AND topic_id=? AND status<>'completed' LIMIT 1").get(input.workspaceId, first.topicId)) : false
       const readinessJobs = first ? this.database.sqlite.prepare("SELECT kind,unit_key AS unitKey FROM content_jobs WHERE workspace_id=? AND revision=? AND input_hash=? AND status='ready' AND ((kind='roadmap_generate' AND unit_key='roadmap') OR (kind IN ('lesson_generate','exercise_generate') AND unit_key=?))").all(input.workspaceId, input.expectedRevision, revision.inputHash, first.topicId) as Array<{ kind: string; unitKey: string }> : []
       const readyKinds = new Set(readinessJobs.map((job) => job.kind))
-      const nextQueued = first ? Boolean(this.database.sqlite.prepare("SELECT 1 FROM roadmap_modules m,json_each(m.topics_json) topic JOIN content_jobs j ON j.workspace_id=? AND j.revision=? AND j.kind='lesson_generate' AND j.unit_key=(m.id || ':' || topic.value) AND j.status IN ('pending','queued','generating','ready') WHERE m.roadmap_id=? AND (m.position>(SELECT position FROM roadmap_modules WHERE id=?) OR (m.id=? AND CAST(topic.key AS integer)>0)) LIMIT 1").get(input.workspaceId, input.expectedRevision, roadmap!.id, first.moduleId, first.moduleId)) : false
-      const usable = Boolean(roadmap && first && lesson && lessonValid && exerciseValid && planValid && nextQueued && readyKinds.has('roadmap_generate') && readyKinds.has('lesson_generate') && readyKinds.has('exercise_generate'))
+      const usable = Boolean(roadmap && first && lesson && lessonValid && exerciseValid && planValid && readyKinds.has('roadmap_generate') && readyKinds.has('lesson_generate') && readyKinds.has('exercise_generate'))
       const required = this.listRequiredUnits(input.workspaceId, input.expectedRevision)
-      const allRequiredReady = required.length > 0 && required.every((unit) => Boolean(this.database.sqlite.prepare("SELECT 1 FROM content_jobs WHERE workspace_id=? AND revision=? AND kind=? AND unit_key=? AND input_hash=? AND status='ready'").get(unit.workspaceId, unit.revision, unit.kind, unit.unitKey, unit.inputHash)))
+      // FULLY_PROVISIONED means every unit declared required by this revision's manifest
+      // has a validated ready job for the exact immutable revision input.
+      const allRequiredReady = required.length > 0 && required.every((unit) => this.requiredOutputValid(unit, roadmap?.id ?? null))
       const state = usable && allRequiredReady ? 'fully_provisioned' : usable ? 'usable' : 'provisioning'
       this.database.sqlite.prepare('UPDATE workspace_content_revisions SET roadmap_id=?,first_topic_id=?,first_lesson_id=?,state=?,usable_at=CASE WHEN ?<>\'provisioning\' THEN COALESCE(usable_at,?) ELSE NULL END,fully_provisioned_at=CASE WHEN ?=\'fully_provisioned\' THEN COALESCE(fully_provisioned_at,?) ELSE NULL END,updated_at=? WHERE workspace_id=? AND revision=?').run(usable ? roadmap!.id : null, usable ? first!.topicId : null, usable ? lesson!.id : null, state, state, input.now, state, input.now, input.now, input.workspaceId, input.expectedRevision)
       return this.getRevision(input.workspaceId) ?? revision
@@ -210,14 +226,25 @@ export class SqliteWorkspaceContentRepository implements WorkspaceContentReposit
     } catch { return false }
   }
 
-  private validExerciseSet(workspaceId: string, roadmapId: string, moduleId: string, topicId: string, lessonId: string, revision: number): boolean {
-    const set = this.database.sqlite.prepare("SELECT id FROM exercise_sets WHERE workspace_id=? AND roadmap_id=? AND module_id=? AND topic_id=? AND lesson_id=? AND content_revision=? AND status='ready'").get(workspaceId, roadmapId, moduleId, topicId, lessonId, revision) as { id: string } | undefined
+  private validExerciseSet(workspaceId: string, roadmapId: string, moduleId: string, topicId: string, lessonId: string, revision: number, inputHash: string): boolean {
+    const set = this.database.sqlite.prepare("SELECT id FROM exercise_sets WHERE workspace_id=? AND roadmap_id=? AND module_id=? AND topic_id=? AND lesson_id=? AND content_revision=? AND input_hash=? AND status='ready'").get(workspaceId, roadmapId, moduleId, topicId, lessonId, revision, inputHash) as { id: string } | undefined
     if (!set) return false
     const rows = this.database.sqlite.prepare('SELECT id,set_id AS setId,position,kind,difficulty,title,statement,input_description AS inputDescription,output_description AS outputDescription,language,starter_code AS starterCode,prediction_prompt AS predictionPrompt,code_to_observe AS codeToObserve,required_for_topic_completion AS requiredForTopicCompletion,public_tests_json AS publicTestsJson,private_tests_json AS privateTestsJson,reference_solution AS referenceSolution,expected_prediction AS expectedPrediction,hint FROM exercises WHERE set_id=? ORDER BY position').all(set.id) as RawExercise[]
     return rows.length > 0 && rows.every(validExerciseData)
   }
 
+  private requiredOutputValid(unit: RequiredContentUnit, roadmapId: string | null): boolean {
+    const ready = this.database.sqlite.prepare("SELECT 1 FROM content_jobs WHERE workspace_id=? AND revision=? AND kind=? AND unit_key=? AND input_hash=? AND status='ready'").get(unit.workspaceId, unit.revision, unit.kind, unit.unitKey, unit.inputHash)
+    if (!ready) return false
+    if (unit.kind === 'roadmap_generate') return Boolean(roadmapId && this.database.sqlite.prepare("SELECT 1 FROM roadmaps WHERE id=? AND content_revision=? AND content_hash=? AND status='accepted'").get(roadmapId, unit.revision, unit.inputHash))
+    if (unit.kind === 'lesson_generate') { const row = this.database.sqlite.prepare("SELECT content_json AS contentJson FROM study_lessons WHERE workspace_id=? AND topic_id=? AND content_revision=? AND input_hash=? AND generation_kind='ai_generated' ORDER BY updated_at DESC LIMIT 1").get(unit.workspaceId, unit.unitKey, unit.revision, unit.inputHash) as { contentJson: string } | undefined; return Boolean(row && this.validActionableLesson(row.contentJson)) }
+    if (unit.kind === 'exercise_generate') { const set = this.database.sqlite.prepare("SELECT id,roadmap_id AS roadmapId,module_id AS moduleId,lesson_id AS lessonId FROM exercise_sets WHERE workspace_id=? AND topic_id=? AND content_revision=? AND input_hash=? AND status='ready'").get(unit.workspaceId, unit.unitKey, unit.revision, unit.inputHash) as { id: string; roadmapId: string; moduleId: string; lessonId: string } | undefined; return Boolean(set && this.validExerciseSet(unit.workspaceId, set.roadmapId, set.moduleId, unit.unitKey, set.lessonId, unit.revision, unit.inputHash)) }
+    if (unit.kind === 'plan_recalculate') return Boolean(roadmapId && this.database.sqlite.prepare("SELECT 1 FROM weekly_plan_items WHERE workspace_id=? AND topic_id IN (SELECT m.id || ':' || j.value FROM roadmap_modules m,json_each(m.topics_json) j WHERE m.roadmap_id=?) LIMIT 1").get(unit.workspaceId, roadmapId))
+    return true
+  }
+
   private immediate<T>(operation: () => T): T {
+    if (this.database.sqlite.inTransaction) return operation()
     return this.database.sqlite.transaction(operation).immediate()
   }
 }

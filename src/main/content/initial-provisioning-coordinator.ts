@@ -1,34 +1,52 @@
-import { createHash } from 'node:crypto'
 import { CONTENT_GENERATOR_VERSIONS, contentJobKey, type WorkspaceContentRepository } from '../../application/workspaces/workspace-content-repository'
+import { contentRevisionFingerprint, effectiveContentRevisionFingerprint, NO_CONTENT_MUTATION } from '../../application/workspaces/content-revision-fingerprint'
+import type { Roadmap } from '../../shared/contracts/roadmap-contract'
 import type { ContentJob } from '../../shared/contracts/workspace-content-contract'
 import type { CoachDatabase } from '../database/connection'
 import type { PerformanceTimelineStore } from '../telemetry/performance-timeline'
-
-function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
-  if (value && typeof value === 'object') return `{${Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([key, item]) => `${JSON.stringify(key)}:${canonical(item)}`).join(',')}}`
-  return JSON.stringify(value)
-}
 
 export class InitialProvisioningCoordinator {
   constructor(private readonly database: CoachDatabase, private readonly repository: WorkspaceContentRepository, private readonly wake: () => void, private readonly now = Date.now, private readonly timelines?: PerformanceTimelineStore) {}
 
   initialize(workspaceId: string): void {
     const now = this.now()
+    const { inputHash } = this.authoritativeInput(workspaceId)
+    const existing = this.repository.getRevision(workspaceId)
+    if (existing && existing.inputHash === inputHash) { this.advance(workspaceId); return }
+    const revision = this.repository.ensureRevision({ workspaceId, inputHash, now })
+    this.enqueue(workspaceId, revision.revision, inputHash, 'roadmap_generate', 'roadmap', 900, [])
+    this.timelines?.markProvisioning(workspaceId, 'roadmap', { outcome: 'queued' })
+    this.stage(workspaceId, 'roadmap')
+    this.wake()
+  }
+
+  adoptApprovedRoadmap(roadmap: Roadmap): void {
+    const now = this.now()
+    const { inputHash } = this.authoritativeInput(roadmap.workspaceId)
+    this.repository.adoptRoadmapRevision({ workspaceId: roadmap.workspaceId, roadmapId: roadmap.id, inputHash, now })
+  }
+
+  resumeApprovedRoadmap(workspaceId: string): void {
+    this.advance(workspaceId)
+    this.wake()
+  }
+
+  adoptAndResumeApprovedRoadmap(roadmap: Roadmap): void {
+    this.adoptApprovedRoadmap(roadmap)
+    this.advance(roadmap.workspaceId)
+    this.wake()
+  }
+
+  private authoritativeInput(workspaceId: string): { baseInputHash: string; inputHash: string } {
     const workspace = this.database.sqlite.prepare('SELECT name,objective FROM workspaces WHERE id=?').get(workspaceId) as { name: string; objective: string }
     const override = this.database.sqlite.prepare('SELECT canonical_focus AS focus,canonical_context AS context,declared_level AS level,declared_knowledge_json AS knowledge,declared_difficulties_json AS difficulties,goals_json AS goals,onboarding_analysis_revision AS analysisRevision,onboarding_analysis_fingerprint AS analysisFingerprint FROM workspace_learning_overrides WHERE workspace_id=?').get(workspaceId) as Record<string, unknown>
     this.timelines?.markProvisioning(workspaceId, 'analyze', { outcome: override.analysisFingerprint ? 'validated' : 'unavailable' })
     const materials = this.database.sqlite.prepare("SELECT id,content_hash AS contentHash,analysis_fingerprint AS analysisFingerprint,role,relevance,semantic_analysis_json AS analysis FROM materials WHERE workspace_id=? AND status='ready' ORDER BY CASE role WHEN 'priority' THEN 0 WHEN 'base' THEN 1 ELSE 2 END,created_at,id").all(workspaceId)
     this.timelines?.markProvisioning(workspaceId, 'context')
     this.timelines?.markProvisioning(workspaceId, 'material_analysis', { cache: materials.length && materials.every((item: any) => Boolean(item.analysisFingerprint)) ? 'hit' : 'unavailable' })
-    const inputHash = createHash('sha256').update(canonical({ workspace, override, materials })).digest('hex')
-    const existing = this.repository.getRevision(workspaceId)
-    if (existing && existing.inputHash === inputHash) { this.advance(workspaceId); return }
-    const revision = this.repository.createRevision({ workspaceId, inputHash, now })
-    this.enqueue(workspaceId, revision.revision, inputHash, 'roadmap_generate', 'roadmap', 900, [])
-    this.timelines?.markProvisioning(workspaceId, 'roadmap', { outcome: 'queued' })
-    this.stage(workspaceId, 'roadmap')
-    this.wake()
+    const baseInputHash = contentRevisionFingerprint({ workspace, override, materials })
+    const mutation = this.database.sqlite.prepare('SELECT mutation_fingerprint AS mutationFingerprint FROM workspace_content_authority WHERE workspace_id=?').get(workspaceId) as { mutationFingerprint: string } | undefined
+    return { baseInputHash, inputHash: effectiveContentRevisionFingerprint(baseInputHash, mutation?.mutationFingerprint ?? NO_CONTENT_MUTATION) }
   }
 
   advance(workspaceId: string): void {
@@ -51,8 +69,10 @@ export class InitialProvisioningCoordinator {
     if (next) this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', next, 500, [planKey])
     const units = [
       { kind: 'roadmap_generate' as const, unitKey: 'roadmap', inputHash: revision.inputHash },
-      ...topics.map((unitKey) => ({ kind: 'lesson_generate' as const, unitKey, inputHash: revision.inputHash })),
-      { kind: 'exercise_generate' as const, unitKey: first, inputHash: revision.inputHash },
+      ...topics.flatMap((unitKey) => [
+        { kind: 'lesson_generate' as const, unitKey, inputHash: revision.inputHash },
+        { kind: 'exercise_generate' as const, unitKey, inputHash: revision.inputHash },
+      ]),
       { kind: 'plan_recalculate' as const, unitKey: 'current-week', inputHash: revision.inputHash },
     ]
     const existingUnits = this.repository.listRequiredUnits(workspaceId, revision.revision)
@@ -68,7 +88,7 @@ export class InitialProvisioningCoordinator {
   reconcileReadiness(workspaceId: string): void {
     const revision = this.repository.getRevision(workspaceId)
     if (!revision || revision.inputHash === 'legacy-unavailable') return
-    const timezone = (this.database.sqlite.prepare('SELECT timezone FROM weekly_plans ORDER BY generated_at,rowid LIMIT 1').get() as { timezone: string } | undefined)?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+    const timezone = (this.database.sqlite.prepare("SELECT timezone FROM planning_settings WHERE id='current'").get() as { timezone: string } | undefined)?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(this.now())
     const state = this.repository.evaluateReadiness({ workspaceId, expectedRevision: revision.revision, todayDateKey: today, now: this.now() })
     if (state.state === 'PROVISIONING') return

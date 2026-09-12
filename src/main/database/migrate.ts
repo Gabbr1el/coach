@@ -177,6 +177,150 @@ export function repairExerciseSchema(sqlite: Database.Database): void {
   }
 }
 
+const evidenceIndexes = [
+  'CREATE UNIQUE INDEX IF NOT EXISTS assessment_variants_source_unique ON assessment_variants (workspace_id, intent_id, environment, source_ref, source_revision)',
+  'CREATE UNIQUE INDEX IF NOT EXISTS learning_attempts_workspace_environment_key_unique ON learning_attempts (workspace_id, environment, idempotency_key)',
+  'CREATE INDEX IF NOT EXISTS learning_attempts_concept_time_idx ON learning_attempts (concept_id, occurred_at, id)',
+  'CREATE UNIQUE INDEX IF NOT EXISTS concept_memories_workspace_concept_unique ON concept_memories (workspace_id, concept_id)',
+  'CREATE INDEX IF NOT EXISTS concept_memories_next_review_idx ON concept_memories (workspace_id, next_review_at)',
+  'CREATE INDEX IF NOT EXISTS exercise_help_events_exercise_created_idx ON exercise_help_events (workspace_id, exercise_id, created_at)',
+] as const
+
+function tableColumns(sqlite: Database.Database, table: string): Set<string> {
+  return new Set((sqlite.pragma(`table_info(${table})`) as Array<{ name: string }>).map((column) => column.name))
+}
+
+function requireLegacyColumns(table: string, existing: Set<string>, required: string[]): void {
+  const missing = required.filter((column) => !existing.has(column))
+  if (missing.length) throw new Error(`Unsupported published ${table} schema; missing ${missing.join(', ')}`)
+}
+
+function source(existing: Set<string>, column: string, fallback: string): string {
+  return existing.has(column) ? column : fallback
+}
+
+function normalizedSql(sqlite: Database.Database, type: 'table' | 'index', name: string): string {
+  const row = sqlite.prepare('SELECT sql FROM sqlite_master WHERE type=? AND name=?').get(type, name) as { sql: string | null } | undefined
+  return (row?.sql ?? '').toLowerCase().replaceAll('`', '').replace(/\s+/g, '')
+}
+
+export function repairPublishedEvidenceSchema(sqlite: Database.Database): void {
+  const migration = sqlite.prepare('SELECT 1 FROM __drizzle_migrations WHERE created_at >= ? LIMIT 1').get(1789160400000)
+  if (!migration) return
+
+  const variants = tableColumns(sqlite, 'assessment_variants')
+  const attempts = tableColumns(sqlite, 'learning_attempts')
+  const currentVariants = ['id', 'workspace_id', 'intent_id', 'environment', 'source_ref', 'source_revision', 'difficulty', 'prerequisite_concept_ids_json', 'public_metadata_json', 'public_payload_json', 'evaluator_json', 'created_at', 'updated_at']
+  const currentAttempts = ['id', 'workspace_id', 'concept_id', 'assessment_intent_id', 'assessment_variant_id', 'environment', 'source_ref', 'source_revision', 'first_seen_at', 'idempotency_key', 'payload_hash', 'outcome', 'correct', 'independent', 'reasoning_quality', 'occurred_at', 'created_at']
+  const attemptsSql = (sqlite.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='learning_attempts'").get() as { sql: string } | undefined)?.sql ?? ''
+  const needsVariantRebuild = currentVariants.some((column) => !variants.has(column))
+  const needsAttemptRebuild = currentAttempts.some((column) => !attempts.has(column)) || !attemptsSql.includes("'review'")
+  const singularMemory = tableColumns(sqlite, 'concept_memory')
+  const memories = tableColumns(sqlite, 'concept_memories')
+  const needsMemoryRebuild = memories.size > 0 && ['workspace_id', 'concept_id', 'performance', 'evidence_quantity', 'independence', 'diversity', 'recency', 'retention', 'confidence', 'successful_retrievals', 'independent_successes', 'error_count', 'help_events', 'environment_count', 'interval_days', 'last_evidence_at', 'next_review_at', 'updated_at'].some((column) => !memories.has(column))
+  const variantIndexCurrent = normalizedSql(sqlite, 'index', 'assessment_variants_source_unique').includes('(workspace_id,intent_id,environment,source_ref,source_revision)')
+  const reviewIndexCurrent = !tableColumns(sqlite, 'review_sessions').size || normalizedSql(sqlite, 'index', 'review_sessions_one_current_workspace').includes("statusin('active','preparation')")
+  const foreignKeysEnabled = sqlite.pragma('foreign_keys', { simple: true }) === 1
+  if (foreignKeysEnabled) sqlite.pragma('foreign_keys = OFF')
+  try {
+    sqlite.transaction(() => {
+      if (needsVariantRebuild) {
+        requireLegacyColumns('assessment_variants', variants, ['id', 'intent_id', 'environment', 'source_ref', 'source_revision', 'difficulty', 'created_at', 'updated_at'])
+        if (!variants.has('workspace_id')) {
+          const unresolved = sqlite.prepare('SELECT COUNT(*) AS count FROM assessment_variants v LEFT JOIN assessment_intents i ON i.id=v.intent_id WHERE i.id IS NULL').get() as { count: number }
+          if (unresolved.count) throw new Error('Published assessment_variants repair cannot derive workspace_id')
+        }
+        sqlite.exec(`
+          DROP TABLE IF EXISTS __coach_repair_assessment_variants;
+          CREATE TABLE __coach_repair_assessment_variants (
+            id text PRIMARY KEY NOT NULL, workspace_id text NOT NULL, intent_id text NOT NULL, environment text NOT NULL,
+            source_ref text NOT NULL, source_revision text NOT NULL, difficulty text NOT NULL,
+            prerequisite_concept_ids_json text DEFAULT '[]' NOT NULL, public_metadata_json text DEFAULT '{}' NOT NULL,
+            public_payload_json text DEFAULT '{}' NOT NULL, evaluator_json text DEFAULT '{}' NOT NULL,
+            created_at integer NOT NULL, updated_at integer NOT NULL,
+            FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON UPDATE no action ON DELETE cascade,
+            FOREIGN KEY (intent_id) REFERENCES assessment_intents(id) ON UPDATE no action ON DELETE cascade,
+            CONSTRAINT assessment_variants_difficulty_check CHECK(difficulty in ('introductory','standard','challenge'))
+          );
+          INSERT INTO __coach_repair_assessment_variants
+            (id,workspace_id,intent_id,environment,source_ref,source_revision,difficulty,prerequisite_concept_ids_json,public_metadata_json,public_payload_json,evaluator_json,created_at,updated_at)
+          SELECT v.id,${variants.has('workspace_id') ? 'v.workspace_id' : 'i.workspace_id'},v.intent_id,v.environment,v.source_ref,v.source_revision,v.difficulty,
+            ${source(variants, 'prerequisite_concept_ids_json', "'[]'")},${source(variants, 'public_metadata_json', "'{}'")},
+            ${source(variants, 'public_payload_json', "'{}'")},${source(variants, 'evaluator_json', "'{}'")},v.created_at,v.updated_at
+          FROM assessment_variants v JOIN assessment_intents i ON i.id=v.intent_id;
+          DROP TABLE assessment_variants;
+          ALTER TABLE __coach_repair_assessment_variants RENAME TO assessment_variants;
+        `)
+      }
+
+      if (needsAttemptRebuild) {
+        requireLegacyColumns('learning_attempts', attempts, ['id', 'workspace_id', 'environment', 'source_ref', 'source_revision', 'idempotency_key', 'outcome', 'independent', 'reasoning_quality', 'occurred_at', 'created_at'])
+        sqlite.exec(`
+          DROP TABLE IF EXISTS __coach_repair_learning_attempts;
+          CREATE TABLE __coach_repair_learning_attempts (
+            id text PRIMARY KEY NOT NULL, workspace_id text NOT NULL, concept_id text, assessment_intent_id text,
+            assessment_variant_id text, environment text NOT NULL, source_ref text NOT NULL, source_revision text NOT NULL,
+            first_seen_at integer, idempotency_key text NOT NULL, payload_hash text NOT NULL, outcome text NOT NULL,
+            correct integer, independent integer NOT NULL, reasoning_quality text NOT NULL, occurred_at integer NOT NULL, created_at integer NOT NULL,
+            FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON UPDATE no action ON DELETE cascade,
+            FOREIGN KEY (concept_id) REFERENCES concepts(id) ON UPDATE no action ON DELETE set null,
+            FOREIGN KEY (assessment_intent_id) REFERENCES assessment_intents(id) ON UPDATE no action ON DELETE set null,
+            FOREIGN KEY (assessment_variant_id) REFERENCES assessment_variants(id) ON UPDATE no action ON DELETE set null,
+            CONSTRAINT learning_attempts_environment_check CHECK(environment in ('checkpoint','exercise','study_interactive','practice','review'))
+          );
+          INSERT INTO __coach_repair_learning_attempts
+            (id,workspace_id,concept_id,assessment_intent_id,assessment_variant_id,environment,source_ref,source_revision,first_seen_at,idempotency_key,payload_hash,outcome,correct,independent,reasoning_quality,occurred_at,created_at)
+          SELECT id,workspace_id,${source(attempts, 'concept_id', 'NULL')},${source(attempts, 'assessment_intent_id', 'NULL')},
+            ${source(attempts, 'assessment_variant_id', 'NULL')},environment,source_ref,source_revision,${source(attempts, 'first_seen_at', 'NULL')},idempotency_key,
+            ${source(attempts, 'payload_hash', "'legacy-unavailable:' || id")},outcome,${source(attempts, 'correct', 'NULL')},independent,reasoning_quality,occurred_at,created_at
+          FROM learning_attempts;
+          DROP TABLE learning_attempts;
+          ALTER TABLE __coach_repair_learning_attempts RENAME TO learning_attempts;
+        `)
+      }
+
+      if (needsMemoryRebuild) sqlite.exec('ALTER TABLE concept_memories RENAME TO concept_memories_published_legacy')
+      if (memories.size === 0 || needsMemoryRebuild) sqlite.exec(`CREATE TABLE concept_memories (
+        workspace_id text NOT NULL, concept_id text NOT NULL, performance text NOT NULL, evidence_quantity text NOT NULL,
+        independence text NOT NULL, diversity text NOT NULL, recency text NOT NULL, retention text NOT NULL, confidence text NOT NULL,
+        successful_retrievals integer DEFAULT 0 NOT NULL, independent_successes integer DEFAULT 0 NOT NULL,
+        error_count integer DEFAULT 0 NOT NULL, help_events integer DEFAULT 0 NOT NULL, environment_count integer DEFAULT 0 NOT NULL,
+        interval_days integer DEFAULT 1 NOT NULL, last_evidence_at integer, next_review_at integer, updated_at integer NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON UPDATE no action ON DELETE cascade,
+        FOREIGN KEY (concept_id) REFERENCES concepts(id) ON UPDATE no action ON DELETE cascade
+      )`)
+      const memorySource = needsMemoryRebuild ? { name: 'concept_memories_published_legacy', columns: memories } : singularMemory.size > 0 && memories.size === 0 ? { name: 'concept_memory', columns: singularMemory } : null
+      if (memorySource) {
+        requireLegacyColumns(memorySource.name, memorySource.columns, ['workspace_id', 'concept_id'])
+        const c = memorySource.columns
+        sqlite.exec(`INSERT OR IGNORE INTO concept_memories
+          (workspace_id,concept_id,performance,evidence_quantity,independence,diversity,recency,retention,confidence,successful_retrievals,independent_successes,error_count,help_events,environment_count,interval_days,last_evidence_at,next_review_at,updated_at)
+          SELECT workspace_id,concept_id,${source(c, 'performance', "'unknown'")},${source(c, 'evidence_quantity', "'none'")},${source(c, 'independence', "'unknown'")},
+            ${source(c, 'diversity', "'single_context'")},${source(c, 'recency', "'unknown'")},${source(c, 'retention', "'unknown'")},${source(c, 'confidence', "'low'")},
+            ${source(c, 'successful_retrievals', '0')},${source(c, 'independent_successes', '0')},${source(c, 'error_count', '0')},${source(c, 'help_events', '0')},
+            ${source(c, 'environment_count', '0')},${source(c, 'interval_days', '1')},${source(c, 'last_evidence_at', 'NULL')},${source(c, 'next_review_at', 'NULL')},${source(c, 'updated_at', '0')}
+          FROM ${memorySource.name}`)
+        sqlite.exec(`DROP TABLE ${memorySource.name}`)
+      }
+
+      sqlite.exec(`CREATE TABLE IF NOT EXISTS exercise_help_events (
+        request_id text PRIMARY KEY NOT NULL, workspace_id text NOT NULL, exercise_id text NOT NULL, type text NOT NULL, created_at integer NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON UPDATE no action ON DELETE cascade,
+        FOREIGN KEY (exercise_id) REFERENCES exercises(id) ON UPDATE no action ON DELETE cascade,
+        CONSTRAINT exercise_help_events_type_check CHECK(type in ('hint_requested','coach_help_requested','worked_example_shown','solution_revealed'))
+      )`)
+      if (!variantIndexCurrent || needsVariantRebuild) sqlite.exec('DROP INDEX IF EXISTS assessment_variants_source_unique')
+      if (!reviewIndexCurrent) sqlite.exec('DROP INDEX IF EXISTS review_sessions_one_current_workspace')
+      sqlite.exec(evidenceIndexes.join(';'))
+      if (!reviewIndexCurrent) sqlite.exec("CREATE UNIQUE INDEX review_sessions_one_current_workspace ON review_sessions (workspace_id) WHERE status in ('active','preparation')")
+      const foreignKeyErrors = sqlite.pragma('foreign_key_check') as unknown[]
+      if (foreignKeyErrors.length) throw new Error('Published evidence schema repair found invalid relationships')
+    })()
+  } finally {
+    if (foreignKeysEnabled) sqlite.pragma('foreign_keys = ON')
+  }
+}
+
 export function migrateDatabase<TSchema extends Record<string, unknown>>(
   database: BetterSQLite3Database<TSchema>,
   config: MigrationConfig,

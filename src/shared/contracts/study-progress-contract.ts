@@ -3,7 +3,7 @@ import { workspaceIdSchema } from './workspace-contract'
 
 export const studyItemStatusSchema = z.enum(['NOT_STARTED', 'IN_PROGRESS', 'COMPLETED'])
 export const studyStageSchema = z.enum(['explanation', 'example', 'verification', 'feedback', 'exercise'])
-export const checkpointReasoningStatusSchema = z.enum(['coherent', 'partial', 'misconception', 'insufficient', 'off_topic'])
+export const checkpointReasoningStatusSchema = z.enum(['coherent', 'partial', 'misconception', 'insufficient', 'off_topic', 'not_evaluated'])
 export const checkpointReasoningAssessmentSchema = z.discriminatedUnion('status', [
   z.object({ status: checkpointReasoningStatusSchema, summary: z.string().min(1).max(600), misconception: z.string().min(1).max(600).nullable(), feedback: z.string().min(1).max(1000), evaluatedAt: z.number().int().nonnegative(), retryCount: z.number().int().min(0).max(100), nextRetryAt: z.null() }).strict(),
   z.object({ status: z.literal('reasoning_evaluation_pending'), summary: z.null(), misconception: z.null(), feedback: z.null(), evaluatedAt: z.null(), retryCount: z.number().int().min(1).max(100), nextRetryAt: z.number().int().nonnegative() }).strict(),
@@ -44,6 +44,8 @@ export const recordStudyEventSchema = z.object({
   hintUsed: z.boolean().optional(),
   reinforcementUsed: z.boolean().optional(),
   exerciseCompleted: z.boolean().optional(),
+  requestId: z.string().min(8).max(200).optional(),
+  helpType: z.enum(['hint_requested', 'coach_help_requested', 'worked_example_shown', 'solution_revealed']).optional(),
 }).strict().superRefine((value, context) => {
   if (value.type !== 'CHECKPOINT_ANSWERED') return
   if (value.checkpointId === null) context.addIssue({ code: 'custom', path: ['checkpointId'], message: 'Checkpoint evidence requires a checkpoint id' })
@@ -51,7 +53,7 @@ export const recordStudyEventSchema = z.object({
   if (value.attempt === undefined) context.addIssue({ code: 'custom', path: ['attempt'], message: 'Checkpoint evidence requires an attempt' })
 })
 export const updateStudyPositionSchema = z.object({ workspaceId: workspaceIdSchema, position: studyLessonPositionSchema, checkpointStates: z.unknown().optional() }).strict()
-export const answerStudyCheckpointSchema = z.object({ workspaceId: workspaceIdSchema, lessonId: z.string().min(1).max(360), checkpointId: z.string().min(1).max(420), selectedOptionId: z.string().min(1).max(120), studentJustification: z.string().trim().min(3).max(1000) }).strict()
+export const answerStudyCheckpointSchema = z.object({ workspaceId: workspaceIdSchema, lessonId: z.string().min(1).max(360), checkpointId: z.string().min(1).max(420), selectedOptionId: z.string().min(1).max(120), studentJustification: z.string().trim().max(1000).default('') }).strict()
 export const retryCheckpointReasoningSchema = z.object({ workspaceId: workspaceIdSchema, lessonId: z.string().min(1).max(360), checkpointId: z.string().min(1).max(420) }).strict()
 export const completeStudyTopicSchema = z.object({ workspaceId: workspaceIdSchema, topicId: z.string().min(1).max(300) }).strict()
 export const studyNextTargetSchema = z.object({ moduleId: z.uuid(), topicId: z.string().min(1).max(300), lessonId: z.string().min(1).max(360) }).strict()

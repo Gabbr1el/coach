@@ -17,6 +17,12 @@ export const workspaceLearningOverrides = sqliteTable('workspace_learning_overri
   updatedAt: integer('updated_at').notNull(),
 }, (table) => [check('workspace_learning_overrides_level_check', sql`${table.declaredLevel} is null or ${table.declaredLevel} in ('beginner','intermediate','advanced')`)])
 
+export const workspaceContentAuthority = sqliteTable('workspace_content_authority', {
+  workspaceId: text('workspace_id').primaryKey().references(() => workspaces.id, { onDelete: 'cascade' }),
+  mutationFingerprint: text('mutation_fingerprint').notNull().default('none'),
+  updatedAt: integer('updated_at').notNull(),
+})
+
 export const workspaceProvisioning = sqliteTable('workspace_provisioning', {
   workspaceId: text('workspace_id').primaryKey().references(() => workspaces.id, { onDelete: 'cascade' }),
   status: text('status', { enum: ['draft', 'queued', 'running', 'waiting_for_provider', 'failed_retryable', 'ready'] }).notNull(),

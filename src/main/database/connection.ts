@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path'
 import Database from 'better-sqlite3'
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { app } from 'electron'
-import { migrateDatabase, repairDraftAdaptiveStudyMigration, repairExerciseSchema, repairInteractiveCodeStateSchema } from './migrate'
+import { migrateDatabase, repairDraftAdaptiveStudyMigration, repairExerciseSchema, repairInteractiveCodeStateSchema, repairPublishedEvidenceSchema } from './migrate'
 import { repairLegacyExerciseData } from './exercise-data-repair'
 import * as workspaceSchema from './schema/workspaces'
 import * as conversationSchema from './schema/conversations'
@@ -24,8 +24,9 @@ import * as exerciseSchema from './schema/exercises'
 import * as workspaceProvisioningSchema from './schema/workspace-provisioning'
 import * as academicLifeSchema from './schema/academic-life'
 import * as performanceTimelineSchema from './schema/performance-timelines'
+import * as conceptsEvidenceSchema from './schema/concepts-evidence'
 
-const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema, ...studyWorkspaceSchema, ...learningEventSchema, ...planningSchema, ...materialSchema, ...memorySchema, ...navigationSchema, ...projectSchema, ...roadmapSchema, ...plannerActionSchema, ...studyProgressSchema, ...studyLessonSchema, ...academicSubjectContextSchema, ...exerciseSchema, ...workspaceProvisioningSchema, ...academicLifeSchema, ...performanceTimelineSchema }
+export const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema, ...studyWorkspaceSchema, ...learningEventSchema, ...planningSchema, ...materialSchema, ...memorySchema, ...navigationSchema, ...projectSchema, ...roadmapSchema, ...plannerActionSchema, ...studyProgressSchema, ...studyLessonSchema, ...academicSubjectContextSchema, ...exerciseSchema, ...workspaceProvisioningSchema, ...academicLifeSchema, ...performanceTimelineSchema, ...conceptsEvidenceSchema }
 
 export interface CoachDatabase {
   readonly sqlite: Database.Database
@@ -53,6 +54,7 @@ export function openCoachDatabase(options: OpenCoachDatabaseOptions = {}): Coach
 
     const orm = drizzle(sqlite, { schema })
     migrateDatabase(orm, { migrationsFolder })
+    repairPublishedEvidenceSchema(sqlite)
     repairDraftAdaptiveStudyMigration(sqlite)
     repairInteractiveCodeStateSchema(sqlite)
     repairExerciseSchema(sqlite)

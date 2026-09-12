@@ -7,13 +7,13 @@ type Row = Omit<AcademicLifeItem, 'shareWithAi' | 'provenance'> & { shareWithAi:
 const columns = 'id,kind,status,title,details,workspace_id AS workspaceId,starts_at AS startsAt,ends_at AS endsAt,expires_at AS expiresAt,timezone,weekday,minutes,share_with_ai AS shareWithAi,provenance_source AS provenanceSource,provenance_reference AS provenanceReference,replaces_id AS replacesId,replaced_by_id AS replacedById,created_at AS createdAt,updated_at AS updatedAt,resolved_at AS resolvedAt,archived_at AS archivedAt'
 
 function fingerprint(input: AcademicLifeMutationInput): string {
-  return createHash('sha256').update(JSON.stringify({ kind: input.kind, title: input.title.toLocaleLowerCase('pt-BR'), details: input.details, workspaceId: input.workspaceId, startsAt: input.startsAt, endsAt: input.endsAt, expiresAt: input.expiresAt, timezone: input.timezone, weekday: input.weekday, minutes: input.minutes, shareWithAi: input.shareWithAi, source: input.provenance.source, reference: input.provenance.reference })).digest('hex')
+  return createHash('sha256').update(JSON.stringify({ kind: input.kind, title: input.title.toLocaleLowerCase('pt-BR'), details: input.details, workspaceId: input.workspaceId, startsAt: input.startsAt, endsAt: input.endsAt, expiresAt: input.expiresAt, timezone: input.timezone, weekday: input.weekday, minutes: input.minutes, shareWithAi: input.shareWithAi, source: input.provenance.source, reference: input.provenance.reference, replacesId: input.replacesId ?? null })).digest('hex')
 }
 
 export class SqliteAcademicLifeRepository implements AcademicLifeRepository {
   constructor(private readonly database: CoachDatabase) {}
   private map(row: Row): AcademicLifeItem { const { provenanceSource, provenanceReference, ...item } = row; return { ...item, shareWithAi: Boolean(row.shareWithAi), provenance: { source: provenanceSource, reference: provenanceReference } } }
-  private find(id: string): AcademicLifeItem | null { const row = this.database.sqlite.prepare(`SELECT ${columns} FROM academic_life_items WHERE id=?`).get(id) as Row | undefined; return row ? this.map(row) : null }
+  find(id: string): AcademicLifeItem | null { const row = this.database.sqlite.prepare(`SELECT ${columns} FROM academic_life_items WHERE id=?`).get(id) as Row | undefined; return row ? this.map(row) : null }
   save(input: AcademicLifeMutationInput & { id: string }, now: number): AcademicLifeItem {
     return this.database.sqlite.transaction(() => {
       const key = fingerprint(input)

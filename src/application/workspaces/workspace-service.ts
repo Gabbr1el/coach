@@ -14,6 +14,7 @@ export interface WorkspaceServiceDependencies {
   readonly provisioning?: { createDraft(workspaceId: string): WorkspaceProvisioningState; start(workspaceId: string): WorkspaceProvisioningState; get(workspaceId: string): WorkspaceProvisioningState | null; retry(workspaceId: string): WorkspaceProvisioningState; discardDraft(workspaceId: string): void }
   readonly findSemanticDuplicate?: (canonicalKey: string, excludedId?: string) => Workspace | null
   readonly validateAnalysis?: (token: string, revision: number, subject: string, focus?: string, context?: string) => boolean
+  readonly discoverOrphanEvents?: (workspace: Workspace) => Promise<unknown> | unknown
 }
 
 export class WorkspaceService {
@@ -27,8 +28,9 @@ export class WorkspaceService {
   private readonly provisioning?: WorkspaceServiceDependencies['provisioning']
   private readonly findSemanticDuplicate?: WorkspaceServiceDependencies['findSemanticDuplicate']
   private readonly validateAnalysis?: WorkspaceServiceDependencies['validateAnalysis']
+  private discoverOrphanEvents?: WorkspaceServiceDependencies['discoverOrphanEvents']
 
-  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), ensureLearningPath, academicContext, createWithAcademicContexts, saveLearningOverrides, provisioning, findSemanticDuplicate, validateAnalysis }: WorkspaceServiceDependencies) {
+  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), ensureLearningPath, academicContext, createWithAcademicContexts, saveLearningOverrides, provisioning, findSemanticDuplicate, validateAnalysis, discoverOrphanEvents }: WorkspaceServiceDependencies) {
     this.repository = repository
     this.now = now
     this.createId = createId
@@ -39,6 +41,7 @@ export class WorkspaceService {
     this.provisioning = provisioning
     this.findSemanticDuplicate = findSemanticDuplicate
     this.validateAnalysis = validateAnalysis
+    this.discoverOrphanEvents = discoverOrphanEvents
   }
 
   list(): Promise<WorkspaceSummary[]> {
@@ -46,6 +49,7 @@ export class WorkspaceService {
   }
 
   setLearningPathEnsurer(ensureLearningPath: (workspaceId: string) => Promise<unknown>): void { this.ensureLearningPath = ensureLearningPath }
+  setOrphanEventDiscovery(discover: NonNullable<WorkspaceServiceDependencies['discoverOrphanEvents']>): void { this.discoverOrphanEvents = discover }
 
   async create(input: CreateWorkspaceInput): Promise<Workspace> {
     this.assertAnalyzed(input)
@@ -56,6 +60,7 @@ export class WorkspaceService {
       if (workspace.name !== input.name.trim() || workspace.objective !== input.objective.trim()) throw new Error('Workspace draft changed after materials were attached; discard it and analyze again')
       this.saveLearningOverrides?.(workspace.id, normalizeSubject(input.name).subject, { ...input, goals: [...(input.goals ?? []), input.objective].filter(Boolean) }, this.now())
       this.provisioning.start(workspace.id)
+      try { await this.discoverOrphanEvents?.(workspace) } catch {}
       return workspace
     }
     return this.createRecord(input, false)
@@ -84,6 +89,7 @@ export class WorkspaceService {
     if (!this.createWithAcademicContexts && !this.saveLearningOverrides) this.academicContext?.record({ subject: normalized.subject, declaredLevel: academic.declaredLevel ?? null, declaredKnowledge: academic.declaredKnowledge, declaredDifficulties: academic.declaredDifficulties, goals: academic.goals, sourceEvidence: [] })
     if (this.provisioning) { this.provisioning.createDraft(workspace.id); if (!draft) this.provisioning.start(workspace.id) }
     else void this.ensureLearningPath?.(workspace.id).catch(() => {})
+    if (!draft) { try { await this.discoverOrphanEvents?.(workspace) } catch {} }
     return workspace
   }
 

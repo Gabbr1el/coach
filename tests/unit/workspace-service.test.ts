@@ -87,4 +87,6 @@ describe('WorkspaceService', () => {
 
     expect(await service.list()).toEqual([])
   })
+  it('discovers orphan event suggestions after creation without linking them', async () => { const repository = new MemoryWorkspaceRepository(); const discovered: Workspace[] = []; const service = new WorkspaceService({ repository, discoverOrphanEvents: (created) => { discovered.push(created) } }); const created = await service.create({ name: 'POO', objective: 'Prova' }); expect(discovered).toEqual([created]) })
+  it('keeps a created workspace successful when optional orphan discovery fails', async () => { const repository = new MemoryWorkspaceRepository(); const service = new WorkspaceService({ repository, discoverOrphanEvents: () => { throw new Error('provider unavailable') } }); await expect(service.create({ name: 'POO', objective: 'Prova' })).resolves.toMatchObject({ name: 'POO' }) })
 })

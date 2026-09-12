@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 export const ORGANIZER_READ_CAPABILITIES = ['workspaces.list', 'workspaces.search', 'academicLife.list', 'academicLife.search', 'plan.week.get', 'deadlines.list', 'availability.get'] as const
-export const ORGANIZER_WRITE_CAPABILITIES = ['workspace.prepare', 'academic.event.create', 'academic.event.update', 'academic.event.cancel', 'academic-life.save', 'academic-life.transition', 'plan.today-budget.set', 'plan.weekday-availability.set', 'plan.recalculate', 'plan.item-completion.set'] as const
+export const ORGANIZER_WRITE_CAPABILITIES = ['workspace.prepare', 'academic.event.create', 'academic.event.update', 'academic.event.cancel', 'academic.event.linkWorkspace', 'academic.event.unlinkWorkspace', 'academic.event.keepUnlinked', 'academic-life.save', 'academic-life.transition', 'plan.today-budget.set', 'plan.weekday-availability.set', 'plan.recalculate', 'plan.item-completion.set'] as const
 export const organizerCapabilitySchema = z.enum([...ORGANIZER_READ_CAPABILITIES, ...ORGANIZER_WRITE_CAPABILITIES])
 
 export const organizerEntitiesSchema = z.object({
@@ -51,6 +51,9 @@ export const ORGANIZER_CAPABILITY_REGISTRY = {
   'academic.event.create': { access: 'write', mode: 'mutation' },
   'academic.event.update': { access: 'write', mode: 'mutation' },
   'academic.event.cancel': { access: 'write', mode: 'mutation' },
+  'academic.event.linkWorkspace': { access: 'write', mode: 'mutation' },
+  'academic.event.unlinkWorkspace': { access: 'write', mode: 'mutation' },
+  'academic.event.keepUnlinked': { access: 'write', mode: 'mutation' },
   'academic-life.save': { access: 'write', mode: 'mutation' },
   'academic-life.transition': { access: 'write', mode: 'mutation' },
   'plan.today-budget.set': { access: 'write', mode: 'mutation' },

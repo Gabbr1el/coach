@@ -37,7 +37,7 @@ function storedEvent(item: AcademicLifeItem): { eventKind: AcademicEventKind; su
 }
 function workspaceFor(entities: OrganizerEntities, workspaces: OrganizerExecutionContext['workspaces']): { id: string; name: string } | null { return entities.subject ? workspaces.find((item) => normalized(item.name) === normalized(entities.subject!)) ?? null : null }
 function minutesFrom(content: string): number | null { const hours = /(\d+(?:[.,]\d+)?)\s*(?:h|hora|horas)\b/i.exec(content)?.[1]; if (hours) return Math.round(Number(hours.replace(',', '.')) * 60); const minutes = /(\d+)\s*(?:min|minuto|minutos)\b/i.exec(content)?.[1]; return minutes ? Number(minutes) : null }
-function subjectFrom(content: string): string | null { return /(?:prova|exame|trabalho|atividade|prazo)\s+(?:de|da|do)\s+(.+?)(?=\s+(?:mudou\b|passou\b|foi\s+remarcad[ao]\b|foi\s+adiad[ao]\b|no\s+dia|dia|em\s+\d|amanh[ãa]|hoje|na\s+(?:segunda|terça|quarta|quinta|sexta|sábado|domingo))\b|[,.;]|\s+e\s+estou\b|$)/i.exec(content)?.[1]?.trim() ?? null }
+function subjectFrom(content: string): string | null { return /(?:prova|exame|trabalho|atividade|prazo)\s+(?:de|da|do)\s+(.+?)(?=\s+(?:mudou\b|passou\b|foi\s+remarcad[ao]\b|foi\s+adiad[ao]\b|ao\s+workspace\b|do\s+workspace\b|sem\s+workspace\b|no\s+dia|dia|em\s+\d|amanh[ãa]|hoje|na\s+(?:segunda|terça|quarta|quinta|sexta|sábado|domingo))\b|[,.;]|\s+e\s+estou\b|$)/i.exec(content)?.[1]?.trim() ?? null }
 const CREATE_CAPABILITIES = new Set(['workspace.prepare', 'academic-life.save', 'academic.event.create'])
 function isInterrogativeOrQuery(content: string): boolean { const value = normalized(content); return content.includes('?') || /^(?:qual|quais|quando|onde|como|quem|quanto|quantos|quantas|liste|mostre|consulte|busque|procure)\b/.test(value) || /\b(?:quero saber|gostaria de saber|me diga|você sabe|voce sabe)\b/.test(value) }
 function isCancellation(content: string): boolean { return /\b(?:cancelar|cancele|cancela|cancelado|cancelada|cancelaram|foi cancelad[ao]|adiar|adie|remover|remova|excluir|exclua|apagar|apague)\b/i.test(content) }
@@ -97,6 +97,7 @@ export class OrganizerIntentExecutor {
   }
 
   private academicEventMutation(capability: string, entities: OrganizerEntities, context: OrganizerExecutionContext): { type: PlannerActionType; payload: unknown; label: string } | HomeOrganizerResult | null {
+    if (capability === 'academic.event.linkWorkspace' || capability === 'academic.event.unlinkWorkspace') return this.eventWorkspaceMutation(capability, entities, context)
     const operation = capability === 'academic.event.create' || capability === 'academic-life.save' ? 'create' : capability === 'academic.event.update' ? 'update' : capability === 'academic.event.cancel' ? 'cancel' : null
     if (!operation) return null
     const statedSubject = subjectFrom(context.content)
@@ -121,6 +122,21 @@ export class OrganizerIntentExecutor {
     const match = matches[0]!
     if (operation === 'cancel') return { type: 'academic-life.transition', payload: { id: match.id, status: 'archived' }, label: `Cancelar ${match.title}` }
     return { type: 'academic-life.save', payload: { kind: match.kind, title: match.title, details: eventDetails(eventKind, entities.subject, context.content), workspaceId: null, startsAt: match.startsAt, endsAt: nextDate, expiresAt: nextDate, timezone: context.timezone, weekday: null, minutes: null, shareWithAi: match.shareWithAi, provenance: { source: 'conversation', reference: null }, replacesId: match.id }, label: `Reagendar ${match.title} para ${formattedNextDate}` }
+  }
+
+  private eventWorkspaceMutation(capability: string, entities: OrganizerEntities, context: OrganizerExecutionContext): { type: PlannerActionType; payload: unknown; label: string } | HomeOrganizerResult {
+    const subject = entities.subject && normalized(context.content).includes(normalized(entities.subject)) ? entities.subject : subjectFrom(context.content)
+    if (!subject) return { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: 'Informe a matéria do evento para eu identificar o vínculo com segurança.' }
+    const matches = context.academicLife.filter((item) => { const stored = storedEvent(item); return item.status === 'active' && item.replacedById === null && stored && searchNormalized(stored.subject) === searchNormalized(subject) })
+    if (matches.length !== 1) return { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: matches.length ? 'Encontrei mais de um evento correspondente. Informe a data para identificar o evento exato.' : 'Não encontrei um evento acadêmico ativo correspondente.' }
+    const event = matches[0]!
+    if (capability === 'academic.event.unlinkWorkspace') {
+      if (event.workspaceId === null) return { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: 'Esse evento já está sem vínculo com Workspace.' }
+      return { type: 'academic.event.unlinkWorkspace', payload: { eventId: event.id }, label: `Manter ${event.title} sem Workspace` }
+    }
+    const workspace = context.workspaces.filter((item) => normalized(context.content).includes(normalized(item.name)))
+    if (workspace.length !== 1) return { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: workspace.length ? 'Há mais de um Workspace plausível. Escolha qual deve receber o evento.' : 'Informe um Workspace ativo para vincular o evento.' }
+    return { type: 'academic.event.linkWorkspace', payload: { eventId: event.id, workspaceId: workspace[0]!.id, subject }, label: `Vincular ${event.title} ao Workspace ${workspace[0]!.name}` }
   }
 
   private eventKindFrom(content: string): OrganizerEntities['eventKind'] { const word = /\b(provas?|exames?|trabalhos?|atividades?|prazos?|deadlines?)\b/i.exec(content)?.[1]?.toLocaleLowerCase('pt-BR'); return word?.startsWith('prova') || word?.startsWith('exame') ? 'exam' : word?.startsWith('trabalho') || word?.startsWith('atividade') ? 'assignment' : word ? 'deadline' : null }

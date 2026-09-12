@@ -2,6 +2,7 @@ import type { AcademicLifeItem, AcademicLifeMutationInput, AcademicLifeProjectio
 import { academicLifeMutationInputSchema } from '../../shared/contracts/academic-life-contract'
 
 export interface AcademicLifeRepository {
+  find(id: string): AcademicLifeItem | null
   save(input: AcademicLifeMutationInput & { id: string }, now: number): AcademicLifeItem
   transition(id: string, status: 'resolved' | 'archived', now: number): AcademicLifeItem
   projection(now: number, historyLimit: number): AcademicLifeProjection
@@ -11,6 +12,8 @@ export interface AcademicLifeRepository {
 export class AcademicLifeService {
   constructor(private readonly repository: AcademicLifeRepository, private readonly now = Date.now, private readonly createId = () => crypto.randomUUID()) {}
   getProjection(historyLimit = 100): AcademicLifeProjection { return this.repository.projection(this.now(), Math.min(200, Math.max(1, historyLimit))) }
+  find(id: string): AcademicLifeItem | null { return this.repository.find(id) }
+  requireActiveUnlinkedEvent(id: string): AcademicLifeItem { const item = this.find(id); if (!item || item.status !== 'active' || item.replacedById !== null || item.workspaceId !== null || !['event', 'commitment'].includes(item.kind)) throw new Error('Academic event is no longer active and unlinked'); return item }
   save(input: AcademicLifeMutationInput): AcademicLifeItem {
     const parsed = academicLifeMutationInputSchema.parse(input)
     return this.repository.save({ ...parsed, id: this.createId() }, this.now())

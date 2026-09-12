@@ -372,6 +372,13 @@
       "when": 1789171200000,
       "tag": "0052_authoritative_curriculum",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "6",
+      "when": 1789239600000,
+      "tag": "0053_event_workspace_actions",
+      "breakpoints": true
     }
   ]
 }

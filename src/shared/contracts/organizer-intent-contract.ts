@@ -1,13 +1,16 @@
 import { z } from 'zod'
 
 export const ORGANIZER_READ_CAPABILITIES = ['workspaces.list', 'workspaces.search', 'academicLife.list', 'academicLife.search', 'plan.week.get', 'deadlines.list', 'availability.get'] as const
-export const ORGANIZER_WRITE_CAPABILITIES = ['workspace.prepare', 'academic-life.save', 'academic-life.transition', 'plan.today-budget.set', 'plan.weekday-availability.set', 'plan.recalculate', 'plan.item-completion.set'] as const
+export const ORGANIZER_WRITE_CAPABILITIES = ['workspace.prepare', 'academic.event.create', 'academic.event.update', 'academic.event.cancel', 'academic-life.save', 'academic-life.transition', 'plan.today-budget.set', 'plan.weekday-availability.set', 'plan.recalculate', 'plan.item-completion.set'] as const
 export const organizerCapabilitySchema = z.enum([...ORGANIZER_READ_CAPABILITIES, ...ORGANIZER_WRITE_CAPABILITIES])
 
 export const organizerEntitiesSchema = z.object({
   subject: z.string().trim().min(1).max(80).nullable().default(null),
   query: z.string().trim().min(1).max(500).nullable().default(null),
   dateExpression: z.string().trim().min(1).max(80).nullable().default(null),
+  dateFromExpression: z.string().trim().min(1).max(80).nullable().default(null),
+  dateToExpression: z.string().trim().min(1).max(80).nullable().default(null),
+  eventKind: z.enum(['exam', 'assignment', 'deadline']).nullable().default(null),
   weekday: z.number().int().min(0).max(6).nullable().default(null),
   minutes: z.number().int().min(0).max(1440).nullable().default(null),
   completed: z.boolean().nullable().default(null),
@@ -45,6 +48,9 @@ export const ORGANIZER_CAPABILITY_REGISTRY = {
   'deadlines.list': { access: 'read', mode: 'query' },
   'availability.get': { access: 'read', mode: 'query' },
   'workspace.prepare': { access: 'write', mode: 'mutation' },
+  'academic.event.create': { access: 'write', mode: 'mutation' },
+  'academic.event.update': { access: 'write', mode: 'mutation' },
+  'academic.event.cancel': { access: 'write', mode: 'mutation' },
   'academic-life.save': { access: 'write', mode: 'mutation' },
   'academic-life.transition': { access: 'write', mode: 'mutation' },
   'plan.today-budget.set': { access: 'write', mode: 'mutation' },

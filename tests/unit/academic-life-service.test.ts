@@ -31,4 +31,15 @@ describe('AcademicLifeService', () => {
       database.close()
     } finally { rmSync(directory, { recursive: true, force: true }) }
   })
+
+  it('persists a workspace-independent event, replacement and cancellation across reopen', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'academic-events-')); const path = join(directory, 'coach.sqlite'); const migrationsFolder = resolve('drizzle/migrations')
+    try {
+      let now = 1000; let database = openCoachDatabase({ databasePath: path, migrationsFolder }); let service = new AcademicLifeService(new SqliteAcademicLifeRepository(database), () => now)
+      const details = JSON.stringify({ schema: 'academic-event/v1', eventKind: 'exam', subject: 'C', sourceText: 'prova de C' }); const created = service.save(input({ kind: 'event', title: 'Prova C', details, workspaceId: null, endsAt: 21_000, expiresAt: 21_000, shareWithAi: false, provenance: { source: 'conversation', reference: null } })); expect(created.workspaceId).toBeNull(); expect(JSON.parse(created.details).eventKind).toBe('exam')
+      now = 2000; const updated = service.save(input({ kind: 'event', title: 'Prova C', details, workspaceId: null, endsAt: 24_000, expiresAt: 24_000, shareWithAi: false, provenance: { source: 'conversation', reference: null }, replacesId: created.id })); expect(updated.replacesId).toBe(created.id)
+      service.transition(updated.id, 'archived'); database.close(); database = openCoachDatabase({ databasePath: path, migrationsFolder }); service = new AcademicLifeService(new SqliteAcademicLifeRepository(database), () => now)
+      expect(service.getProjection().current).toHaveLength(0); expect(service.getProjection().history).toEqual(expect.arrayContaining([expect.objectContaining({ id: created.id, replacedById: updated.id }), expect.objectContaining({ id: updated.id, status: 'archived' })])); database.close()
+    } finally { rmSync(directory, { recursive: true, force: true }) }
+  })
 })

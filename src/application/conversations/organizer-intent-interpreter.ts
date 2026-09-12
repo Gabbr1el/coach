@@ -1,7 +1,6 @@
 import type { AIProviderManager } from '../ai/ai-provider-manager'
 import { extractJsonDocument } from '../ai/structured-json'
 import { ORGANIZER_CAPABILITY_CATALOG, organizerIntentSchema, type OrganizerIntent } from '../../shared/contracts/organizer-intent-contract'
-import { parseExplicitDate } from '../planning/planning-service'
 
 export interface OrganizerInterpretationContext {
   readonly currentTime: number
@@ -13,7 +12,19 @@ export interface OrganizerIntentInterpreter {
   interpret(content: string, context: OrganizerInterpretationContext): Promise<OrganizerIntent>
 }
 
-const blankEntities = { subject: null, query: null, dateExpression: null, weekday: null, minutes: null, completed: null, target: null, status: null }
+const blankEntities = { subject: null, query: null, dateExpression: null, dateFromExpression: null, dateToExpression: null, eventKind: null, weekday: null, minutes: null, completed: null, target: null, status: null }
+
+function eventEntities(content: string) {
+  const kindWord = /\b(provas?|exames?|trabalhos?|atividades?|prazos?|deadlines?)\b/i.exec(content)?.[1]?.toLocaleLowerCase('pt-BR')
+  const eventKind = kindWord?.startsWith('prova') || kindWord?.startsWith('exame') ? 'exam' as const : kindWord?.startsWith('trabalho') || kindWord?.startsWith('atividade') ? 'assignment' as const : kindWord ? 'deadline' as const : null
+  const subject = /(?:prova|exame|trabalho|atividade|prazo|deadline)\s+(?:de|da|do)\s+(.+?)(?=\s+(?:foi\s+|mudou\s+|passou\s+|no\s+dia|dia|em\s+\d|para\s+(?:o\s+)?dia|amanh[ãa]|hoje|depois\s+de\s+amanh[ãa]|na\s+(?:pr[oó]xima\s+)?(?:segunda|terça|quarta|quinta|sexta|sábado|domingo)|daqui\s+a)\b|[,.;]|$)/i.exec(content)?.[1]?.trim() ?? null
+  const marker = /\b(?:mudou|remarcad[ao]|adiad[ao]|passou)\b/i.exec(content)
+  const changeTail = marker ? content.slice(marker.index + marker[0].length).trim() : ''
+  const dateToExpression = /\bpara\s+(.+)$/i.exec(changeTail)?.[1]?.trim() ?? null
+  const dateFromExpression = dateToExpression ? /^(?:(?:de|do|da)\s+)?(.+?)\s+para\b/i.exec(changeTail)?.[1]?.trim() ?? null : null
+  const hasDate = /\b(?:hoje|amanh[ãa]|depois\s+de\s+amanh[ãa]|dia\s+\d{1,2}|daqui\s+a\s+\d+\s+dias?|(?:pr[oó]xima\s+)?(?:segunda|terça|quarta|quinta|sexta|sábado|domingo)(?:-feira)?|\d{1,2}\s*[\/.]\s*\d{1,2}|\d{1,2}\s+de\s+[a-zç]+)\b/i.test(content)
+  return { subject, eventKind, dateExpression: marker || !hasDate ? null : content, dateFromExpression, dateToExpression }
+}
 
 function minutesFrom(content: string): number | null {
   const hours = /(\d+(?:[.,]\d+)?)\s*(?:h|hora|horas)\b/i.exec(content)?.[1]
@@ -26,19 +37,19 @@ export class LocalOrganizerIntentInterpreter implements OrganizerIntentInterpret
   async interpret(content: string, context: OrganizerInterpretationContext): Promise<OrganizerIntent> {
     const normalized = content.toLocaleLowerCase('pt-BR'); const minutes = minutesFrom(content)
     const queryWords = /\b(?:qual|quais|quando|liste|mostre|existe|como está|como esta)\b/
-    const eventWords = /\b(?:prova|exame|trabalho|atividade|prazo)\b/
-    if (queryWords.test(normalized) && eventWords.test(normalized)) return organizerIntentSchema.parse({ mode: 'query', capability: 'deadlines.list', entities: blankEntities, confidence: 0.56, missingFields: [], summary: 'Consultar prazos e eventos existentes.' })
-    if (/\b(?:cancelar|cancele|apagar|excluir|remover)\b/.test(normalized)) return organizerIntentSchema.parse({ mode: 'clarification', capability: null, entities: blankEntities, confidence: 0.35, missingFields: [], summary: 'Cancelamento não é uma capability disponível no Organizer.' })
+    const eventWords = /\b(?:provas?|exames?|trabalhos?|atividades?|prazos?|eventos?)\b/
+    if (queryWords.test(normalized) && eventWords.test(normalized)) return organizerIntentSchema.parse({ mode: 'query', capability: 'academicLife.search', entities: { ...blankEntities, ...eventEntities(content) }, confidence: 0.56, missingFields: [], summary: 'Consultar eventos acadêmicos existentes.' })
+    if (/\b(?:cancelar|cancele|apagar|excluir|remover)\b/.test(normalized) && eventWords.test(normalized)) return organizerIntentSchema.parse({ mode: 'mutation', capability: 'academic.event.cancel', entities: { ...blankEntities, ...eventEntities(content) }, confidence: 0.55, missingFields: [], summary: 'Cancelar evento acadêmico.' })
     if (minutes !== null && /\bhoje\b/.test(normalized) && /(?:dispon|tempo|estud|planej|orçamento|orcamento|tenho|terei|vou ter)/.test(normalized)) return organizerIntentSchema.parse({ mode: 'mutation', capability: 'plan.today-budget.set', entities: { ...blankEntities, dateExpression: 'hoje', minutes }, confidence: 0.62, missingFields: [], summary: `Definir ${minutes} minutos disponíveis hoje.` })
     const weekdays = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado']; const weekday = weekdays.findIndex((day) => normalized.includes(day))
     if (minutes !== null && weekday >= 0 && /(?:dispon|tempo|estud|planej|tenho|terei|vou ter)/.test(normalized)) return organizerIntentSchema.parse({ mode: 'mutation', capability: 'plan.weekday-availability.set', entities: { ...blankEntities, weekday, minutes }, confidence: 0.6, missingFields: [], summary: `Definir ${minutes} minutos para ${weekdays[weekday]}.` })
     if (/\b(?:recalcule|recalcular|refaça|refaca|redistribua|reorganize)\b/.test(normalized) && /\b(?:plano|semana|estudos?)\b/.test(normalized)) return organizerIntentSchema.parse({ mode: 'mutation', capability: 'plan.recalculate', entities: blankEntities, confidence: 0.58, missingFields: [], summary: 'Recalcular o plano semanal.' })
     if (/\b(?:criar|novo|preparar)\s+(?:um\s+)?workspace\b/.test(normalized)) return organizerIntentSchema.parse({ mode: 'clarification', capability: null, entities: blankEntities, confidence: 0.48, missingFields: ['subject', 'objective'], summary: 'Para criar um Workspace, me diga o tema, seu objetivo e seu nível atual.' })
     if (eventWords.test(normalized)) {
-      const dueAt = parseExplicitDate(content, context.currentTime)
-      const subject = /(?:prova|exame|trabalho|atividade|prazo)\s+(?:de|da|do)\s+(.+?)(?=\s+(?:no\s+dia|dia|em\s+\d|amanh[ãa]|hoje|na\s+(?:segunda|terça|quarta|quinta|sexta|sábado|domingo))\b|[,.;]|\s+e\s+estou\b|$)/i.exec(content)?.[1]?.trim() ?? null
-      if (dueAt && subject) return organizerIntentSchema.parse({ mode: 'mutation', capability: 'academic-life.save', entities: { ...blankEntities, subject, dateExpression: content }, confidence: 0.5, missingFields: [], summary: 'Registrar evento acadêmico.' })
-      return organizerIntentSchema.parse({ mode: 'clarification', capability: null, entities: blankEntities, confidence: 0.32, missingFields: dueAt ? ['subject'] : ['dateExpression'], summary: dueAt ? 'Preciso da matéria e do Workspace para registrar esse evento.' : 'Preciso da data para registrar esse evento.' })
+      const entities = eventEntities(content); const update = /\b(?:mudou|remarcad[ao]|adiad[ao]|passou)\b/.test(normalized)
+      const missingFields = [...(!entities.subject ? ['subject'] : []), ...(!entities.eventKind ? ['eventKind'] : []), ...(update ? (!entities.dateToExpression ? ['dateToExpression'] : []) : (!entities.dateExpression ? ['dateExpression'] : []))]
+      if (!missingFields.length) return organizerIntentSchema.parse({ mode: 'mutation', capability: update ? 'academic.event.update' : 'academic.event.create', entities: { ...blankEntities, ...entities }, confidence: 0.52, missingFields: [], summary: `${update ? 'Atualizar' : 'Registrar'} evento acadêmico.` })
+      return organizerIntentSchema.parse({ mode: 'clarification', capability: null, entities: { ...blankEntities, ...entities }, confidence: 0.32, missingFields, summary: 'Faltam dados do evento acadêmico.' })
     }
     return organizerIntentSchema.parse({ mode: 'conversation', capability: null, entities: blankEntities, confidence: 0.25, missingFields: [], summary: 'Conversa sem operação determinística.' })
   }
@@ -52,7 +63,7 @@ export class ProviderOrganizerIntentInterpreter implements OrganizerIntentInterp
     try {
       const response = await provider.sendMessage({
         messages: [
-          { role: 'system', content: 'Interpret intent; never execute/write. Return only strict JSON matching OrganizerIntent: mode query|mutation|clarification|conversation, capability from the supplied catalog or null, semantic entities limited to subject, query, dateExpression, weekday, minutes, completed, target and status, confidence 0..1, missingFields string[], summary string. Never output IDs, ownership, persisted records, PlannerAction payloads, provenance, privacy flags, titles or details. A query mentioning prova, prazo, trabalho or evento is never a create. A cancellation phrase is never a create. Unsupported transitions use clarification or conversation with null capability.' },
+          { role: 'system', content: 'Interpret intent; never execute/write. Return only strict JSON matching OrganizerIntent: mode query|mutation|clarification|conversation, capability from the supplied catalog or null, semantic entities limited to subject, query, eventKind (exam|assignment|deadline), dateExpression, dateFromExpression, dateToExpression, weekday, minutes, completed, target and status, confidence 0..1, missingFields string[], summary string. Dates must remain verbatim semantic expressions. Never output timestamps, IDs, ownership, persisted records, PlannerAction payloads, provenance, privacy flags, titles or details. A query mentioning prova, prazo, trabalho or evento is never a create. Use academic.event.cancel for cancellation and academic.event.update for rescheduling. Legacy academic-life aliases remain available only for compatibility.' },
           { role: 'user', content: JSON.stringify({ message: content, capabilities: ORGANIZER_CAPABILITY_CATALOG, currentDate: context.currentDate, timezone: context.timezone }) },
         ],
         maxOutputTokens: 700,

@@ -10,6 +10,7 @@ import { DrizzleWorkspaceRepository } from './repositories/drizzle-workspace-rep
 import { registerWorkspaceHandlers } from './ipc/workspace-handlers'
 import { HomePlannerService } from '../application/conversations/home-planner-service'
 import { HomeOrganizerService } from '../application/conversations/home-organizer-service'
+import { ProviderOrganizerIntentInterpreter } from '../application/conversations/organizer-intent-interpreter'
 import { DrizzleConversationRepository } from './repositories/drizzle-conversation-repository'
 import { registerConversationHandlers } from './ipc/conversation-handlers'
 import { AIProviderManager } from '../application/ai/ai-provider-manager'
@@ -202,7 +203,7 @@ void app.whenReady().then(async () => {
     const plannerActionService = new PlannerActionService({ repository: new DrizzlePlannerActionRepository(database), createWorkspace: (input) => workspaceService.create({ ...input, declaredKnowledge: [], declaredDifficulties: [], goals: [] }), createProject: (workspaceId, name, language) => new ProjectService(projectRepository, async (id) => Boolean(await workspaceRepository.findById(id))).create(workspaceId, name, language), createDeadline: (input) => planningService.createDeadline(input), addRoutine: (content) => planningService.addRoutineNote(content), saveAcademicLife: (input) => academicLife.save(input), transitionAcademicLife: (id, status) => academicLife.transition(id, status), setTodayBudget: (input) => planningService.setTodayBudget(input), setWeekdayAvailability: (input) => planningService.setWeekdayAvailability(input), recalculatePlan: (timezone) => planningService.replanWeek(timezone), setPlanItemCompletion: async (workspaceId, itemId, completed) => planningService.setPlanItemCompletion({ workspaceId, itemId, completed }) })
     registerPlannerActionHandlers(plannerActionService)
     registerAcademicLifeHandlers(academicLife)
-    registerConversationHandlers(homePlannerService, workspaceCoachService, new HomeOrganizerService(homePlannerService, planningService, plannerActionService, () => workspaceRepository.listActive(), (id) => studyWorkspaceService.recalculatePlan(id), Date.now, academicSubjectContext, () => academicLife.activeForContext(30)), workspaceActions, database, performanceTimelines)
+    registerConversationHandlers(homePlannerService, workspaceCoachService, new HomeOrganizerService(homePlannerService, planningService, plannerActionService, () => workspaceRepository.listActive(), Date.now, () => academicLife.getProjection(100).current, new ProviderOrganizerIntentInterpreter(providerManager)), workspaceActions, database, performanceTimelines)
     registerReportHandlers(new ReportService(new DrizzleReportRepository(database)))
     const workspaceOnboarding = new WorkspaceOnboardingService({ repository: new DrizzleConversationRepository(database), providerManager, academicContext: academicSubjectContext })
     validateWorkspaceAnalysis = (token, revision, subject, focus, context) => workspaceOnboarding.validate(token, revision, subject, focus, context)

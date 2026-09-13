@@ -3,7 +3,8 @@ import { dirname, join } from 'node:path'
 import Database from 'better-sqlite3'
 import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { app } from 'electron'
-import { migrateDatabase, repairDraftAdaptiveStudyMigration } from './migrate'
+import { migrateDatabase, preflightPublishedReviewMigration, repairDraftAdaptiveStudyMigration, repairExerciseSchema, repairInteractiveCodeStateSchema, repairPublishedEvidenceSchema } from './migrate'
+import { repairLegacyExerciseData } from './exercise-data-repair'
 import * as workspaceSchema from './schema/workspaces'
 import * as conversationSchema from './schema/conversations'
 import * as providerSchema from './schema/provider-configurations'
@@ -18,8 +19,14 @@ import * as roadmapSchema from './schema/roadmaps'
 import * as plannerActionSchema from './schema/planner-actions'
 import * as studyProgressSchema from './schema/study-progress'
 import * as studyLessonSchema from './schema/study-lessons'
+import * as academicSubjectContextSchema from './schema/academic-subject-contexts'
+import * as exerciseSchema from './schema/exercises'
+import * as workspaceProvisioningSchema from './schema/workspace-provisioning'
+import * as academicLifeSchema from './schema/academic-life'
+import * as performanceTimelineSchema from './schema/performance-timelines'
+import * as conceptsEvidenceSchema from './schema/concepts-evidence'
 
-const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema, ...studyWorkspaceSchema, ...learningEventSchema, ...planningSchema, ...materialSchema, ...memorySchema, ...navigationSchema, ...projectSchema, ...roadmapSchema, ...plannerActionSchema, ...studyProgressSchema, ...studyLessonSchema }
+export const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema, ...studyWorkspaceSchema, ...learningEventSchema, ...planningSchema, ...materialSchema, ...memorySchema, ...navigationSchema, ...projectSchema, ...roadmapSchema, ...plannerActionSchema, ...studyProgressSchema, ...studyLessonSchema, ...academicSubjectContextSchema, ...exerciseSchema, ...workspaceProvisioningSchema, ...academicLifeSchema, ...performanceTimelineSchema, ...conceptsEvidenceSchema }
 
 export interface CoachDatabase {
   readonly sqlite: Database.Database
@@ -46,8 +53,13 @@ export function openCoachDatabase(options: OpenCoachDatabaseOptions = {}): Coach
     sqlite.pragma('busy_timeout = 5000')
 
     const orm = drizzle(sqlite, { schema })
+    preflightPublishedReviewMigration(sqlite)
     migrateDatabase(orm, { migrationsFolder })
+    repairPublishedEvidenceSchema(sqlite)
     repairDraftAdaptiveStudyMigration(sqlite)
+    repairInteractiveCodeStateSchema(sqlite)
+    repairExerciseSchema(sqlite)
+    repairLegacyExerciseData(sqlite)
 
     return {
       sqlite,

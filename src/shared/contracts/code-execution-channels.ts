@@ -1,1 +1,1 @@
-export const CODE_EXECUTION_CHANNELS = { execute: 'code-execution:execute', executeProject: 'code-execution:execute-project', getToolchains: 'code-execution:get-toolchains' } as const
+export const CODE_EXECUTION_CHANNELS = { execute: 'code-execution:execute', executeProject: 'code-execution:execute-project', executeInteractive: 'code-execution:execute-interactive', saveInteractiveState: 'code-execution:save-interactive-state', listInteractiveStates: 'code-execution:list-interactive-states', getToolchains: 'code-execution:get-toolchains' } as const

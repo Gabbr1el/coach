@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { z } from 'zod'
 import { plannerActionProposalSchema, type PlannerAction, type PlannerActionType } from '../../shared/contracts/planner-action-contract'
 import type { ProjectLanguage } from '../../shared/contracts/project-contract'
+import type { AcademicLifeItem, AcademicLifeMutationInput } from '../../shared/contracts/academic-life-contract'
 
 export interface PlannerActionRepository {
   listPending(): PlannerAction[]
@@ -24,6 +25,16 @@ export interface PlannerActionDependencies {
   readonly createProject: (workspaceId: string, name: string, language: ProjectLanguage) => Promise<unknown>
   readonly createDeadline: (input: { workspaceId: string; title: string; dueAt: number; estimatedMinutes: number; masteryPercent: number | null }) => void
   readonly addRoutine: (content: string) => void
+  readonly saveAcademicLife?: (input: AcademicLifeMutationInput) => AcademicLifeItem
+  readonly transitionAcademicLife?: (id: string, status: 'resolved' | 'archived') => AcademicLifeItem
+  readonly linkAcademicEventWorkspace?: (eventId: string, workspaceId: string | null, subject?: string) => Promise<AcademicLifeItem> | AcademicLifeItem
+  readonly keepAcademicEventUnlinked?: (eventId: string) => AcademicLifeItem
+  readonly suggestAcademicEventWorkspaces?: (item: AcademicLifeItem) => Promise<unknown> | unknown
+  readonly setTodayBudget?: (input: { dateKey: string; timezone: string; minutes: number }) => unknown
+  readonly setWeekdayAvailability?: (input: { weekday: number; minutes: number; timezone: string }) => unknown
+  readonly recalculatePlan?: (timezone: string) => unknown
+  readonly setPlanItemCompletion?: (workspaceId: string, itemId: string, completed: boolean) => Promise<unknown>
+  readonly onResolved?: (action: PlannerAction) => Promise<void> | void
   readonly now?: () => number
   readonly createId?: () => string
 }
@@ -33,12 +44,10 @@ export class PlannerActionService {
   private readonly createId: () => string
   constructor(private readonly dependencies: PlannerActionDependencies) { this.now = dependencies.now ?? Date.now; this.createId = dependencies.createId ?? (() => crypto.randomUUID()) }
   listPending(): PlannerAction[] { return this.dependencies.repository.listPending() }
-  propose(input: { type: PlannerActionType; payload: unknown; label: string; originMessageId: string; contextVersion: number }): PlannerAction {
-    const workspaceIntent = input.type === 'workspace.create' ? input.payload as WorkspaceCreateIntent : null
-    const parsed = plannerActionProposalSchema.parse({ type: input.type, payload: workspaceIntent ? { name: workspaceIntent.name, objective: workspaceIntent.objective, language: workspaceIntent.language } : input.payload })
-    const academicEvent = workspaceIntent?.academicEvent ? workspaceAcademicEventIntentSchema.parse(workspaceIntent.academicEvent) : undefined
-    const payload = workspaceIntent ? { ...parsed.payload, academicEvent } : parsed.payload
-    const key = createHash('sha256').update(JSON.stringify({ type: parsed.type, payload, originMessageId: input.originMessageId, contextVersion: input.contextVersion })).digest('hex')
+  propose(input: { type: PlannerActionType; payload: unknown; label: string; originMessageId: string; contextVersion: number; idempotencyScope?: string }): PlannerAction {
+    const parsed = plannerActionProposalSchema.parse({ type: input.type, payload: input.payload })
+    const payload = parsed.payload
+    const key = createHash('sha256').update(input.idempotencyScope ?? JSON.stringify({ type: parsed.type, payload, originMessageId: input.originMessageId, contextVersion: input.contextVersion })).digest('hex')
     return this.dependencies.repository.create({ id: this.createId(), originMessageId: input.originMessageId, label: input.label, contextVersion: input.contextVersion, type: parsed.type, status: 'proposed', payload, result: null, createdAt: this.now(), resolvedAt: null }, key)
   }
   invalidateBefore(contextVersion: number): void { this.dependencies.repository.invalidatePending(contextVersion, this.now()) }
@@ -47,21 +56,53 @@ export class PlannerActionService {
     if (decision === 'reject') return this.dependencies.repository.complete(actionId, 'rejected', null, this.now())
     try {
       let result: unknown
-      if (action.type === 'workspace.create') {
-        const payload = action.payload as WorkspaceCreateIntent
-        const workspace = await this.dependencies.createWorkspace(payload)
-        if (payload.language) await this.dependencies.createProject(workspace.id, workspace.name, payload.language)
-        if (payload.academicEvent) this.dependencies.createDeadline({ workspaceId: workspace.id, title: payload.academicEvent.title, dueAt: payload.academicEvent.dueAt, estimatedMinutes: payload.academicEvent.estimatedMinutes, masteryPercent: payload.academicEvent.masteryPercent })
-        result = workspace
+      if (action.type === 'workspace.prepare') {
+        result = action.payload
+      } else if (action.type === 'workspace.create') {
+        throw new Error('Legacy workspace.create can no longer be executed; use workspace.prepare')
       } else if (action.type === 'deadline.create') {
         this.dependencies.createDeadline(action.payload as Parameters<PlannerActionDependencies['createDeadline']>[0])
         result = { ok: true }
-      } else {
+      } else if (action.type === 'routine.add') {
         this.dependencies.addRoutine((action.payload as { content: string }).content)
         result = { ok: true }
+      } else if (action.type === 'academic-life.save') {
+        if (!this.dependencies.saveAcademicLife) throw new Error('Academic life service unavailable')
+        const item = this.dependencies.saveAcademicLife(action.payload as AcademicLifeMutationInput)
+        let suggestions: unknown
+        if (item.workspaceId === null && this.dependencies.suggestAcademicEventWorkspaces) {
+          try { suggestions = await this.dependencies.suggestAcademicEventWorkspaces(item) } catch { suggestions = { status: 'unavailable', actions: [], options: [{ kind: 'keep_unlinked' }] } }
+        }
+        result = suggestions === undefined ? item : { item, suggestions }
+      } else if (action.type === 'academic-life.transition') {
+        if (!this.dependencies.transitionAcademicLife) throw new Error('Academic life service unavailable')
+        const payload = action.payload as { id: string; status: 'resolved' | 'archived' }
+        result = this.dependencies.transitionAcademicLife(payload.id, payload.status)
+      } else if (action.type === 'academic.event.linkWorkspace' || action.type === 'academic.event.unlinkWorkspace') {
+        if (!this.dependencies.linkAcademicEventWorkspace) throw new Error('Academic event workspace linking is unavailable')
+        const payload = action.payload as { eventId: string; workspaceId?: string; subject?: string }
+        result = await this.dependencies.linkAcademicEventWorkspace(payload.eventId, payload.workspaceId ?? null, payload.subject)
+      } else if (action.type === 'academic.event.keepUnlinked') {
+        if (!this.dependencies.keepAcademicEventUnlinked) throw new Error('Academic event validation is unavailable')
+        const event = this.dependencies.keepAcademicEventUnlinked((action.payload as { eventId: string }).eventId)
+        result = { eventId: event.id, keptUnlinked: true }
+      } else if (action.type === 'plan.today-budget.set') {
+        if (!this.dependencies.setTodayBudget) throw new Error('Planning service unavailable')
+        result = this.dependencies.setTodayBudget(action.payload as { dateKey: string; timezone: string; minutes: number })
+      } else if (action.type === 'plan.weekday-availability.set') {
+        if (!this.dependencies.setWeekdayAvailability) throw new Error('Planning service unavailable')
+        result = this.dependencies.setWeekdayAvailability(action.payload as { weekday: number; minutes: number; timezone: string })
+      } else if (action.type === 'plan.recalculate') {
+        if (!this.dependencies.recalculatePlan) throw new Error('Planning service unavailable')
+        result = this.dependencies.recalculatePlan((action.payload as { timezone: string }).timezone)
+      } else {
+        if (!this.dependencies.setPlanItemCompletion) throw new Error('Study plan service unavailable')
+        const payload = action.payload as { workspaceId: string; itemId: string; completed: boolean }
+        result = await this.dependencies.setPlanItemCompletion(payload.workspaceId, payload.itemId, payload.completed)
       }
       const completed = this.dependencies.repository.complete(actionId, 'applied', result, this.now())
       this.dependencies.repository.invalidateSiblings(action.originMessageId, action.id, this.now())
+      try { await this.dependencies.onResolved?.(completed) } catch {}
       return completed
     } catch (error) {
       if (this.dependencies.repository.find(actionId)?.status === 'applying') this.dependencies.repository.release(actionId)

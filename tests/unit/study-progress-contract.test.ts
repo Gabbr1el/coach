@@ -18,7 +18,7 @@ describe('study progress contract', () => {
   })
 
   it('records checkpoint result and help as pedagogical events', () => {
-    expect(recordStudyEventSchema.parse({ workspaceId, type: 'CHECKPOINT_ANSWERED', moduleId, topicId: `${moduleId}:print`, lessonId: `${moduleId}:print:lesson`, checkpointId: `${moduleId}:print:lesson:checkpoint`, correct: false, selectedAnswer: 1, attempt: 1 }).correct).toBe(false)
+    expect(recordStudyEventSchema.parse({ workspaceId, type: 'CHECKPOINT_ANSWERED', moduleId, topicId: `${moduleId}:print`, lessonId: `${moduleId}:print:lesson`, checkpointId: `${moduleId}:print:lesson:checkpoint`, correct: false, selectedOptionId: 'option-1', attempt: 1 }).correct).toBe(false)
     expect(recordStudyEventSchema.parse({ workspaceId, type: 'HELP_USED', moduleId, topicId: `${moduleId}:print`, lessonId: `${moduleId}:print:lesson`, checkpointId: null }).type).toBe('HELP_USED')
   })
 
@@ -48,5 +48,12 @@ describe('study progress contract', () => {
   it('uses no fabricated position for a lesson never started', () => {
     const restored = mapStudyProgressState({ workspaceId, roadmapId, currentModuleId: moduleId, currentTopicId: `${moduleId}:new`, currentLessonId: `${moduleId}:new:lesson`, currentCheckpointId: null, topicStatusesJson: '{}', lessonPositionsJson: '{}', updatedAt: 4 })
     expect(restored.currentPosition).toBeNull()
+  })
+
+  it('reloads qualitative assessment and accepts legacy checkpoint state', () => {
+    const checkpointStatesJson = JSON.stringify({ checkpoint: { selectedOptionId: 'a', studentJustification: 'Explica o conceito corretamente', attempt: 1, correct: true, currentFeedback: 'Alternativa correta.', currentReinforcement: null, rationale: 'Razão', reasoningAssessment: { status: 'coherent', summary: 'Relaciona causa e efeito.', misconception: null, feedback: 'Continue.', evaluatedAt: 10, retryCount: 0, nextRetryAt: null }, history: [] }, legacy: { selectedOptionId: 'b', studentJustification: 'Legado', attempt: 1, correct: false, currentFeedback: 'Não', currentReinforcement: null, rationale: 'Razão', history: [] } })
+    const restored = mapStudyProgressState({ workspaceId, roadmapId, currentModuleId: moduleId, currentTopicId: 'topic', currentLessonId: 'lesson', currentCheckpointId: 'checkpoint', topicStatusesJson: '{}', lessonPositionsJson: '{}', checkpointStatesJson, updatedAt: 10 })
+    expect(restored.checkpointStates?.checkpoint?.reasoningAssessment).toMatchObject({ status: 'coherent', evaluatedAt: 10 })
+    expect(restored.checkpointStates?.legacy?.reasoningAssessment).toBeNull()
   })
 })

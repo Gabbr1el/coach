@@ -55,10 +55,11 @@ export class OpenAICompatibleProvider implements AIProvider {
   }
 
   async sendMessage(request: AIRequest): Promise<AIResponse> {
+    const timeout = Math.min(300_000, Math.max(120_000, request.maxOutputTokens * 40))
     const { response, cleanup } = await this.fetchWithTimeout(`${this.baseUrl}/chat/completions`, {
       method: 'POST', headers: this.headers(), signal: request.signal,
       body: JSON.stringify({ model: request.model ?? this.defaultModel, messages: request.messages, max_tokens: request.maxOutputTokens, stream: false }),
-    }, 60_000)
+    }, timeout)
     try {
       const body = await this.jsonWithLimit(response) as ChatCompletionBody
       if (!response.ok) throw this.responseError(response.status, body.error?.message)
@@ -69,10 +70,11 @@ export class OpenAICompatibleProvider implements AIProvider {
   }
 
   async *streamMessage(request: AIRequest): AsyncIterable<AIStreamEvent> {
+    const timeout = Math.min(300_000, Math.max(120_000, request.maxOutputTokens * 40))
     const { response, cleanup } = await this.fetchWithTimeout(`${this.baseUrl}/chat/completions`, {
       method: 'POST', headers: this.headers(), signal: request.signal,
       body: JSON.stringify({ model: request.model ?? this.defaultModel, messages: request.messages, max_tokens: request.maxOutputTokens, stream: true }),
-    }, 60_000)
+    }, timeout)
     if (!response.ok) { cleanup(); throw this.responseError(response.status) }
     if (!response.body) { cleanup(); throw new OpenAICompatibleProviderError('UNKNOWN', 'Compatible provider returned no response body') }
     const reader = response.body.getReader()

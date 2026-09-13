@@ -32,3 +32,9 @@ export const conversationMessages = sqliteTable(
     index('conversation_messages_thread_created_idx').on(table.threadId, table.createdAt),
   ],
 )
+
+export const organizerConversationStates = sqliteTable('organizer_conversation_states', {
+  threadId: text('thread_id').primaryKey().references(() => conversationThreads.id, { onDelete: 'cascade' }),
+  stateJson: text('state_json').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+})

@@ -10,4 +10,6 @@ export const CONVERSATION_CHANNELS = {
   streamWorkspaceMessage: 'conversation:stream-workspace-message',
   cancelWorkspaceStream: 'conversation:cancel-workspace-stream',
   workspaceStreamEvent: 'conversation:workspace-stream-event',
+  rendererFirstToken: 'conversation:renderer-first-token',
+  executeWorkspaceAction: 'workspace-action:execute',
 } as const

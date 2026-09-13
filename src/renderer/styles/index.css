@@ -56,6 +56,16 @@ body {
   scrollbar-gutter: stable;
 }
 
+.coach-horizontal-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #343842 transparent;
+  scroll-snap-type: x proximity;
+}
+
+.coach-horizontal-scroll > * {
+  scroll-snap-align: start;
+}
+
 .coach-chat-message {
   min-width: 0;
   max-width: 100%;
@@ -148,6 +158,18 @@ input,
 textarea,
 select {
   font: inherit;
+}
+
+input,
+textarea,
+select {
+  min-height: 44px;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #626773;
+  opacity: 1;
 }
 
 ::-webkit-scrollbar {

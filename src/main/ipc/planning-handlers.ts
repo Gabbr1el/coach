@@ -10,6 +10,8 @@ export function registerPlanningHandlers(service: PlanningService): void {
   ipcMain.handle(PLANNING_CHANNELS.addRoutineNote, (event, payload) => { assertTrustedSender(event); service.addRoutineNote(addRoutineNoteInputSchema.parse(payload).content) })
   ipcMain.handle(PLANNING_CHANNELS.listRoutineNotes, (event) => { assertTrustedSender(event); return service.listRoutineNotes() })
   ipcMain.handle(PLANNING_CHANNELS.getSchedule, (event) => { assertTrustedSender(event); return service.getSchedule() })
+  ipcMain.handle(PLANNING_CHANNELS.getWeeklyPlan, (event) => { assertTrustedSender(event); return service.getWeeklyPlan() })
+  ipcMain.handle(PLANNING_CHANNELS.replanWeek, (event) => { assertTrustedSender(event); return service.replanWeek() })
   ipcMain.handle(PLANNING_CHANNELS.applyAcademicMessage, (event, payload) => { assertTrustedSender(event); return service.applyAcademicMessage(applyAcademicMessageInputSchema.parse(payload).content) })
   ipcMain.handle(PLANNING_CHANNELS.getAcademicOverview, (event) => { assertTrustedSender(event); return service.getAcademicOverview() })
 }

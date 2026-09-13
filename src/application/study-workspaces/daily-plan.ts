@@ -9,15 +9,14 @@ export function deriveDailyPlan(context: DailyPlanContext, existing: StudyPlanIt
   const completed = existing.filter((item) => item.status === 'completed')
   const completedByKey = new Map(completed.filter((item) => item.topicId && item.activityType).map((item) => [`${item.topicId}:${item.activityType}`, item]))
   const candidates = context.roadmap.modules.flatMap((module) => module.topics.map((topic) => ({ module, topic, topicId: `${module.id}:${topic}`, status: context.progress?.topicStatuses[`${module.id}:${topic}`] ?? 'NOT_STARTED' }))).filter((item) => item.status !== 'COMPLETED')
-  const learningFor = (topicId: string) => { const marker = ':Reforço adaptativo: '; if (!topicId.includes(marker)) return context.learningStates.get(topicId); const [moduleId, original] = topicId.split(marker); return context.learningStates.get(`${moduleId}:${original}`) }
-  const weight = (topicId: string) => { const state = learningFor(topicId); const reinforcement = topicId.includes(':Reforço adaptativo: ') ? 1 : 0; return (state?.difficultyLevel === 'high' ? 3 : state?.difficultyLevel === 'medium' ? 2 : state?.needsReview ? 1 : 0) + reinforcement }
+  const weight = (topicId: string) => { const state = context.learningStates.get(topicId); return state?.difficultyLevel === 'high' ? 3 : state?.difficultyLevel === 'medium' ? 2 : state?.needsReview ? 1 : 0 }
   const sorted = candidates.sort((a, b) => weight(b.topicId) - weight(a.topicId) || a.module.position - b.module.position)
   const plan: StudyPlanItem[] = completed.map((item, index) => ({ ...item, position: index + 1 }))
   let remaining = Math.max(0, context.availableMinutes - completed.reduce((sum, item) => sum + item.durationMinutes, 0))
   let futureCount = 0
   let start = context.startMinutes
   for (const item of sorted) {
-    const learning = learningFor(item.topicId); const weak = learning?.difficultyLevel === 'high' || learning?.needsReview === true; const strong = learning?.confidence !== 'low' && (learning?.masteryEstimate ?? 0) >= 80
+    const learning = context.learningStates.get(item.topicId); const weak = learning?.difficultyLevel === 'high' || learning?.needsReview === true; const strong = learning?.confidence !== 'low' && (learning?.masteryEstimate ?? 0) >= 80
     const types: Array<NonNullable<StudyPlanItem['activityType']>> = context.phase === 'today' ? weak ? ['review', 'exercise'] : ['review'] : context.phase === 'near' ? weak || item.status === 'IN_PROGRESS' ? ['review', 'exercise'] : ['exercise'] : item.status === 'IN_PROGRESS' || weak ? ['review', 'exercise'] : ['introduction', 'exercise']
     for (const type of types) {
       if (remaining < 15 || futureCount >= 5) break

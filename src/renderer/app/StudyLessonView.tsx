@@ -1,13 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Roadmap, RoadmapModule } from '../../shared/contracts/roadmap-contract'
-import type { PersistedStudyLesson, StudyCheckpointEvaluation, StudyLessonAdaptation, StudyLessonBlock } from '../../shared/contracts/study-lesson-contract'
+import type { PersistedStudyLesson, StudyCheckpointEvaluation, StudyLessonAdaptation, StudyLessonAdaptationMode, StudyLessonBlock } from '../../shared/contracts/study-lesson-contract'
 import type { StudyCheckpointState, StudyLessonPosition, StudyProgressState } from '../../shared/contracts/study-progress-contract'
+import type { InteractiveCodeBlock, InteractiveCodeState } from '../../shared/contracts/code-execution-contract'
+import type { ExerciseSet } from '../../shared/contracts/exercise-contract'
+import { EmbeddedCodeEditor } from './EmbeddedCodeEditor'
+import { interactiveSourceRevision } from '../../shared/interactive-source-revision'
 
-const labels: Record<StudyLessonBlock['type'], string> = { explanation: 'Explicação', codeExample: 'Exemplo de código', analogy: 'Analogia', warning: 'Atenção', commonError: 'Erro comum', comparison: 'Comparação', checkpoint: 'Verificação', miniExercise: 'Prática' }
-const reviewTypes = new Set<StudyLessonBlock['type']>(['commonError', 'warning', 'comparison', 'checkpoint', 'miniExercise'])
+const labels: Record<StudyLessonBlock['type'], string> = { explanation: 'Explicação', codeExample: 'Exemplo de código', interactiveCode: 'Laboratório inline', analogy: 'Analogia', warning: 'Atenção', commonError: 'Erro comum', comparison: 'Comparação', checkpoint: 'Verificação', miniExercise: 'Prática' }
+const reviewTypes = new Set<StudyLessonBlock['type']>(['commonError', 'warning', 'comparison', 'interactiveCode', 'checkpoint', 'miniExercise'])
+const reasoningLabels = { coherent: 'Raciocínio coerente', partial: 'Raciocínio parcial', misconception: 'Concepção equivocada', insufficient: 'Justificativa insuficiente', off_topic: 'Justificativa fora do tema', not_evaluated: 'Raciocínio não avaliado', reasoning_evaluation_pending: 'Avaliação do raciocínio pendente' } as const
 const blockStyles: Record<StudyLessonBlock['type'], string> = {
   explanation: 'border-coach-line bg-[#111217]',
   codeExample: 'border-[#315b4f] bg-[#0d1715]',
+  interactiveCode: 'border-[#3b7767] bg-[#0a1714]',
   analogy: 'border-[#49406a] bg-[#181622]',
   warning: 'border-coach-yellow/60 bg-coach-yellow/[.06]',
   commonError: 'border-red-400/40 bg-red-500/[.06]',
@@ -20,6 +26,7 @@ export function studyLessonBlockExcerpt(block: StudyLessonBlock | undefined): st
   if (!block) return null
   if ('content' in block) return block.content
   if (block.type === 'codeExample') return block.code
+  if (block.type === 'interactiveCode') return block.instruction
   if (block.type === 'checkpoint') return block.question
   return block.instruction
 }
@@ -36,20 +43,28 @@ type Props = {
   onLessonChanged(lesson: PersistedStudyLesson): void
   onComplete(): void
   onPractice(): void
+  onExercises(): void
+  onInteractiveContext(block: InteractiveCodeBlock, state: InteractiveCodeState): void
 }
 
 function stageFor(block: StudyLessonBlock): StudyLessonPosition['currentStage'] {
   if (block.type === 'checkpoint') return 'verification'
   if (block.type === 'miniExercise') return 'exercise'
-  if (block.type === 'codeExample') return 'example'
+  if (block.type === 'codeExample' || block.type === 'interactiveCode') return 'example'
   return 'explanation'
 }
 
-export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress, reviewMode, onPosition, onCheckpoint, onLessonChanged, onComplete, onPractice }: Props) {
+export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress, reviewMode, onPosition, onCheckpoint, onLessonChanged, onComplete, onPractice, onExercises, onInteractiveContext }: Props) {
   const [checkpointStates, setCheckpointStates] = useState<Record<string, StudyCheckpointState>>(progress.checkpointStates ?? {})
   const [adaptations, setAdaptations] = useState<Record<string, StudyLessonAdaptation[]>>({})
   const [displayedBlocks, setDisplayedBlocks] = useState(lesson.blocks)
   const [adaptationBusy, setAdaptationBusy] = useState<string | null>(null)
+  const [adaptationError, setAdaptationError] = useState<Record<string, string>>({})
+  const [answeringCheckpointId, setAnsweringCheckpointId] = useState<string | null>(null)
+  const [checkpointDrafts, setCheckpointDrafts] = useState<Record<string, { optionId: string | null; justification: string }>>({})
+  const [interactiveStates, setInteractiveStates] = useState<Record<string, InteractiveCodeState>>({})
+  const [interactiveBusy, setInteractiveBusy] = useState<string | null>(null)
+  const [exerciseSet, setExerciseSet] = useState<ExerciseSet | null>(null)
   const scrollPaneRef = useRef<HTMLElement | null>(null)
   const blockRefs = useRef(new Map<string, HTMLElement>())
   const visibility = useRef(new Map<string, number>())
@@ -57,18 +72,40 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
   const positionTimer = useRef<number | null>(null)
   const pendingBlock = useRef<StudyLessonBlock | null>(null)
   const checkpointStatesRef = useRef(checkpointStates)
+  const interactiveStatesRef = useRef(interactiveStates)
+  const interactiveSaveTimers = useRef<Record<string, number>>({})
   const positionRef = useRef(progress.currentPosition)
   const topic = module.topics.find((item) => `${module.id}:${item}` === progress.topicId) ?? module.title
   const checkpoints = displayedBlocks.reduce<Array<Extract<StudyLessonBlock, { type: 'checkpoint' }>>>((items, block) => block.type === 'checkpoint' ? [...items, block] : items, [])
   const canComplete = checkpoints.length > 0 && checkpoints.every((block) => checkpointStates[block.id]?.correct === true)
+  const requiredInteractive: InteractiveCodeBlock[] = []
+  for (const block of lesson.blocks) if (block.type === 'interactiveCode' && block.requiredForTopicCompletion) requiredInteractive.push(block)
+  const pendingRequiredInteractive: InteractiveCodeBlock[] = []
+  for (const block of requiredInteractive) { const state = interactiveStates[block.id]; if (state?.applicable !== false && (state?.validationResult?.status !== 'passed' || state.validationResult.sourceRevision !== state.currentSourceRevision)) pendingRequiredInteractive.push(block) }
+  const pendingRequiredExercises = exerciseSet?.status === 'ready' ? exerciseSet.exercises.filter((exercise) => exercise.requiredForTopicCompletion && exerciseSet.progress.find((item) => item.exerciseId === exercise.id)?.status !== 'passed') : []
+  const canCompleteTopic = canComplete && pendingRequiredInteractive.length === 0 && pendingRequiredExercises.length === 0
+
+  useEffect(() => { let current = true; void window.coach.exercise.getSet({ workspaceId, topicId: progress.topicId }).then((value) => { if (current) setExerciseSet(value) }); return () => { current = false } }, [workspaceId, progress.topicId])
 
   useEffect(() => { checkpointStatesRef.current = checkpointStates }, [checkpointStates])
+  useEffect(() => { interactiveStatesRef.current = interactiveStates }, [interactiveStates])
   useEffect(() => { positionRef.current = progress.currentPosition }, [progress.currentPosition])
   useEffect(() => { setCheckpointStates(progress.checkpointStates ?? {}) }, [lesson.id, progress.checkpointStates])
   useEffect(() => {
     setDisplayedBlocks(lesson.blocks)
     let cancelled = false
     void Promise.all(lesson.blocks.map(async (block) => [block.id, await window.coach.studyLesson.listAdaptations({ workspaceId, lessonId: lesson.id, blockId: block.id })] as const)).then((entries) => { if (!cancelled) setAdaptations(Object.fromEntries(entries)) })
+    return () => { cancelled = true }
+  }, [workspaceId, lesson.id, lesson.blocks])
+  useEffect(() => {
+    let cancelled = false
+    void window.coach.codeExecution.listInteractiveStates({ workspaceId, lessonId: lesson.id }).then((states) => {
+      if (cancelled) return
+      const persisted = Object.fromEntries(states.map((state) => [state.blockId, state]))
+      const initial: Record<string, InteractiveCodeState> = {}
+      for (const block of lesson.blocks) if (block.type === 'interactiveCode') initial[block.id] = persisted[block.id] ?? { lessonId: lesson.id, blockId: block.id, currentCode: block.initialCode, prediction: null, currentSourceRevision: interactiveSourceRevision(block.initialCode, null), attempts: 0, lastExecution: null, validationResult: null, applicable: true, unavailableReason: null, updatedAt: 0 }
+      setInteractiveStates(initial)
+    })
     return () => { cancelled = true }
   }, [workspaceId, lesson.id, lesson.blocks])
 
@@ -94,6 +131,22 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
     } finally { setAdaptationBusy(null) }
   }
 
+  async function adaptBlock(block: StudyLessonBlock, mode: StudyLessonAdaptationMode, instruction: string) {
+    setAdaptationBusy(block.id)
+    setAdaptationError((current) => ({ ...current, [block.id]: '' }))
+    try {
+      await window.coach.studyLesson.adaptSection({ workspaceId, roadmapId: roadmap.id, moduleId: module.id, topicId: lesson.topicId, lessonId: lesson.id, blockId: block.id, instruction, mode })
+      const result = await window.coach.studyLesson.getOrCreate({ workspaceId, roadmapId: roadmap.id, moduleId: module.id, topicId: lesson.topicId })
+      if (result.status !== 'ready') throw new Error('Lesson reload failed')
+      const history = await window.coach.studyLesson.listAdaptations({ workspaceId, lessonId: lesson.id, blockId: block.id })
+      setDisplayedBlocks(result.lesson.blocks)
+      setAdaptations((current) => ({ ...current, [block.id]: history }))
+      onLessonChanged(result.lesson)
+    } catch {
+      setAdaptationError((current) => ({ ...current, [block.id]: 'Não foi possível adaptar este bloco. A versão atual foi preservada.' }))
+    } finally { setAdaptationBusy(null) }
+  }
+
   const positionFor = useCallback((block: StudyLessonBlock, states = checkpointStatesRef.current): StudyLessonPosition => {
     const previous = positionRef.current
     const checkpoint = block.type === 'checkpoint' ? states[block.id] : undefined
@@ -104,10 +157,10 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
       currentCheckpointId: block.type === 'checkpoint' ? block.id : previous?.currentCheckpointId ?? null,
       currentExerciseId: block.type === 'miniExercise' ? block.id : previous?.currentExerciseId ?? null,
       completedBlockIds: previous?.completedBlockIds ?? [],
-      selectedAnswer: checkpoint?.selectedAnswer ?? null,
+      selectedAnswer: checkpoint && block.type === 'checkpoint' ? (() => { const index = block.options.findIndex((option) => option.id === checkpoint.selectedOptionId); return index >= 0 ? index : null })() : null,
       attempt: checkpoint?.attempt ?? 0,
-      feedback: checkpoint?.feedback ?? null,
-      reinforcementBlocks: checkpoint?.reinforcementBlocks ?? [],
+      feedback: checkpoint?.currentFeedback ?? null,
+      reinforcementBlocks: checkpoint?.currentReinforcement ? [checkpoint.currentReinforcement] : [],
     }
   }, [lesson.id])
 
@@ -146,20 +199,47 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
   }, [lesson.id, progress.currentPosition])
 
   useEffect(() => () => { if (positionTimer.current !== null) window.clearTimeout(positionTimer.current) }, [])
+  useEffect(() => () => {
+    for (const timer of Object.values(interactiveSaveTimers.current)) window.clearTimeout(timer)
+    for (const block of lesson.blocks) {
+      if (block.type !== 'interactiveCode') continue
+      const state = interactiveStatesRef.current[block.id]
+      if (state) void window.coach.codeExecution.saveInteractiveState({ workspaceId, lessonId: lesson.id, blockId: block.id, currentCode: state.currentCode, prediction: state.prediction, previousSourceRevision: state.currentSourceRevision })
+    }
+  }, [workspaceId, lesson.id, lesson.blocks])
 
-  async function answer(checkpoint: Extract<StudyLessonBlock, { type: 'checkpoint' }>, selectedAnswer: number) {
-    const previous = checkpointStatesRef.current[checkpoint.id]
-    const attempt = (previous?.attempt ?? 0) + 1
-    const evaluation = await window.coach.studyLesson.evaluate({ workspaceId, roadmapId: roadmap.id, moduleId: module.id, topicId: progress.topicId, lessonId: lesson.id, checkpointId: checkpoint.id, selectedIndex: selectedAnswer, attempt })
-    const reinforcementBlocks = evaluation.reinforcement ? [...(previous?.reinforcementBlocks ?? []), evaluation.reinforcement] : previous?.reinforcementBlocks ?? []
-    const state: StudyCheckpointState = { selectedAnswer, attempt, correct: evaluation.correct, feedback: evaluation.feedback, reinforcementBlocks }
-    const nextStates = { ...checkpointStatesRef.current, [checkpoint.id]: state }
+  function updateInteractiveDraft(block: InteractiveCodeBlock, state: InteractiveCodeState) {
+    interactiveStatesRef.current = { ...interactiveStatesRef.current, [block.id]: state }
+    setInteractiveStates(interactiveStatesRef.current)
+    onInteractiveContext(block, state)
+    if (interactiveSaveTimers.current[block.id]) window.clearTimeout(interactiveSaveTimers.current[block.id])
+    interactiveSaveTimers.current[block.id] = window.setTimeout(() => {
+      void window.coach.codeExecution.saveInteractiveState({ workspaceId, lessonId: lesson.id, blockId: block.id, currentCode: state.currentCode, prediction: state.prediction, previousSourceRevision: state.currentSourceRevision })
+    }, 350)
+  }
+
+  async function answer(checkpoint: Extract<StudyLessonBlock, { type: 'checkpoint' }>) {
+    const draft = checkpointDrafts[checkpoint.id]
+    if (answeringCheckpointId || !draft?.optionId || (checkpoint.reasoningRequirement === 'required' && draft.justification.trim().length < 3)) return
+    setAnsweringCheckpointId(checkpoint.id)
+    const result = await window.coach.studyProgress.answerCheckpoint({ workspaceId, lessonId: lesson.id, checkpointId: checkpoint.id, selectedOptionId: draft.optionId, studentJustification: draft.justification }).finally(() => setAnsweringCheckpointId(null))
+    const nextStates = result.state.checkpointStates ?? {}
     checkpointStatesRef.current = nextStates
     setCheckpointStates(nextStates)
     const position = positionFor(checkpoint, nextStates)
     positionRef.current = position
     onPosition(position, nextStates)
-    onCheckpoint(checkpoint.id, evaluation, selectedAnswer, attempt)
+    onCheckpoint(checkpoint.id, result.evaluation, checkpoint.options.findIndex((option) => option.id === draft.optionId), result.evaluation.attempt)
+  }
+
+  async function retryReasoning(checkpoint: Extract<StudyLessonBlock, { type: 'checkpoint' }>) {
+    if (answeringCheckpointId) return
+    setAnsweringCheckpointId(checkpoint.id)
+    const result = await window.coach.studyProgress.retryCheckpointReasoning({ workspaceId, lessonId: lesson.id, checkpointId: checkpoint.id }).finally(() => setAnsweringCheckpointId(null))
+    const nextStates = result.state.checkpointStates ?? {}
+    checkpointStatesRef.current = nextStates
+    setCheckpointStates(nextStates)
+    onCheckpoint(checkpoint.id, result.evaluation, checkpoint.options.findIndex((option) => option.id === result.evaluation.selectedOptionId), result.evaluation.attempt)
   }
 
   function openPractice(block: Extract<StudyLessonBlock, { type: 'miniExercise' }>) {
@@ -167,6 +247,17 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
     positionRef.current = position
     onPosition(position, checkpointStatesRef.current)
     onPractice()
+  }
+
+  async function executeInteractive(block: InteractiveCodeBlock) {
+    const current = interactiveStates[block.id] ?? { lessonId: lesson.id, blockId: block.id, currentCode: block.initialCode, prediction: null, currentSourceRevision: interactiveSourceRevision(block.initialCode, null), attempts: 0, lastExecution: null, validationResult: null, applicable: true, unavailableReason: null, updatedAt: 0 }
+    if (interactiveBusy || (block.interactionType === 'PREDICT_AND_RUN' && !current.prediction?.trim())) return
+    setInteractiveBusy(block.id)
+    try {
+      const state = await window.coach.codeExecution.executeInteractive({ workspaceId, lessonId: lesson.id, blockId: block.id, currentCode: current.currentCode, prediction: current.prediction })
+      setInteractiveStates((values) => ({ ...values, [block.id]: state }))
+      onInteractiveContext(block, state)
+    } finally { setInteractiveBusy(null) }
   }
 
   return <article ref={scrollPaneRef} className="coach-scroll-pane h-full px-5 py-7 lg:px-12">
@@ -196,6 +287,10 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
               <span className="text-[10px] font-bold text-coach-muted">{String(displayIndex + 1).padStart(2, '0')}</span>
             </div>
             {history.length > 0 && <button type="button" disabled={adaptationBusy === block.id} onClick={() => void (activeAdaptation ? showOriginal(block.id) : showAdapted(block.id))} className="mt-3 text-xs font-black text-coach-green disabled:opacity-50">{activeAdaptation ? 'Ver original' : 'Voltar à versão adaptada'}</button>}
+            {!['checkpoint', 'interactiveCode', 'miniExercise'].includes(block.type) && <div className="mt-3 flex flex-wrap gap-2" aria-label={`Adaptar ${block.title}`}>
+              {([['SIMPLIFY', 'Simplificar', 'Explique este bloco com linguagem mais simples.'], ['MORE_DEPTH', 'Aprofundar', 'Aprofunde este bloco sem mudar seu objetivo.'], ['CODE_FIRST', 'Código primeiro', 'Apresente este trecho com o exemplo de código primeiro.'], ['REORDER', 'Reordenar', 'Reordene este bloco dentro da seção para melhorar a progressão.'], ['PRESENTATION', 'Mais visual', 'Converta este bloco para uma apresentação visual, concisa e escaneável.']] as const).map(([mode, label, instruction]) => <button key={mode} type="button" disabled={adaptationBusy === block.id} onClick={() => void adaptBlock(block, mode, instruction)} className="rounded-full border border-white/10 px-3 py-1.5 text-[10px] font-black text-white/65 hover:border-coach-green/50 hover:text-coach-green disabled:opacity-40">{label}</button>)}
+            </div>}
+            {adaptationError[block.id] && <p role="alert" className="mt-3 text-xs font-bold text-coach-orange">{adaptationError[block.id]}</p>}
             <h3 className="mt-2 font-display text-xl font-black">{block.title}</h3>
             {'content' in block && <p className="mt-4 whitespace-pre-line text-sm leading-7 text-coach-muted">{block.content}</p>}
             {block.type === 'codeExample' && <>
@@ -203,11 +298,28 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
               {block.expectedOutput && <div className="mt-3 rounded-lg border border-coach-line bg-black/10 p-3 text-xs"><strong>Saída esperada</strong><pre className="mt-2 whitespace-pre-wrap text-coach-muted">{block.expectedOutput}</pre></div>}
               <ol className="mt-4 space-y-2">{block.walkthrough.map((step, index) => <li key={`${block.id}:${index}`} className="text-sm leading-6 text-coach-muted"><strong className="mr-2 text-coach-green">{index + 1}.</strong>{step}</li>)}</ol>
             </>}
+            {block.type === 'interactiveCode' && (() => {
+              const interactive = interactiveStates[block.id] ?? { lessonId: lesson.id, blockId: block.id, currentCode: block.initialCode, prediction: null, currentSourceRevision: interactiveSourceRevision(block.initialCode, null), attempts: 0, lastExecution: null, validationResult: null, applicable: true, unavailableReason: null, updatedAt: 0 }
+              const running = interactiveBusy === block.id
+              return <div onFocus={() => onInteractiveContext(block, interactive)}>
+                <p className="mt-4 text-sm leading-7 text-coach-muted">{block.instruction}</p>
+                <div className="mt-3 flex flex-wrap gap-2 text-[10px] font-black uppercase tracking-wider"><span className="rounded-full border border-coach-green/30 px-2 py-1 text-coach-green">{block.language}</span><span className="rounded-full border border-white/10 px-2 py-1 text-white/55">{block.interactionType.replaceAll('_', ' ')}</span><span className="rounded-full border border-white/10 px-2 py-1 text-white/55">Evidência: {block.evidenceMode}</span>{block.requiredForTopicCompletion && <span className="rounded-full border border-coach-orange/30 px-2 py-1 text-coach-orange">Necessário para concluir este tópico</span>}</div>
+                {block.predictionPrompt && <label className="mt-4 block text-xs font-black uppercase text-coach-muted">{block.predictionPrompt}<textarea value={interactive.prediction ?? ''} disabled={running} placeholder="Ex.: espero a saída 8 porque o laço executa quatro vezes" onChange={(event) => { const prediction = event.target.value; updateInteractiveDraft(block, { ...interactive, prediction, currentSourceRevision: interactiveSourceRevision(interactive.currentCode, prediction) }) }} className="mt-2 min-h-16 w-full rounded-lg border border-coach-line bg-[#0b0c10] p-3 text-sm font-normal normal-case text-coach-ink" /><span className="mt-1 block text-[10px] font-normal normal-case">Registre sua hipótese antes de executar; ela será comparada com a saída real.</span></label>}
+                <div className="mt-4 h-64 overflow-hidden rounded-lg border border-white/10 bg-[#060a09]"><EmbeddedCodeEditor value={interactive.currentCode} language={block.language} path={block.language === 'java' ? `${block.id}.Main.java` : `${block.id}.${block.language === 'python' ? 'py' : 'c'}`} disabled={running || !interactive.applicable} maxLength={20_000} onChange={(currentCode) => updateInteractiveDraft(block, { ...interactive, currentCode, currentSourceRevision: interactiveSourceRevision(currentCode, interactive.prediction) })} /></div>
+                {!interactive.applicable && <p className="mt-3 rounded-lg border border-coach-orange/40 bg-coach-orange/10 p-3 text-xs font-bold text-coach-orange">Ambiente {block.language} não disponível neste computador.</p>}
+                <div className="mt-3 flex items-center justify-between gap-3"><p className="text-xs text-coach-muted">{interactive.attempts ? `${interactive.attempts} execução(ões) persistida(s)` : 'Ainda não executado'}</p><button type="button" disabled={running || !interactive.applicable || (block.interactionType === 'PREDICT_AND_RUN' && !interactive.prediction?.trim())} onClick={() => void executeInteractive(block)} className="rounded-lg bg-coach-green px-4 py-2 text-xs font-black text-white disabled:opacity-50">{running ? 'Executando...' : 'Executar aqui'}</button></div>
+                {interactive.lastExecution && <div className="mt-4 grid gap-3 sm:grid-cols-2"><div className="rounded-lg border border-white/10 bg-black/20 p-3"><strong className="text-xs">Saída</strong><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-xs text-coach-muted">{interactive.lastExecution.stdout || '(sem saída)'}</pre></div><div className="rounded-lg border border-white/10 bg-black/20 p-3"><strong className="text-xs">Erros · {interactive.lastExecution.phase ?? 'run'} · exit {interactive.lastExecution.exitCode ?? 'null'}</strong><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-xs text-red-200/75">{interactive.lastExecution.stderr || '(sem erros)'}</pre></div></div>}
+                {interactive.validationResult?.predictionCorrect !== null && interactive.validationResult?.predictionCorrect !== undefined && <p className="mt-3 text-xs text-coach-muted">Previsão {interactive.validationResult.predictionCorrect ? 'correta' : 'diferente da saída real'}.</p>}
+                {interactive.validationResult && <p className={`mt-3 rounded-lg border p-3 text-xs font-bold ${interactive.validationResult.status === 'passed' ? 'border-coach-green/40 bg-coach-green/10 text-coach-green' : interactive.validationResult.status === 'failed' || interactive.validationResult.status === 'stale' ? 'border-coach-orange/40 bg-coach-orange/10 text-coach-orange' : 'border-white/10 text-coach-muted'}`}>{interactive.validationResult.status === 'passed' ? '✓ Experimento concluído.' : interactive.validationResult.message}</p>}
+              </div>
+            })()}
             {block.type === 'checkpoint' && <>
               <p className="mt-4 text-sm leading-6 text-coach-muted">{block.question}</p>
-              <div className="mt-4 grid gap-2">{block.options.map((option, index) => <button key={`${block.id}:${index}`} type="button" onClick={() => void answer(block, index)} className={`rounded-lg border p-3 text-left text-xs transition ${state?.selectedAnswer === index ? state.correct ? 'border-coach-green bg-coach-green/10' : 'border-coach-orange bg-coach-orange/10' : 'border-coach-line hover:border-coach-orange/60'}`}>{String.fromCharCode(65 + index)}. {option}</button>)}</div>
-              {state?.feedback && <div className={`mt-4 rounded-lg border p-4 text-sm leading-6 ${state.correct ? 'border-coach-green/40 bg-coach-green/10' : 'border-coach-orange/40 bg-coach-orange/10'}`}><strong>{state.correct ? 'Compreensão confirmada' : `Tentativa ${state.attempt}`}</strong><p className="mt-1 text-coach-muted">{state.feedback}</p>{!state.correct && <p className="mt-2 text-xs text-coach-muted">Dica: {block.hint}</p>}</div>}
-              {state?.reinforcementBlocks.map((reinforcement, index) => <div key={`${block.id}:reinforcement:${index}`} role="note" className="mt-3 rounded-lg border-l-4 border-coach-yellow bg-coach-yellow/[.08] p-4 text-sm leading-6"><strong className="text-coach-yellow">Reforço</strong><p className="mt-1 text-coach-muted">{reinforcement}</p></div>)}
+              <div className="mt-4 grid gap-2">{block.options.map((option, index) => { const selected = (checkpointDrafts[block.id]?.optionId ?? state?.selectedOptionId) === option.id; return <button key={option.id} type="button" disabled={answeringCheckpointId === block.id} onClick={() => setCheckpointDrafts((current) => ({ ...current, [block.id]: { optionId: option.id, justification: current[block.id]?.justification ?? '' } }))} className={`rounded-lg border p-3 text-left text-xs transition disabled:opacity-60 ${selected ? 'border-coach-orange bg-coach-orange/10' : 'border-coach-line hover:border-coach-orange/60'}`}>{String.fromCharCode(65 + index)}. {option.text}</button> })}</div>
+              {block.reasoningRequirement !== 'none' && <label className="mt-4 block text-xs font-black uppercase text-coach-muted">Explique seu raciocínio {block.reasoningRequirement === 'optional' && '(opcional)'}<textarea value={checkpointDrafts[block.id]?.justification ?? ''} disabled={answeringCheckpointId === block.id} placeholder="Ex.: escolhi B porque…" onChange={(event) => setCheckpointDrafts((current) => ({ ...current, [block.id]: { optionId: current[block.id]?.optionId ?? null, justification: event.target.value } }))} className="mt-2 min-h-20 w-full rounded-lg border border-coach-line bg-[#0b0c10] p-3 text-sm font-normal normal-case text-coach-ink" /><span className="mt-1 block text-[10px] font-normal normal-case">A justificativa permite avaliar o raciocínio, não apenas a alternativa.</span></label>}
+              <button type="button" disabled={answeringCheckpointId === block.id || !checkpointDrafts[block.id]?.optionId || (block.reasoningRequirement === 'required' && (checkpointDrafts[block.id]?.justification.trim().length ?? 0) < 3)} onClick={() => void answer(block)} className="mt-3 rounded-lg bg-coach-orange px-4 py-2 text-xs font-black text-white disabled:opacity-50">{answeringCheckpointId === block.id ? 'Avaliando...' : 'Responder'}</button>
+               {state?.currentFeedback && <div className={`mt-4 rounded-lg border p-4 text-sm leading-6 ${state.correct ? 'border-coach-green/40 bg-coach-green/10' : 'border-coach-orange/40 bg-coach-orange/10'}`}><strong>Sua resposta: {String.fromCharCode(65 + Math.max(0, block.options.findIndex((option) => option.id === state.selectedOptionId)))}</strong><p className="mt-1 font-bold">Alternativa: {state.correct ? 'correta' : `incorreta · tentativa ${state.attempt}`}</p><p className="mt-2 text-coach-muted">Gabarito: {state.rationale}</p><p className="mt-2 text-coach-muted">{state.currentFeedback}</p>{!state.correct && <p className="mt-2 text-xs text-coach-muted">Orientação: {block.hint}</p>}{state.reasoningAssessment && <div className="mt-3 border-t border-white/10 pt-3"><p className="font-bold">{reasoningLabels[state.reasoningAssessment.status]}</p>{state.reasoningAssessment.summary && <p className="mt-1 text-coach-muted">{state.reasoningAssessment.summary}</p>}{state.reasoningAssessment.misconception && <p className="mt-1 text-coach-orange">Ponto a revisar: {state.reasoningAssessment.misconception}</p>}{state.reasoningAssessment.feedback && <p className="mt-1 text-coach-muted">{state.reasoningAssessment.feedback}</p>}{state.reasoningAssessment.status === 'reasoning_evaluation_pending' && <button type="button" disabled={answeringCheckpointId === block.id} onClick={() => void retryReasoning(block)} className="mt-3 rounded-lg border border-coach-orange/50 px-3 py-2 text-xs font-black text-coach-orange disabled:opacity-40">{answeringCheckpointId === block.id ? 'Tentando novamente...' : 'Tentar avaliar raciocínio novamente'}</button>}</div>}</div>}
+              {state?.currentReinforcement && <div role="note" className="mt-3 rounded-lg border-l-4 border-coach-yellow bg-coach-yellow/[.08] p-4 text-sm leading-6"><strong className="text-coach-yellow">Reforço</strong><p className="mt-1 text-coach-muted">{state.currentReinforcement}</p></div>}
             </>}
             {block.type === 'miniExercise' && <><p className="mt-4 text-sm leading-7 text-coach-muted">{block.instruction}</p><button type="button" onClick={() => openPractice(block)} className="mt-4 rounded-xl bg-coach-green px-5 py-3 text-xs font-black text-white">Abrir Prática</button></>}
           </section>
@@ -215,9 +327,13 @@ export function StudyLessonView({ workspaceId, roadmap, module, lesson, progress
       </div>
 
       <footer className="mt-8 rounded-xl border border-coach-line bg-[#111217] p-5">
-        {canComplete ? <div className="flex flex-wrap items-center justify-between gap-4"><p className="text-sm text-coach-muted">Todos os checkpoints foram respondidos corretamente.</p><button type="button" onClick={onComplete} className="rounded-xl bg-coach-orange px-5 py-3 text-sm font-black text-white">Concluir tópico</button></div> : <p className="text-sm text-coach-muted">Responda corretamente {checkpoints.length === 0 ? 'ao menos um checkpoint para habilitar a conclusão' : `os ${checkpoints.length} checkpoints para concluir o tópico`}.</p>}
+        {canCompleteTopic ? <div className="flex flex-wrap items-center justify-between gap-4"><p className="text-sm text-coach-muted">Verificações e práticas obrigatórias concluídas.</p><button type="button" onClick={onComplete} className="rounded-xl bg-coach-orange px-5 py-3 text-sm font-black text-white">Concluir tópico</button></div> : canComplete && pendingRequiredInteractive.length > 0 ? <p className="text-sm text-coach-muted">Verificações concluídas. Falta validar {pendingRequiredInteractive.length} experimento{pendingRequiredInteractive.length === 1 ? '' : 's'} obrigatório{pendingRequiredInteractive.length === 1 ? '' : 's'}.</p> : canComplete && pendingRequiredExercises.length > 0 ? <div className="flex flex-wrap items-center justify-between gap-4"><p className="text-sm text-coach-muted">Parte teórica concluída. Faltam {pendingRequiredExercises.length} exercício{pendingRequiredExercises.length === 1 ? '' : 's'} obrigatório{pendingRequiredExercises.length === 1 ? '' : 's'}.</p><button type="button" onClick={onExercises} className="rounded-xl bg-coach-green px-5 py-3 text-xs font-black text-white">Praticar agora</button></div> : <p className="text-sm text-coach-muted">Responda corretamente {checkpoints.length === 0 ? 'ao menos um checkpoint para habilitar a conclusão' : `os ${checkpoints.length} checkpoints para concluir o tópico`}.</p>}
       </footer>
-      {lesson.sources.length > 0 && <footer className="mt-5 border-t border-coach-line pt-6"><p className="text-[10px] font-black uppercase tracking-[.16em] text-coach-muted">Fontes consultadas</p><div className="mt-3 flex flex-wrap gap-2">{lesson.sources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="rounded-lg border border-coach-line px-3 py-2 text-xs font-bold text-coach-green hover:bg-white/[.03]">{source.title}</a>)}</div></footer>}
+      <section className="mt-5 rounded-xl border border-coach-green/35 bg-coach-green/[.06] p-5">
+        <p className="text-[10px] font-black uppercase tracking-[.16em] text-coach-green">Prática do tópico</p>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-4"><div><h3 className="font-display text-xl font-black">Resolva exercícios avaliativos</h3><p className="mt-1 text-sm text-coach-muted">Abra o conjunto ligado a {topic}. Os testes estruturados são separados da Prática livre.</p></div><button type="button" onClick={onExercises} className="rounded-xl bg-coach-green px-5 py-3 text-xs font-black text-white">Praticar este tópico</button></div>
+      </section>
+      {lesson.sources.length > 0 && <footer className="mt-5 border-t border-coach-line pt-6"><p className="text-[10px] font-black uppercase tracking-[.16em] text-coach-muted">Fontes realmente consultadas</p><div className="mt-3 flex flex-wrap gap-2">{lesson.sources.map((source) => source.kind === 'material' ? <span key={`${source.materialId}:${source.pageNumber}:${source.excerptHash}`} className="rounded-lg border border-coach-line px-3 py-2 text-xs font-bold text-coach-green">{source.title} · página/slide {source.pageNumber} · {source.role}</span> : <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="rounded-lg border border-coach-line px-3 py-2 text-xs font-bold text-coach-green hover:bg-white/[.03]">{source.title}</a>)}</div></footer>}
     </div>
   </article>
 }

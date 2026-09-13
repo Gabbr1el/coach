@@ -29,6 +29,8 @@ export const workspaceStudyStates = sqliteTable('workspace_study_states', {
   timerRemainingSeconds: integer('timer_remaining_seconds').notNull().default(1500),
   timerStatus: text('timer_status', { enum: ['idle', 'running', 'paused'] }).notNull().default('idle'),
   timerStartedAt: integer('timer_started_at'),
+  timerStartedMonotonicMs: integer('timer_started_monotonic_ms'),
+  timerBootId: text('timer_boot_id'),
   updatedAt: integer('updated_at').notNull(),
   documentRevision: integer('document_revision').notNull().default(0),
   notesRevision: integer('notes_revision').notNull().default(0),

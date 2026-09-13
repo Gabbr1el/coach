@@ -6,6 +6,7 @@ import { dirname, resolve } from 'node:path'
 import type { CoachDatabase } from '../database/connection'
 import { openCoachDatabase } from '../database/connection'
 import { validateCoachDatabaseSchema } from '../database/restore-recovery'
+import { migrationCount } from '../database/migrate'
 import { BACKUP_CHANNELS } from '../../shared/contracts/backup-channels'
 import { assertTrustedSender } from './trusted-sender'
 
@@ -53,8 +54,9 @@ export function registerBackupHandlers(database: CoachDatabase): void {
       await source.backup(staging)
       source.close()
       source = null
-      const validation = openCoachDatabase({ databasePath: staging, migrationsFolder: resolve(app.getAppPath(), 'drizzle/migrations') })
-      try { validateCoachDatabaseSchema(validation.sqlite) } finally { validation.close() }
+      const migrationsFolder = resolve(app.getAppPath(), 'drizzle/migrations')
+      const validation = openCoachDatabase({ databasePath: staging, migrationsFolder })
+      try { validateCoachDatabaseSchema(validation.sqlite, migrationCount(migrationsFolder)) } finally { validation.close() }
       await rm(previous, { force: true })
       const markerHandle = await open(marker, 'wx', 0o600)
       try { await markerHandle.writeFile('pending\n'); await markerHandle.sync() } finally { await markerHandle.close() }

@@ -86,4 +86,18 @@ describe('DrizzleReportRepository', () => {
     expect(daily[0]).toMatchObject({ successRate: 100, focusRetentionPercent: null, recommendation: null })
     database.close()
   })
+
+  it('uses mapped ConceptMemory for mastery, review, confidence, and retention', () => {
+    const database = createDatabase(); const sqlite = database.sqlite
+    sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES ('memory-workspace','C','Ponteiros','active',1,1)").run()
+    sqlite.prepare("INSERT INTO topic_learning_states (workspace_id,topic_id,evidence_count,assessments,correct_first_try,correct_after_help,incorrect,hints_used,reinforcement_events,exercises_completed,lessons_completed,difficulty_level,mastery_estimate,confidence,needs_review,reasons_json,updated_at) VALUES ('memory-workspace','module:Ponteiros',2,2,2,0,0,0,0,0,0,'low',95,'high',0,'[]',2)").run()
+    sqlite.prepare("INSERT INTO concepts (id,workspace_id,canonical_name,domain,metadata_json,created_at,updated_at) VALUES ('concept','memory-workspace','Ponteiros','c','{}',1,1)").run()
+    sqlite.prepare("INSERT INTO topic_concepts (id,workspace_id,roadmap_id,module_id,topic_id,concept_id,provenance,confidence,mapping_status,created_at,updated_at) VALUES ('mapping','memory-workspace','roadmap','module','module:Ponteiros','concept','explicit',1,'mapped',1,1)").run()
+    sqlite.prepare("INSERT INTO concept_memories (workspace_id,concept_id,performance,evidence_quantity,independence,diversity,recency,retention,confidence,successful_retrievals,independent_successes,error_count,help_events,environment_count,interval_days,last_evidence_at,next_review_at,updated_at) VALUES ('memory-workspace','concept','struggling','sparse','independent','single_context','recent','fragile','low',2,1,0,0,1,1,2,3,2)").run()
+    const workspace = new DrizzleReportRepository(database, () => 10).getGlobalOverview().workspaces[0]!
+    expect(workspace.domain).toMatchObject({ assessedTopics: 1, masteredTopics: 0, needsReviewTopics: 1, averageMastery: null, confidence: 'low' })
+    expect(workspace.retention).toEqual({ status: 'available', score: null, evidenceCount: 2, lastEvidenceAt: 2 })
+    expect(workspace.recommendations[0]).toContain('tópico sinalizado')
+    database.close()
+  })
 })

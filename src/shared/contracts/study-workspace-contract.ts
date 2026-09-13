@@ -25,12 +25,14 @@ export const flushWorkspaceDraftsInputSchema = studyWorkspaceIdInputSchema.exten
 }).strict()
 
 export const toggleStudyPlanItemInputSchema = studyWorkspaceIdInputSchema.extend({ itemId: z.uuid() }).strict()
+export const completeStudyPlanItemInputSchema = studyWorkspaceIdInputSchema.extend({ itemId: z.uuid() }).strict()
+export const setStudyPlanItemCompletionInputSchema = studyWorkspaceIdInputSchema.extend({ itemId: z.uuid(), completed: z.boolean() }).strict()
 export const recalculateStudyPlanInputSchema = studyWorkspaceIdInputSchema
 export const refreshLiveStudyPlanInputSchema = studyWorkspaceIdInputSchema
 export const activateStudyPlanItemInputSchema = studyWorkspaceIdInputSchema.extend({ itemId: z.uuid() }).strict()
 
 export const updateStudyTimerInputSchema = studyWorkspaceIdInputSchema.extend({
-  action: z.enum(['start', 'pause', 'reset']),
+  action: z.enum(['start', 'pause', 'reset', 'extend']),
 }).strict()
 export const setStudyTimerDurationInputSchema = studyWorkspaceIdInputSchema.extend({ durationSeconds: z.number().int().min(300).max(10800) }).strict()
 export const completeStudySessionInputSchema = studyWorkspaceIdInputSchema
@@ -76,6 +78,8 @@ export interface StudyWorkspaceState {
   readonly timerRemainingSeconds: number
   readonly timerStatus: 'idle' | 'running' | 'paused'
   readonly timerStartedAt: number | null
+  readonly timerStartedMonotonicMs?: number | null
+  readonly timerBootId?: string | null
   readonly plan: StudyPlanItem[]
   readonly updatedAt: number
   readonly documentRevision: number
@@ -89,6 +93,8 @@ export interface StudyWorkspaceApi {
   saveNotes(input: z.infer<typeof saveWorkspaceNotesInputSchema>): Promise<StudyWorkspaceState>
   updateContextSharing(input: z.infer<typeof updateContextSharingInputSchema>): Promise<StudyWorkspaceState>
   togglePlanItem(input: z.infer<typeof toggleStudyPlanItemInputSchema>): Promise<StudyWorkspaceState>
+  completePlanItem(input: z.infer<typeof completeStudyPlanItemInputSchema>): Promise<StudyWorkspaceState>
+  setPlanItemCompletion(input: z.infer<typeof setStudyPlanItemCompletionInputSchema>): Promise<StudyWorkspaceState>
   recalculatePlan(input: z.infer<typeof recalculateStudyPlanInputSchema>): Promise<StudyWorkspaceState>
   refreshLivePlan(input: z.infer<typeof refreshLiveStudyPlanInputSchema>): Promise<StudyWorkspaceState>
   activatePlanItem(input: z.infer<typeof activateStudyPlanItemInputSchema>): Promise<StudyWorkspaceState>

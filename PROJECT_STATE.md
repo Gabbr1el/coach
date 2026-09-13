@@ -37,7 +37,7 @@ Execution roadmap: `ROADMAP.md`. The local MVP vertical slices 0-8 are implement
 - Packaged-bundle smoke test verified with sandboxed preload and typed IPC
 - SQLite database created under Electron `userData`
 - Drizzle migration history is the single executable migration source
-- Versioned SQLite domain schema evolved through 30 forward migrations
+- Versioned SQLite domain schema follows the complete forward-only Drizzle journal
 - WAL, foreign keys, busy timeout and deterministic close lifecycle
 - Linux unpacked package validated with rebuilt native SQLite addon
 - Typed Workspace contracts validated at runtime with Zod
@@ -99,7 +99,7 @@ Execution roadmap: `ROADMAP.md`. The local MVP vertical slices 0-8 are implement
 ## Database
 
 - Database file: `coach.sqlite` under Electron `userData`.
-- Current migration: `0029_adaptive_study_pages.sql` (30 total).
+- Current migration and total are derived from `drizzle/migrations/meta/_journal.json`; no runtime compatibility check duplicates that count.
 - Domain tables cover workspaces, conversations, providers, projects, study sessions and plans, academic events, roadmaps, progress, lessons, checkpoints, topic learning evidence, materials, memories, reports, outlines and saved distractions.
 - Infrastructure table: `__drizzle_migrations`.
 - Migrations are forward-only and executed transactionally by Drizzle.

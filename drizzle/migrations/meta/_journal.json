@@ -211,6 +211,181 @@
       "when": 1788822000000,
       "tag": "0029_adaptive_study_pages",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1788896092729,
+      "tag": "0030_academic_subject_context",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1788897600000,
+      "tag": "0031_material_semantics",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1788900000000,
+      "tag": "0032_workspace_academic_contexts",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1788966717879,
+      "tag": "0033_sharp_scarlet_spider",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1788972535198,
+      "tag": "0034_aberrant_korath",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1788982835766,
+      "tag": "0035_hot_annihilus",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1789014300000,
+      "tag": "0036_curricular_material_roadmap",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1789040000000,
+      "tag": "0037_workspace_provisioning",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1789043600000,
+      "tag": "0038_academic_life",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1789050000000,
+      "tag": "0039_authoritative_weekly_plan",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1789053600000,
+      "tag": "0040_monotonic_study_timer",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "6",
+      "when": 1789057200000,
+      "tag": "0041_moldable_plan",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "6",
+      "when": 1789060800000,
+      "tag": "0042_checkpoint_reasoning",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1789077600000,
+      "tag": "0043_workspace_analysis_semantics",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1789077600001,
+      "tag": "0044_roadmap_preview_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1789077600002,
+      "tag": "0045_progressive_content_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "6",
+      "when": 1789077600003,
+      "tag": "0046_material_first_provisioning",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1789137600000,
+      "tag": "0047_performance_timelines",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1789156800000,
+      "tag": "0048_authoritative_planning_timezone",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "6",
+      "when": 1789160400000,
+      "tag": "0049_evidence_concepts_retention",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "6",
+      "when": 1789164000000,
+      "tag": "0050_review_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "6",
+      "when": 1789167600000,
+      "tag": "0051_repair_published_evidence_schema",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "6",
+      "when": 1789171200000,
+      "tag": "0052_authoritative_curriculum",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "6",
+      "when": 1789239600000,
+      "tag": "0053_event_workspace_actions",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "6",
+      "when": 1789243200000,
+      "tag": "0054_organizer_conversation_state",
+      "breakpoints": true
     }
   ]
 }

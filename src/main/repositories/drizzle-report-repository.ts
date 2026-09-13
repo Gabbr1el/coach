@@ -26,6 +26,7 @@ type ActiveSessionRow = {
 
 type LearningStateRow = {
   workspaceId: string
+  topicId: string
   evidenceCount: number
   assessments: number
   correctFirstTry: number
@@ -40,6 +41,17 @@ type LearningStateRow = {
   needsReview: number
   lastPracticedAt: number | null
   lastAssessedAt: number | null
+}
+
+type ConceptMemoryRow = {
+  workspaceId: string
+  conceptId: string
+  topicId: string
+  performance: 'unknown' | 'struggling' | 'developing' | 'secure'
+  retention: 'unknown' | 'fragile' | 'developing' | 'durable'
+  confidence: 'low' | 'medium' | 'high'
+  evidenceCount: number
+  lastEvidenceAt: number | null
 }
 
 type PlanRow = {
@@ -83,6 +95,7 @@ function checkpointAttempts(progress: ProgressRow | undefined): number {
 
 function recommendationsFor(input: {
   states: LearningStateRow[]
+  memories: ConceptMemoryRow[]
   incorrect: number
   hintsUsed: number
   reinforcementEvents: number
@@ -92,7 +105,9 @@ function recommendationsFor(input: {
   planActive: number
 }): string[] {
   const recommendations: string[] = []
-  const reviewCount = input.states.filter((state) => Boolean(state.needsReview)).length
+  const reviewCount = input.memories.length > 0
+    ? input.memories.filter((memory) => memory.performance === 'struggling' || memory.retention === 'fragile').length
+    : input.states.filter((state) => Boolean(state.needsReview)).length
   if (reviewCount > 0) recommendations.push(`Revise ${reviewCount === 1 ? 'o tópico sinalizado' : `os ${reviewCount} tópicos sinalizados`} antes de avançar.`)
   if (input.incorrect > 0 && input.hintsUsed + input.reinforcementEvents > 0) recommendations.push('Refaça os checkpoints com ajuda sem consultar a pista e compare as novas tentativas.')
   else if (input.incorrect > 0) recommendations.push('Revise os conceitos dos checkpoints incorretos e faça uma nova tentativa.')
@@ -134,7 +149,7 @@ export class DrizzleReportRepository implements ReportRepository {
       WHERE s.status = 'active'
     `).all() as ActiveSessionRow[]
     const learningStates = this.database.sqlite.prepare(`
-      SELECT workspace_id AS workspaceId, evidence_count AS evidenceCount, assessments,
+      SELECT workspace_id AS workspaceId, topic_id AS topicId, evidence_count AS evidenceCount, assessments,
         correct_first_try AS correctFirstTry, correct_after_help AS correctAfterHelp,
         incorrect, hints_used AS hintsUsed, reinforcement_events AS reinforcementEvents,
         exercises_completed AS exercisesCompleted, lessons_completed AS lessonsCompleted,
@@ -142,6 +157,13 @@ export class DrizzleReportRepository implements ReportRepository {
         last_practiced_at AS lastPracticedAt, last_assessed_at AS lastAssessedAt
       FROM topic_learning_states
     `).all() as LearningStateRow[]
+    const conceptMemories = this.database.sqlite.prepare(`
+      SELECT cm.workspace_id AS workspaceId, cm.concept_id AS conceptId, tc.topic_id AS topicId, cm.performance, cm.retention, cm.confidence,
+        cm.successful_retrievals + cm.error_count AS evidenceCount, cm.last_evidence_at AS lastEvidenceAt
+      FROM concept_memories cm
+      JOIN topic_concepts tc ON tc.workspace_id = cm.workspace_id AND tc.concept_id = cm.concept_id AND tc.mapping_status = 'mapped'
+      JOIN workspaces w ON w.id = cm.workspace_id AND w.status = 'active'
+    `).all() as ConceptMemoryRow[]
     const plans = this.database.sqlite.prepare(`
       SELECT workspace_id AS workspaceId,
         SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending,
@@ -165,12 +187,20 @@ export class DrizzleReportRepository implements ReportRepository {
     const activeByWorkspace = new Map(activeSessions.map((row) => [row.workspaceId, row]))
     const statesByWorkspace = new Map<string, LearningStateRow[]>()
     for (const state of learningStates) statesByWorkspace.set(state.workspaceId, [...(statesByWorkspace.get(state.workspaceId) ?? []), state])
+    const memoriesByWorkspace = new Map<string, ConceptMemoryRow[]>()
+    for (const memory of conceptMemories) {
+      const current = memoriesByWorkspace.get(memory.workspaceId) ?? []
+      if (!current.some((item) => item.conceptId === memory.conceptId)) memoriesByWorkspace.set(memory.workspaceId, [...current, memory])
+    }
     const planByWorkspace = new Map(plans.map((row) => [row.workspaceId, row]))
     const progressByWorkspace = new Map(progress.map((row) => [row.workspaceId, row]))
     const helpByWorkspace = new Map(coachHelp.map((row) => [row.workspaceId, row.count]))
     const now = this.now()
     const workspaces: WorkspaceReportOverview[] = activityRows.map((row) => {
       const states = statesByWorkspace.get(row.workspaceId) ?? []
+      const memories = memoriesByWorkspace.get(row.workspaceId) ?? []
+      const mappedTopics = new Set(conceptMemories.filter((memory) => memory.workspaceId === row.workspaceId).map((memory) => memory.topicId))
+      const legacyStates = states.filter((state) => !mappedTopics.has(state.topicId))
       const activeSession = activeByWorkspace.get(row.workspaceId)
       const activeFocusSeconds = currentFocusSeconds(activeSession, now)
       const plan = planByWorkspace.get(row.workspaceId)
@@ -180,7 +210,7 @@ export class DrizzleReportRepository implements ReportRepository {
       const correctAfterHelp = states.reduce((sum, state) => sum + state.correctAfterHelp, 0)
       const incorrect = states.reduce((sum, state) => sum + state.incorrect, 0)
       const assessedSuccessRate = checkpointsAnswered > 0 ? Math.round((correctFirstTry + correctAfterHelp) / checkpointsAnswered * 100) : null
-      const masteryValues = states.flatMap((state) => state.masteryEstimate === null ? [] : [state.masteryEstimate])
+      const masteryValues = legacyStates.flatMap((state) => state.masteryEstimate === null ? [] : [state.masteryEstimate])
       const averageMastery = masteryValues.length > 0 ? Math.round(masteryValues.reduce((sum, value) => sum + value, 0) / masteryValues.length) : null
       const lastEvidenceAt = states.reduce<number | null>((latest, state) => {
         const timestamp = Math.max(state.lastPracticedAt ?? 0, state.lastAssessedAt ?? 0)
@@ -188,15 +218,17 @@ export class DrizzleReportRepository implements ReportRepository {
       }, null)
       const hintsUsed = states.reduce((sum, state) => sum + state.hintsUsed, 0)
       const reinforcementEvents = states.reduce((sum, state) => sum + state.reinforcementEvents, 0)
-      const recommendations = recommendationsFor({ states, incorrect, hintsUsed, reinforcementEvents, focusExits: row.focusExits, currentFocusSeconds: activeFocusSeconds, planPending: numeric(plan?.pending), planActive: numeric(plan?.active) })
+      const recommendations = recommendationsFor({ states: legacyStates, memories, incorrect, hintsUsed, reinforcementEvents, focusExits: row.focusExits, currentFocusSeconds: activeFocusSeconds, planPending: numeric(plan?.pending), planActive: numeric(plan?.active) })
+      const memoryAssessed = memories.filter((memory) => memory.performance !== 'unknown')
+      const memoryLastEvidenceAt = memories.reduce<number | null>((latest, memory) => (memory.lastEvidenceAt ?? 0) > (latest ?? 0) ? memory.lastEvidenceAt : latest, null)
       return {
         ...row,
         focusSeconds: row.focusSeconds + activeFocusSeconds,
         successRate: assessedSuccessRate,
         activity: { focusSeconds: row.focusSeconds + activeFocusSeconds, sessionCount: row.sessionCount, activeDays: row.activeDays, focusExits: row.focusExits, completedPlanItems: row.completedPlanItems, currentSessionFocusSeconds: activeFocusSeconds, currentSessionStartedAt: activeSession?.startedAt ?? null },
         performance: { checkpointsAnswered, correctFirstTry, correctAfterHelp, incorrect, attempts: Math.max(checkpointsAnswered, checkpointAttempts(workspaceProgress)), hintsUsed, reinforcementEvents, assessedSuccessRate },
-        domain: { assessedTopics: masteryValues.length, masteredTopics: states.filter((state) => state.masteryEstimate !== null && state.masteryEstimate >= 70 && !state.needsReview).length, needsReviewTopics: states.filter((state) => Boolean(state.needsReview)).length, averageMastery, confidence: confidenceFor(states), lessonsCompleted: states.reduce((sum, state) => sum + state.lessonsCompleted, 0), exercisesCompleted: states.reduce((sum, state) => sum + state.exercisesCompleted, 0) },
-        retention: { status: 'not_evaluated', score: null, evidenceCount: 0, lastEvidenceAt: null },
+        domain: { assessedTopics: memoryAssessed.length + masteryValues.length, masteredTopics: memories.filter((memory) => memory.performance === 'secure' && memory.retention !== 'fragile').length + legacyStates.filter((state) => state.masteryEstimate !== null && state.masteryEstimate >= 70 && !state.needsReview).length, needsReviewTopics: memories.filter((memory) => memory.performance === 'struggling' || memory.retention === 'fragile').length + legacyStates.filter((state) => Boolean(state.needsReview)).length, averageMastery, confidence: memories.length > 0 ? (memories.some((memory) => memory.confidence === 'low') ? 'low' : memories.some((memory) => memory.confidence === 'medium') ? 'medium' : 'high') : confidenceFor(legacyStates), lessonsCompleted: states.reduce((sum, state) => sum + state.lessonsCompleted, 0), exercisesCompleted: states.reduce((sum, state) => sum + state.exercisesCompleted, 0) },
+        retention: { status: memories.length > 0 ? 'available' : 'not_evaluated', score: null, evidenceCount: memories.reduce((sum, memory) => sum + memory.evidenceCount, 0), lastEvidenceAt: memoryLastEvidenceAt },
         evidence: { learningEvidenceCount: states.reduce((sum, state) => sum + state.evidenceCount, 0), lastLearningEvidenceAt: lastEvidenceAt, coachHelpEvents: helpByWorkspace.get(row.workspaceId) ?? 0, planItemsPending: numeric(plan?.pending), planItemsActive: numeric(plan?.active), activeTopicId: workspaceProgress?.activeTopicId ?? null },
         recommendations,
       }

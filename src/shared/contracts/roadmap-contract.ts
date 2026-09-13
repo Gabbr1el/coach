@@ -2,19 +2,76 @@ import { z } from 'zod'
 import { workspaceIdSchema } from './workspace-contract'
 
 const trustedRoadmapHosts = ['roadmap.sh', 'developer.mozilla.org', 'docs.oracle.com', 'docs.python.org', 'openjfx.io', 'en.cppreference.com', 'gcc.gnu.org', 'www.gnu.org', 'learn.microsoft.com', 'freecodecamp.org', 'khanacademy.org']
-export const roadmapResourceSchema = z.object({ title: z.string().trim().min(1).max(160), url: z.url().max(1000).refine((value) => { const url = new URL(value); return url.protocol === 'https:' && trustedRoadmapHosts.some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`)) }, 'Fonte não permitida'), type: z.enum(['roadmap', 'documentation', 'course', 'article', 'video']) }).strict()
-export const roadmapModuleProposalSchema = z.object({ title: z.string().trim().min(1).max(160), objective: z.string().trim().min(1).max(500), estimatedMinutes: z.number().int().min(10).max(2400), topics: z.array(z.string().trim().min(1).max(240)).min(2).max(12), outcomes: z.array(z.string().trim().min(1).max(240)).min(1).max(8), practice: z.string().trim().min(1).max(600), completionCriteria: z.array(z.string().trim().min(1).max(240)).min(1).max(6), resources: z.array(roadmapResourceSchema).max(6) }).strict()
-export const roadmapProposalSchema = z.object({ title: z.string().trim().min(1).max(160), modules: z.array(roadmapModuleProposalSchema).min(2).max(16) }).strict()
-export const generatedRoadmapModuleSchema = roadmapModuleProposalSchema.omit({ resources: true }).extend({ sourceIds: z.array(z.string().trim().min(1).max(100)).max(6) }).strict()
-export const generatedRoadmapProposalSchema = z.object({ title: z.string().trim().min(1).max(160), modules: z.array(generatedRoadmapModuleSchema).min(2).max(16) }).strict()
+const webRoadmapResourceSchema = z.object({ kind: z.literal('web').default('web'), title: z.string().trim().min(1).max(160), url: z.url().max(1000).refine((value) => { const url = new URL(value); return url.protocol === 'https:' && trustedRoadmapHosts.some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`)) }, 'Fonte não permitida'), type: z.enum(['roadmap', 'documentation', 'course', 'article', 'video']) }).strict()
+const materialRoadmapResourceSchema = z.object({ kind: z.literal('material'), title: z.string().trim().min(1).max(160), type: z.literal('material'), materialId: z.uuid(), pageNumber: z.number().int().min(1).max(500), role: z.enum(['base', 'priority', 'reference']), excerptHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict()
+export const roadmapResourceSchema = z.preprocess((value) => value && typeof value === 'object' && !('kind' in value) ? { kind: 'web', ...value } : value, z.discriminatedUnion('kind', [webRoadmapResourceSchema, materialRoadmapResourceSchema]))
+const stableCurriculumKeySchema = z.string().trim().min(1).max(120).regex(/^[a-z0-9][a-z0-9._-]*$/)
+export const curriculumConceptSchema = z.object({ key: stableCurriculumKeySchema, name: z.string().trim().min(1).max(240), aliases: z.array(z.string().trim().min(1).max(240)).max(12).default([]), domain: z.string().trim().min(1).max(120) }).strict()
+export const curriculumAssessmentIntentSchema = z.object({ key: stableCurriculumKeySchema, conceptKey: stableCurriculumKeySchema, objective: z.string().trim().min(1).max(600), evidenceType: z.enum(['multiple_choice', 'code_execution', 'prediction', 'constructed_response']), difficulty: z.enum(['introductory', 'standard', 'challenge']), prerequisiteConceptKeys: z.array(stableCurriculumKeySchema).max(30).default([]) }).strict()
+export const curricularTopicSchema = z.object({ topic: z.string().trim().min(1).max(240), concepts: z.array(curriculumConceptSchema).min(1).max(12), assessmentIntents: z.array(curriculumAssessmentIntentSchema).min(1).max(12) }).strict().superRefine((value, context) => {
+  const concepts = new Set(value.concepts.map((concept) => concept.key))
+  if (concepts.size !== value.concepts.length) context.addIssue({ code: 'custom', path: ['concepts'], message: 'Concept keys must be unique within a topic' })
+  for (const [index, intent] of value.assessmentIntents.entries()) {
+    if (!concepts.has(intent.conceptKey)) context.addIssue({ code: 'custom', path: ['assessmentIntents', index, 'conceptKey'], message: 'Assessment intent must reference a declared topic concept' })
+    if (intent.prerequisiteConceptKeys.includes(intent.conceptKey)) context.addIssue({ code: 'custom', path: ['assessmentIntents', index, 'prerequisiteConceptKeys'], message: 'Assessment intent cannot require its own concept' })
+  }
+})
+const roadmapModuleProposalBaseSchema = z.object({ title: z.string().trim().min(1).max(160), objective: z.string().trim().min(1).max(500), estimatedMinutes: z.number().int().min(10).max(2400), topics: z.array(z.string().trim().min(1).max(240)).min(1).max(12), curricularTopics: z.array(curricularTopicSchema).max(12).optional(), outcomes: z.array(z.string().trim().min(1).max(240)).min(1).max(8), practice: z.string().trim().min(1).max(600), completionCriteria: z.array(z.string().trim().min(1).max(240)).min(1).max(6), resources: z.array(roadmapResourceSchema).max(6) }).strict()
+export const roadmapModuleProposalSchema = roadmapModuleProposalBaseSchema.superRefine((value, context) => {
+  if (value.curricularTopics?.length && (value.curricularTopics.length !== value.topics.length || value.curricularTopics.some((item, index) => item.topic !== value.topics[index]))) context.addIssue({ code: 'custom', path: ['curricularTopics'], message: 'Curricular topics must correspond exactly to legacy topic strings in order' })
+})
+export const roadmapProposalSchema = z.object({ title: z.string().trim().min(1).max(160), modules: z.array(roadmapModuleProposalSchema).min(1).max(16) }).strict()
+export const generatedRoadmapModuleSchema = roadmapModuleProposalBaseSchema.omit({ resources: true, curricularTopics: true }).extend({ curricularTopics: z.array(curricularTopicSchema).min(1).max(12), sourceIds: z.array(z.string().trim().min(1).max(100)).max(6) }).strict()
+export const generatedRoadmapProposalSchema = z.object({ title: z.string().trim().min(1).max(160), modules: z.array(generatedRoadmapModuleSchema).min(1).max(16) }).strict()
 export const workspaceRoadmapInputSchema = z.object({ workspaceId: workspaceIdSchema, instruction: z.string().trim().min(1).max(2000).optional() }).strict()
 export const acceptRoadmapInputSchema = z.object({ workspaceId: workspaceIdSchema, roadmapId: z.uuid() }).strict()
+export const previewRoadmapRebuildInputSchema = z.object({ workspaceId: workspaceIdSchema, materialIds: z.array(z.uuid()).min(1).max(20), instruction: z.string().trim().min(1).max(2000).optional() }).strict()
+export const applyRoadmapRebuildInputSchema = z.object({ workspaceId: workspaceIdSchema, previewId: z.uuid(), acknowledgeUnsafeChanges: z.boolean().default(false) }).strict()
+export const getRoadmapRebuildPreviewInputSchema = z.object({ workspaceId: workspaceIdSchema }).strict()
 
-export interface RoadmapResource { readonly title: string; readonly url: string; readonly type: 'roadmap' | 'documentation' | 'course' | 'article' | 'video' }
+export const roadmapModuleSchema = roadmapModuleProposalSchema.extend({ id: z.string().min(1).max(200), position: z.number().int().positive(), status: z.enum(['locked', 'available', 'active', 'completed']) }).strict()
+export const roadmapSchema = z.object({ id: z.string().min(1).max(200), workspaceId: workspaceIdSchema, title: z.string().trim().min(1).max(160), status: z.enum(['proposed', 'accepted', 'archived']), generationKind: z.enum(['ai_generated', 'provisional_fallback']), version: z.number().int().positive(), providerId: z.string().nullable(), modelId: z.string().nullable(), modules: z.array(roadmapModuleSchema).min(1).max(16), createdAt: z.number().int().nonnegative(), updatedAt: z.number().int().nonnegative() }).strict()
+
+type CurriculumModule = { readonly position?: number; readonly curricularTopics?: ReadonlyArray<z.infer<typeof curricularTopicSchema>> }
+const normalizeDefinitionText = (value: string) => value.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9+#]+/g, ' ').trim()
+
+export function validateCurriculum(modules: readonly CurriculumModule[]): void {
+  const definitions = new Map<string, string>()
+  const introductions = new Map<string, number>()
+  const intents = new Set<string>()
+  const topics = modules
+    .map((module, index) => ({ module, index }))
+    .sort((left, right) => (left.module.position ?? left.index) - (right.module.position ?? right.index) || left.index - right.index)
+    .flatMap(({ module }) => module.curricularTopics ?? [])
+  for (const [topicIndex, topic] of topics.entries()) for (const concept of topic.concepts) {
+    const definition = JSON.stringify({ key: concept.key, name: normalizeDefinitionText(concept.name), domain: normalizeDefinitionText(concept.domain), aliases: [...new Set(concept.aliases.map(normalizeDefinitionText))].sort() })
+    const existing = definitions.get(concept.key)
+    if (existing !== undefined && existing !== definition) throw new Error(`Curriculum concept ${concept.key} has conflicting definitions`)
+    definitions.set(concept.key, definition)
+    if (!introductions.has(concept.key)) introductions.set(concept.key, topicIndex)
+  }
+  for (const [topicIndex, topic] of topics.entries()) for (const intent of topic.assessmentIntents) {
+    if (intents.has(intent.key)) throw new Error(`Curriculum assessment intent ${intent.key} is declared more than once`)
+    intents.add(intent.key)
+    if (!topic.concepts.some((concept) => concept.key === intent.conceptKey)) throw new Error(`Assessment intent ${intent.key} must reference a concept declared in its topic`)
+    for (const prerequisite of intent.prerequisiteConceptKeys) {
+      const introducedAt = introductions.get(prerequisite)
+      if (introducedAt === undefined) throw new Error(`Assessment prerequisite ${prerequisite} is not declared by the roadmap`)
+      if (introducedAt > topicIndex) throw new Error(`Assessment prerequisite ${prerequisite} is first introduced after intent ${intent.key}`)
+    }
+  }
+}
+export const roadmapRebuildImpactSchema = z.object({ preservedModuleIds: z.array(z.string()), preservedTopicIds: z.array(z.string()), addedTopics: z.array(z.string()), removedTopics: z.array(z.string()), unsafeProgressTopicIds: z.array(z.string()), requiresAcknowledgement: z.boolean() }).strict()
+export const roadmapRebuildPreviewSchema = z.object({ id: z.string().min(1).max(200), workspaceId: workspaceIdSchema, currentRoadmapId: z.string().min(1).max(200), title: z.string().trim().min(1).max(160), modules: z.array(roadmapModuleSchema).min(1).max(16), materialIds: z.array(z.uuid()).min(1).max(20), impact: roadmapRebuildImpactSchema, status: z.enum(['pending', 'applied', 'stale']), appliedRoadmapId: z.string().nullable(), createdAt: z.number().int().nonnegative(), resolvedAt: z.number().int().nonnegative().nullable() }).strict()
+
+export type RoadmapResource = z.infer<typeof roadmapResourceSchema>
 export type CurriculumSourceType = 'documentation' | 'reference' | 'outline' | 'student_material' | 'educational'
 export interface CurriculumSource { readonly id: string; readonly title: string; readonly url: string; readonly type: CurriculumSourceType; readonly authority: string; readonly retrieved: boolean; readonly retrievedAt: number | null; readonly excerpt: string | null }
 export type LearningPathStatus = 'idle' | 'generating' | 'ready' | 'waiting_for_provider' | 'failed_retryable'
 export interface LearningPathState { readonly workspaceId: string; readonly status: LearningPathStatus; readonly activeRoadmapId: string | null; readonly lastAttemptAt: number | null; readonly retryAfter: number | null; readonly lastErrorCode: string | null; readonly updatedAt: number }
-export interface RoadmapModule { readonly id: string; readonly title: string; readonly objective: string; readonly estimatedMinutes: number; readonly position: number; readonly status: 'locked' | 'available' | 'active' | 'completed'; readonly topics: string[]; readonly outcomes: string[]; readonly practice: string; readonly completionCriteria: string[]; readonly resources: RoadmapResource[] }
+export interface RoadmapModule { readonly id: string; readonly title: string; readonly objective: string; readonly estimatedMinutes: number; readonly position: number; readonly status: 'locked' | 'available' | 'active' | 'completed'; readonly topics: string[]; readonly curricularTopics?: z.infer<typeof curricularTopicSchema>[]; readonly outcomes: string[]; readonly practice: string; readonly completionCriteria: string[]; readonly resources: RoadmapResource[] }
 export interface Roadmap { readonly id: string; readonly workspaceId: string; readonly title: string; readonly status: 'proposed' | 'accepted' | 'archived'; readonly generationKind: 'ai_generated' | 'provisional_fallback'; readonly version: number; readonly providerId: string | null; readonly modelId: string | null; readonly modules: RoadmapModule[]; readonly createdAt: number; readonly updatedAt: number }
-export interface RoadmapApi { get(workspaceId: string): Promise<Roadmap | null>; getLearningPathState(workspaceId: string): Promise<LearningPathState>; generate(workspaceId: string, instruction?: string): Promise<Roadmap>; accept(input: z.infer<typeof acceptRoadmapInputSchema>): Promise<Roadmap> }
+export interface RoadmapRebuildImpact { readonly preservedModuleIds: string[]; readonly preservedTopicIds: string[]; readonly addedTopics: string[]; readonly removedTopics: string[]; readonly unsafeProgressTopicIds: string[]; readonly requiresAcknowledgement: boolean }
+export type RoadmapRebuildPreviewStatus = 'pending' | 'applied' | 'stale'
+export interface RoadmapRebuildPreview { readonly id: string; readonly workspaceId: string; readonly currentRoadmapId: string; readonly title: string; readonly modules: RoadmapModule[]; readonly materialIds: string[]; readonly impact: RoadmapRebuildImpact; readonly status: RoadmapRebuildPreviewStatus; readonly appliedRoadmapId: string | null; readonly createdAt: number; readonly resolvedAt: number | null }
+export interface RoadmapApi { get(workspaceId: string): Promise<Roadmap | null>; getLearningPathState(workspaceId: string): Promise<LearningPathState>; generate(workspaceId: string, instruction?: string): Promise<Roadmap>; getRebuildPreview(input: z.infer<typeof getRoadmapRebuildPreviewInputSchema>): Promise<RoadmapRebuildPreview | null>; previewRebuild(input: z.infer<typeof previewRoadmapRebuildInputSchema>): Promise<RoadmapRebuildPreview>; applyRebuild(input: z.infer<typeof applyRoadmapRebuildInputSchema>): Promise<Roadmap>; accept(input: z.infer<typeof acceptRoadmapInputSchema>): Promise<Roadmap> }

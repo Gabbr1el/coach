@@ -6,7 +6,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
 import type { CoachDatabase } from '../database/connection'
-import type { MaterialSearchResult, MaterialSummary } from '../../shared/contracts/material-contract'
+import { materialSemanticAnalysisSchema, type MaterialReadResult, type MaterialSearchResult, type MaterialSemanticAnalysis, type MaterialSummary } from '../../shared/contracts/material-contract'
+import type { PerformanceTimelineStore } from '../telemetry/performance-timeline'
 
 const MAX_PDF_BYTES = 20_000_000
 const MAX_PAGES = 500
@@ -15,6 +16,8 @@ const MAX_PAGE_CHARACTERS = 100_000
 const MAX_REVIEW_CHARACTERS = 4_000
 const CHUNK_CHARACTERS = 2_400
 const CHUNK_OVERLAP = 300
+const EXTRACTION_CONTRACT_VERSION = 'extract-v1:chunk-v1'
+const ANALYSIS_CONTRACT_VERSION = 'semantic-v1:schema-v1'
 const STOP_WORDS = new Set(['a', 'as', 'o', 'os', 'de', 'da', 'das', 'do', 'dos', 'e', 'em', 'no', 'nos', 'na', 'nas', 'para', 'por', 'com', 'uma', 'um', 'aprender', 'estudar', 'basico', 'avancado'])
 
 type RelevanceDecision = 'relevant' | 'irrelevant' | 'ambiguous'
@@ -37,6 +40,9 @@ export interface PdfMaterialServiceOptions {
   readonly reviewAmbiguous?: (request: MinimalMaterialReviewRequest) => Promise<MinimalMaterialReviewResult>
   readonly now?: () => number
   readonly createId?: () => string
+  readonly analyzeSemantic?: (request: MinimalMaterialReviewRequest) => Promise<MaterialSemanticAnalysis>
+  readonly extractPptxSlides?: (path: string) => Promise<string[]>
+  readonly timelines?: PerformanceTimelineStore
 }
 
 export interface LexicalRelevanceAssessment {
@@ -46,8 +52,8 @@ export interface LexicalRelevanceAssessment {
 }
 
 type WorkspaceContext = { name: string; objective: string }
-type MaterialRow = MaterialSummary & { readonly errorMessage: string | null }
-type SearchRow = Omit<MaterialSearchResult, 'topicId' | 'retrieval'> & { readonly chunkId: string; readonly relevance: number }
+type MaterialRow = MaterialSummary & { readonly semanticAnalysisJson?: string | null; readonly errorMessage: string | null }
+type SearchRow = Omit<MaterialSearchResult, 'topicId' | 'retrieval' | 'role'> & { readonly chunkId: string; readonly relevance: number; readonly role: 'base' | 'priority' | 'reference'; readonly semanticAnalysisJson: string | null }
 type TopicCandidate = { readonly moduleId: string; readonly topic: string }
 
 function normalize(value: string): string {
@@ -56,6 +62,10 @@ function normalize(value: string): string {
 
 function tokens(value: string): string[] {
   return normalize(value).split(/[^\p{L}\p{N}+#]+/u).filter((term) => term.length > 0)
+}
+
+export function normalizedSearchTerms(query: string): string[] {
+  return [...new Set(tokens(query).filter((term) => term.length >= 2 || /^[a-z0-9+#]$/i.test(term)))].slice(0, 8)
 }
 
 function contextTerms(workspace: WorkspaceContext): string[] {
@@ -83,7 +93,7 @@ function samplePages(pages: readonly string[], limit: number): string {
 }
 
 function mapMaterial(row: MaterialRow): MaterialSummary {
-  return { id: row.id, name: row.name, pageCount: row.pageCount, status: row.status, relevance: row.relevance, sourceUrl: row.sourceUrl, errorMessage: row.errorMessage, createdAt: row.createdAt }
+  return { id: row.id, name: row.name, mediaType: row.mediaType, pageCount: row.pageCount, status: row.status, relevance: row.relevance, role: row.role ?? 'reference', semanticAnalysis: row.semanticAnalysisJson ? materialSemanticAnalysisSchema.parse(JSON.parse(row.semanticAnalysisJson)) : null, sourceUrl: row.sourceUrl, errorMessage: row.errorMessage, createdAt: row.createdAt }
 }
 
 function safeErrorMessage(error: unknown): string {
@@ -103,8 +113,14 @@ export class PdfMaterialService {
   }
 
   async importPdf(workspaceId: string, path: string): Promise<MaterialSummary> {
+    return this.importFile(workspaceId, path)
+  }
+
+  async importFile(workspaceId: string, path: string): Promise<MaterialSummary> {
     const workspace = this.getWorkspace(workspaceId)
-    const data = await readPdf(path)
+    const lower = path.toLocaleLowerCase(); const isPdf = lower.endsWith('.pdf'); const isPptx = lower.endsWith('.pptx')
+    if (!isPdf && !isPptx) throw new Error('Somente arquivos PDF e PPTX são suportados')
+    const data = isPdf ? await readPdf(path) : await readPptx(path)
     const hash = createHash('sha256').update(data).digest('hex')
     const duplicate = this.findDuplicate(workspaceId, hash)
     if (duplicate) {
@@ -114,18 +130,33 @@ export class PdfMaterialService {
     const materialId = this.createId()
     const createdAt = this.now()
     const name = basename(path).slice(0, 240)
-    this.database.sqlite.prepare("INSERT INTO materials (id, workspace_id, name, media_type, page_count, status, relevance, content_hash, error_message, created_at) VALUES (?, ?, ?, 'application/pdf', 0, 'staged', 0, ?, NULL, ?)").run(materialId, workspaceId, name, hash, createdAt)
+    const mediaType = isPdf ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+    const extractionFingerprint = createHash('sha256').update(`${hash}|${EXTRACTION_CONTRACT_VERSION}`).digest('hex')
+    this.database.sqlite.prepare("INSERT INTO materials (id, workspace_id, name, media_type, page_count, status, relevance, content_hash, extraction_fingerprint, error_message, created_at) VALUES (?, ?, ?, ?, 0, 'staged', 0, ?, ?, NULL, ?)").run(materialId, workspaceId, name, mediaType, hash, extractionFingerprint, createdAt)
     try {
-      const pages = await this.extractPages(data)
+      const pages = isPdf ? await this.extractPages(data) : await (this.options.extractPptxSlides ? this.options.extractPptxSlides(path) : extractPptxSlides(data))
       const extracted = prepareExtractedPages(pages)
       this.persistExtraction(materialId, extracted)
+      this.options.timelines?.markProvisioning(workspaceId, 'material_extraction', { outcome: 'completed' })
       const assessment = assessLexicalRelevance(workspace, name, extracted)
       this.database.sqlite.prepare('UPDATE materials SET relevance = ? WHERE id = ?').run(assessment.relevance, materialId)
-      if (assessment.decision === 'irrelevant') return this.rejectMaterial(materialId, 'O documento não apresentou evidência lexical do objetivo deste Workspace.')
-      if (assessment.decision === 'relevant') return this.approveMaterial(workspaceId, materialId, assessment.relevance)
-      const semantic = await this.reviewAmbiguous(workspace, name, extracted, assessment.relevance)
-      if (semantic?.decision === 'relevant' && semantic.confidence >= 0.8) return this.approveMaterial(workspaceId, materialId, Math.max(assessment.relevance, Math.round(semantic.confidence * 100)))
-      if (semantic?.decision === 'irrelevant' && semantic.confidence >= 0.8) return this.rejectMaterial(materialId, 'O contexto mínimo confirmou que o documento não é relevante para este Workspace.')
+      const request = { workspaceName: workspace.name, workspaceObjective: workspace.objective, fileName: name, excerpt: samplePages(extracted, MAX_REVIEW_CHARACTERS), lexicalRelevance: assessment.relevance }
+      let semantic: MaterialSemanticAnalysis | null = null
+      const roleContextHash = createHash('sha256').update(normalize(`${workspace.name}|${workspace.objective}`)).digest('hex')
+      const analysisFingerprint = createHash('sha256').update(`${extractionFingerprint}|${roleContextHash}|${ANALYSIS_CONTRACT_VERSION}`).digest('hex')
+      const cached = this.database.sqlite.prepare('SELECT analysis_json AS analysisJson FROM material_analysis_cache WHERE analysis_fingerprint = ?').get(analysisFingerprint) as { analysisJson: string } | undefined
+      try {
+        semantic = cached ? materialSemanticAnalysisSchema.parse(JSON.parse(cached.analysisJson)) : this.options.analyzeSemantic ? materialSemanticAnalysisSchema.parse(await this.options.analyzeSemantic(request)) : null
+      } catch { semantic = null }
+      this.options.timelines?.markProvisioning(workspaceId, 'material_analysis', { cache: cached ? 'hit' : semantic ? 'miss' : 'unavailable', outcome: semantic ? 'completed' : 'unavailable' })
+      if (semantic) {
+        const analysisJson = JSON.stringify(semantic)
+        this.database.sqlite.transaction(() => {
+          this.database.sqlite.prepare('INSERT INTO material_analysis_cache (analysis_fingerprint,content_hash,extraction_fingerprint,parser_revision,schema_revision,role_context_hash,analysis_json,created_at,last_used_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(analysis_fingerprint) DO UPDATE SET last_used_at=excluded.last_used_at').run(analysisFingerprint, hash, extractionFingerprint, EXTRACTION_CONTRACT_VERSION, ANALYSIS_CONTRACT_VERSION, roleContextHash, analysisJson, createdAt, this.now())
+          this.database.sqlite.prepare('UPDATE materials SET semantic_analysis_json = ?, analysis_fingerprint = ? WHERE id = ?').run(analysisJson, analysisFingerprint, materialId)
+        })()
+      }
+      if (semantic?.relevance === 'unrelated' && semantic.confidence >= 0.8) return this.rejectMaterial(materialId, 'Este documento não parece relacionado ao estudo.')
       return this.getMaterial(materialId)
     } catch (error) {
       this.database.sqlite.prepare("UPDATE materials SET status = 'failed', error_message = ? WHERE id = ?").run(safeErrorMessage(error), materialId)
@@ -135,13 +166,16 @@ export class PdfMaterialService {
     }
   }
 
+  decide(workspaceId: string, materialId: string, decision: 'approve' | 'discard', role: 'base' | 'priority' | 'reference'): MaterialSummary { this.getWorkspace(workspaceId); const current = this.database.sqlite.prepare("SELECT status, (SELECT COUNT(*) FROM material_chunks WHERE material_id = materials.id) AS chunkCount FROM materials WHERE id = ? AND workspace_id = ?").get(materialId, workspaceId) as { status: string; chunkCount: number } | undefined; if (!current) throw new Error('Material not found'); if (current.status !== 'staged') throw new Error('Material decision is no longer available'); if (decision === 'discard') { const result = this.database.sqlite.prepare("UPDATE materials SET status = 'failed', relevance = 0, error_message = ? WHERE id = ? AND workspace_id = ? AND status = 'staged'").run('Descartado pelo estudante.', materialId, workspaceId); if (result.changes !== 1) throw new Error('Material decision conflict'); return this.getMaterial(materialId) } if (current.chunkCount === 0) throw new Error('Material has no extracted text to approve'); const result = this.database.sqlite.prepare("UPDATE materials SET status = 'ready', role = ?, error_message = NULL WHERE id = ? AND workspace_id = ? AND status = 'staged'").run(role, materialId, workspaceId); if (result.changes !== 1) throw new Error('Material decision conflict'); return this.getMaterial(materialId) }
+
   list(workspaceId: string): MaterialSummary[] {
-    return (this.database.sqlite.prepare("SELECT id, name, page_count AS pageCount, status, relevance, source_url AS sourceUrl, error_message AS errorMessage, created_at AS createdAt FROM materials WHERE workspace_id = ? AND status != 'archived' ORDER BY relevance DESC, created_at DESC").all(workspaceId) as MaterialRow[]).map(mapMaterial)
+    return (this.database.sqlite.prepare("SELECT id, name, media_type AS mediaType, page_count AS pageCount, status, relevance, role, semantic_analysis_json AS semanticAnalysisJson, source_url AS sourceUrl, error_message AS errorMessage, created_at AS createdAt FROM materials WHERE workspace_id = ? AND status != 'archived' ORDER BY created_at DESC").all(workspaceId) as MaterialRow[]).map(mapMaterial)
   }
 
   updateRelevance(workspaceId: string, materialId: string, relevance: number): MaterialSummary {
     const existing = this.database.sqlite.prepare("SELECT status, (SELECT COUNT(*) FROM material_chunks WHERE material_id = materials.id) AS chunkCount FROM materials WHERE id = ? AND workspace_id = ? AND status != 'archived'").get(materialId, workspaceId) as { status: MaterialSummary['status']; chunkCount: number } | undefined
     if (!existing) throw new Error('Material not found')
+    if (existing.status !== 'ready') throw new Error('Use the material decision flow for staged content')
     if (relevance > 0 && existing.chunkCount === 0) throw new Error('Material has no extracted text to approve')
     const status: MaterialSummary['status'] = relevance > 0 ? 'ready' : 'failed'
     const errorMessage = relevance > 0 ? null : 'Material rejeitado manualmente por baixa relevância.'
@@ -149,17 +183,21 @@ export class PdfMaterialService {
     return this.getMaterial(materialId)
   }
 
-  search(workspaceId: string, query: string): MaterialSearchResult[] {
-    const searchTerms = [...new Set(tokens(query).filter((term) => term.length >= 2))].slice(0, 8)
+  search(workspaceId: string, query: string, materialIds?: string[]): MaterialSearchResult[] {
+    const searchTerms = normalizedSearchTerms(query)
     if (!searchTerms.length) return []
-    const clauses = searchTerms.map(() => "lower(c.content) LIKE ? ESCAPE '\\'").join(' OR ')
-    const escapeLike = (term: string) => term.replace(/[\\%_]/g, '\\$&')
-    const rows = this.database.sqlite.prepare(`SELECT c.id AS chunkId, m.id AS materialId, m.name AS materialName, m.relevance, c.page_number AS pageNumber, c.content FROM material_chunks c JOIN materials m ON m.id = c.material_id WHERE m.workspace_id = ? AND m.status = 'ready' AND m.relevance > 0 AND (${clauses}) ORDER BY m.relevance DESC LIMIT 100`).all(workspaceId, ...searchTerms.map((term) => `%${escapeLike(term)}%`)) as SearchRow[]
+    const allowed = materialIds?.length ? materialIds : null; const idClause = allowed ? `AND m.id IN (${allowed.map(() => '?').join(',')})` : ''; const rows = this.database.sqlite.prepare(`SELECT c.id AS chunkId, m.id AS materialId, m.name AS materialName, m.relevance, m.role, m.semantic_analysis_json AS semanticAnalysisJson, c.page_number AS pageNumber, c.content FROM material_chunks c JOIN materials m ON m.id = c.material_id WHERE m.workspace_id = ? AND m.status = 'ready' AND m.relevance > 0 ${idClause} ORDER BY m.relevance DESC LIMIT 500`).all(workspaceId, ...(allowed ?? [])) as SearchRow[]
     const topics = this.topicCandidates(workspaceId)
     const bestByPage = new Map<string, { row: SearchRow; score: number }>()
     for (const row of rows) {
       const content = normalize(row.content)
-      const score = searchTerms.reduce((sum, term) => sum + (content.includes(term) ? 1 : 0), 0)
+      let semanticTerms: string[] = []
+      try { const analysis = row.semanticAnalysisJson ? materialSemanticAnalysisSchema.parse(JSON.parse(row.semanticAnalysisJson)) : null; semanticTerms = analysis ? tokens(`${analysis.subject} ${analysis.summary} ${analysis.topics.join(' ')} ${analysis.prerequisiteTopics.join(' ')}`) : [] } catch { semanticTerms = [] }
+      const lexical = searchTerms.reduce((sum, term) => sum + (content.includes(term) ? 1 : 0), 0)
+      const semantic = searchTerms.reduce((sum, term) => sum + (semanticTerms.includes(term) ? 1 : 0), 0)
+      if (lexical + semantic === 0) continue
+      const roleWeight = row.role === 'priority' ? 3 : row.role === 'base' ? 2 : 1
+      const score = lexical * 4 + semantic * 2 + roleWeight
       const key = `${row.materialId}:${row.pageNumber}`
       if (score > (bestByPage.get(key)?.score ?? -1)) bestByPage.set(key, { row, score })
     }
@@ -167,9 +205,12 @@ export class PdfMaterialService {
       const lower = normalize(row.content)
       const positions = searchTerms.map((term) => lower.indexOf(term)).filter((index) => index >= 0)
       const start = Math.max(0, (positions.length ? Math.min(...positions) : 0) - 400)
-      return { chunkId: row.chunkId, materialId: row.materialId, materialName: row.materialName, pageNumber: row.pageNumber, topicId: reliableTopicId(row.content, topics), retrieval: 'lexical', content: row.content.slice(start, start + 1_600) }
+      return { chunkId: row.chunkId, materialId: row.materialId, materialName: row.materialName, pageNumber: row.pageNumber, topicId: reliableTopicId(row.content, topics), retrieval: row.semanticAnalysisJson ? 'hybrid' : 'lexical', role: row.role, content: row.content.slice(start, start + 1_600) }
     })
   }
+  read(workspaceId: string, materialId: string, offset = 0, limit = 4000): MaterialReadResult { const material = this.getReadyMaterial(workspaceId, materialId); const rows = this.database.sqlite.prepare('SELECT page_number AS pageNumber, content FROM material_chunks WHERE material_id = ? ORDER BY page_number, id').all(materialId) as Array<{ pageNumber: number; content: string }>; const full = rows.map((row) => `[Página/slide ${row.pageNumber}]\n${row.content.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')}`).join('\n\n'); const bounded = Math.min(6000, Math.max(1, limit)); const content = full.slice(offset, offset + bounded); return { material, content, offset, nextOffset: offset + content.length < full.length ? offset + content.length : null, pageNumbers: [...new Set(rows.map((row) => row.pageNumber))] } }
+  readPage(workspaceId: string, materialId: string, pageNumber: number): MaterialReadResult { const material = this.getReadyMaterial(workspaceId, materialId); if (pageNumber > material.pageCount) throw new Error('Material page out of bounds'); const rows = this.database.sqlite.prepare('SELECT content FROM material_chunks WHERE material_id = ? AND page_number = ? ORDER BY id').all(materialId, pageNumber) as Array<{ content: string }>; return { material, content: rows.map((row) => row.content.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')).join('\n').slice(0, 6000), offset: 0, nextOffset: null, pageNumbers: [pageNumber] } }
+  overview(workspaceId: string, materialId: string): MaterialReadResult { const material = this.getReadyMaterial(workspaceId, materialId); const pages = [...new Set([1, Math.max(1, Math.ceil(material.pageCount / 2)), material.pageCount])]; return { material, content: pages.map((page) => `[Amostra ${page}]\n${this.readPage(workspaceId, materialId, page).content.slice(0, 1200)}`).join('\n\n').slice(0, 5000), offset: 0, nextOffset: null, pageNumbers: pages } }
 
   private getWorkspace(workspaceId: string): WorkspaceContext {
     const workspace = this.database.sqlite.prepare('SELECT name, objective FROM workspaces WHERE id = ?').get(workspaceId) as WorkspaceContext | undefined
@@ -178,7 +219,7 @@ export class PdfMaterialService {
   }
 
   private findDuplicate(workspaceId: string, hash: string): MaterialSummary | null {
-    const row = this.database.sqlite.prepare("SELECT id, name, page_count AS pageCount, status, relevance, source_url AS sourceUrl, error_message AS errorMessage, created_at AS createdAt FROM materials WHERE workspace_id = ? AND content_hash = ? AND status != 'archived' ORDER BY created_at DESC LIMIT 1").get(workspaceId, hash) as MaterialRow | undefined
+    const row = this.database.sqlite.prepare("SELECT id, name, media_type AS mediaType, page_count AS pageCount, status, relevance, role, semantic_analysis_json AS semanticAnalysisJson, source_url AS sourceUrl, error_message AS errorMessage, created_at AS createdAt FROM materials WHERE workspace_id = ? AND content_hash = ? AND status != 'archived' ORDER BY created_at DESC LIMIT 1").get(workspaceId, hash) as MaterialRow | undefined
     return row ? mapMaterial(row) : null
   }
 
@@ -214,10 +255,11 @@ export class PdfMaterialService {
   }
 
   private getMaterial(materialId: string): MaterialSummary {
-    const row = this.database.sqlite.prepare('SELECT id, name, page_count AS pageCount, status, relevance, source_url AS sourceUrl, error_message AS errorMessage, created_at AS createdAt FROM materials WHERE id = ?').get(materialId) as MaterialRow | undefined
+    const row = this.database.sqlite.prepare('SELECT id, name, media_type AS mediaType, page_count AS pageCount, status, relevance, role, semantic_analysis_json AS semanticAnalysisJson, source_url AS sourceUrl, error_message AS errorMessage, created_at AS createdAt FROM materials WHERE id = ?').get(materialId) as MaterialRow | undefined
     if (!row) throw new Error('Material not found')
     return mapMaterial(row)
   }
+  private getReadyMaterial(workspaceId: string, materialId: string): MaterialSummary { const row = this.database.sqlite.prepare("SELECT id, name, media_type AS mediaType, page_count AS pageCount, status, relevance, role, semantic_analysis_json AS semanticAnalysisJson, source_url AS sourceUrl, error_message AS errorMessage, created_at AS createdAt FROM materials WHERE id = ? AND workspace_id = ? AND status = 'ready'").get(materialId, workspaceId) as MaterialRow | undefined; if (!row) throw new Error('Ready material not found'); return mapMaterial(row) }
 
   private topicCandidates(workspaceId: string): TopicCandidate[] {
     const rows = this.database.sqlite.prepare("SELECT m.id AS moduleId, m.topics_json AS topicsJson FROM roadmap_modules m JOIN roadmaps r ON r.id = m.roadmap_id WHERE r.workspace_id = ? AND r.status = 'accepted'").all(workspaceId) as Array<{ moduleId: string; topicsJson: string }>
@@ -274,6 +316,16 @@ async function readPdf(path: string): Promise<Uint8Array> {
   } finally {
     await handle.close()
   }
+}
+
+async function readPptx(path: string): Promise<Uint8Array> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try { const before = await handle.stat(); if (!before.isFile() || before.size < 4 || before.size > MAX_PDF_BYTES) throw new Error('PPTX inválido ou maior que 20 MB'); const data = new Uint8Array(before.size); let offset = 0; while (offset < before.size) { const read = await handle.read(data, offset, before.size - offset, offset); if (!read.bytesRead) throw new Error('PPTX alterado durante a leitura'); offset += read.bytesRead } const after = await handle.stat(); if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ino !== before.ino || after.dev !== before.dev) { data.fill(0); throw new Error('PPTX alterado durante a leitura') } if (String.fromCharCode(...data.slice(0, 4)) !== 'PK\u0003\u0004') { data.fill(0); throw new Error('A estrutura real do arquivo não é PPTX') } return data } finally { await handle.close() }
+}
+
+async function extractPptxSlides(data: Uint8Array): Promise<string[]> {
+  const directory = await mkdtemp(join(tmpdir(), 'coach-pptx-')); const privatePptx = join(directory, 'material.pptx')
+  try { await writeFile(privatePptx, data, { mode: 0o400 }); const script = "import sys,zipfile,re,html; z=zipfile.ZipFile('/material.pptx'); i=z.infolist(); assert len(i)<=2000 and all(x.flag_bits&1==0 and x.file_size<=5000000 and x.compress_size>0 and x.file_size/max(x.compress_size,1)<=100 for x in i) and sum(x.file_size for x in i)<=20000000 and '[Content_Types].xml' in z.namelist() and 'ppt/presentation.xml' in z.namelist(); n=sorted([x for x in z.namelist() if re.fullmatch(r'ppt/slides/slide[0-9]+.xml',x)],key=lambda x:int(re.search(r'[0-9]+',x).group())); assert 0<len(n)<=500; print('\\f'.join(' '.join(html.unescape(v) for v in re.findall(r'<a:t>(.*?)</a:t>',z.read(x).decode('utf-8','replace'))) for x in n))"; const { stdout } = await promisify(execFile)('/usr/bin/bwrap', ['--die-with-parent','--unshare-all','--clearenv','--setenv','PATH','/usr/bin','--ro-bind','/usr','/usr','--ro-bind','/lib','/lib','--ro-bind-try','/lib64','/lib64','--ro-bind',privatePptx,'/material.pptx','--tmpfs','/tmp','--proc','/proc','--dev','/dev','/usr/bin/prlimit','--cpu=15:15','--as=536870912:536870912','--fsize=8388608:8388608','--nofile=32:32','--nproc=8:8','/usr/bin/python3','-c',script], { timeout: 20_000, killSignal: 'SIGKILL', maxBuffer: MAX_EXTRACTED_CHARACTERS + 1024, windowsHide: true }); const slides = stdout.split('\f'); if (!slides.length || slides.every((slide: string) => !slide.trim())) throw new Error('PPTX sem texto extraível'); return slides } finally { await rm(directory, { recursive: true, force: true }) }
 }
 
 async function extractPdfPages(data: Uint8Array): Promise<string[]> {

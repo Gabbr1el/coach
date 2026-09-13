@@ -1,5 +1,6 @@
 import type { ObserverState } from '../../shared/contracts/observer-contract'
 import type { StreamWorkspaceMessageInput } from '../../shared/contracts/conversation-contract'
+import type { PublicExerciseContext } from '../../shared/contracts/exercise-contract'
 
 export interface AuthorizedStudyContext {
   readonly fileName: string
@@ -8,8 +9,12 @@ export interface AuthorizedStudyContext {
   readonly activePlanItem: string | null
   readonly activePage?: string
   readonly activeStudy?: StreamWorkspaceMessageInput['activeStudy']
+  readonly activeInteractiveCode?: StreamWorkspaceMessageInput['activeInteractiveCode']
+  readonly activeExercise?: PublicExerciseContext
   readonly lastExecution?: { stdout: string; stderr: string; exitCode: number | null; timedOut: boolean } | null
   readonly practiceContext?: { fileName: string; language: string; code: string }
+  readonly immediateContext?: unknown
+  readonly activeMaterial?: StreamWorkspaceMessageInput['activeMaterial']
 }
 
 export type ContextDepth = 'MINIMAL' | 'SESSION' | 'WORKSPACE' | 'DEEP'
@@ -32,7 +37,7 @@ export class ContextRouter {
     const text = input.content.trim()
     const intervention = Boolean(observer?.interventionSuggested)
     const context = authorizedContext
-      ? { ...authorizedContext, activePage: input.activePage, activeStudy: input.activeStudy, practiceContext: input.practiceContext, ...(input.lastExecution ? { lastExecution: input.lastExecution } : {}) }
+      ? { ...authorizedContext, activePage: input.activePage, activeMaterial: input.activeMaterial, activeStudy: input.activeStudy ? { ...input.activeStudy, currentExcerpt: input.activeStudy.currentExcerpt?.slice(0, 2000) ?? null } : undefined, activeInteractiveCode: input.activeInteractiveCode ? { ...input.activeInteractiveCode, code: input.activeInteractiveCode.code.slice(0, 12_000), lastExecution: input.activeInteractiveCode.lastExecution ? { ...input.activeInteractiveCode.lastExecution, stdout: input.activeInteractiveCode.lastExecution.stdout.slice(0, 4000), stderr: input.activeInteractiveCode.lastExecution.stderr.slice(0, 4000) } : null } : undefined, activeExercise: authorizedContext.activeExercise ? { ...authorizedContext.activeExercise, currentCode: authorizedContext.activeExercise.currentCode.slice(0, 12_000) } : undefined, practiceContext: input.practiceContext ? { fileName: input.practiceContext.fileName, language: input.practiceContext.language, code: input.practiceContext.code.slice(0, 12_000) } : undefined, ...(input.lastExecution ? { lastExecution: { ...input.lastExecution, stdout: input.lastExecution.stdout.slice(0, 4000), stderr: input.lastExecution.stderr.slice(0, 4000) } } : {}) }
       : undefined
     if (intervention) return { depth: context ? 'SESSION' : 'MINIMAL', outputBudget: 'HINT', maxOutputTokens: 160, helpLevel: 1, context: context ? { ...context, notes: '' } : undefined, observerSignal: { repeatedErrorCount: observer!.repeatedErrorCount } }
     if (DEEP_REQUEST.test(text)) return { depth: context ? 'DEEP' : 'WORKSPACE', outputBudget: 'DEEP_ANALYSIS', maxOutputTokens: 900, helpLevel: 4, context, observerSignal: null }

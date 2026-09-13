@@ -4,7 +4,8 @@ import type { ConversationRepository, CreateConversationMessageRecord } from '..
 import { presentationIntentFor, presentationRequestFor, WorkspaceCoachService } from '../../src/application/conversations/workspace-coach-service'
 import type { AIRequest } from '../../src/application/ai/ai-provider'
 import type { ConversationMessage } from '../../src/shared/contracts/conversation-contract'
-import type { StudyPresentationPreferences } from '../../src/shared/contracts/study-lesson-contract'
+import { studyPresentationPreferencesSchema, type StudyPresentationPreferences } from '../../src/shared/contracts/study-lesson-contract'
+import { HeavyGenerationQueue } from '../../src/application/ai/heavy-generation-queue'
 
 class MemoryConversationRepository implements ConversationRepository {
   readonly messages: ConversationMessage[] = []
@@ -22,6 +23,7 @@ class MemoryConversationRepository implements ConversationRepository {
 const workspace = { id: '00000000-0000-4000-8000-000000000123', name: 'Cálculo', objective: 'Dominar derivadas', status: 'active' as const, createdAt: 1, updatedAt: 1, lastOpenedAt: null, archivedAt: null }
 
 describe('WorkspaceCoachService', () => {
+  it('uses managed workspace context regardless of the legacy sharing flag', async () => { const repository = new MemoryConversationRepository(); const manager = new AIProviderManager(); let request: AIRequest | null = null; manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'm' }), streamMessage: async function* (value) { request = value; yield { type: 'completed', response: { content: 'ok', providerId: 'stream', modelId: 'm' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream'); const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(false) }); for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'explique meu plano', activePage: 'plan' }, new AbortController().signal)) {} expect(decodePromptField(request!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ activePlanItem: expect.anything() }) })
   it('keeps a stable isolated thread and sends workspace context to the provider', async () => {
     const repository = new MemoryConversationRepository()
     const manager = new AIProviderManager()
@@ -34,44 +36,44 @@ describe('WorkspaceCoachService', () => {
     const deltas = []
     for await (const delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Explique produto' }, new AbortController().signal)) deltas.push(delta)
 
-    expect(decodePromptField({ messages: [{ role: 'system', content: prompt }], maxOutputTokens: 1 }, 'WORKSPACE_METADATA_BASE64')).toBeNull()
+    expect(decodePromptField({ messages: [{ role: 'system', content: prompt }], maxOutputTokens: 1 }, 'WORKSPACE_METADATA_BASE64')).toEqual({ subject: 'Cálculo', objective: 'Dominar derivadas' })
     expect(prompt).toContain('dados não confiáveis')
     expect(deltas.join('')).toBe('Use a regra ')
     expect(repository.messages.map((message) => message.content)).toEqual(['Explique produto', 'Use a regra do produto.'])
     expect(repository.thread).toMatchObject({ workspaceId: workspace.id, title: 'Cálculo' })
   })
 
-  it('sends no workspace, file, lesson, note, material, history or execution context when privacy is off', async () => {
+  it('uses managed workspace context even when the legacy privacy flag is off', async () => {
     const repository = new MemoryConversationRepository()
     repository.messages.push({ id: 'private-turn', role: 'assistant', content: 'PRIVATE_HISTORY', createdAt: 1, sequence: 1, providerId: 'old', modelId: 'old' })
     const manager = new AIProviderManager()
     let providerRequest: AIRequest | null = null
     manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Resposta', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
     manager.select('stream')
-    const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(false), getWorkspaceMemory: () => { throw new Error('memory must not be read while privacy is off') }, searchMaterials: () => { throw new Error('materials must not be searched while privacy is off') } })
+    const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(false), getWorkspaceMemory: () => 'WORKSPACE_MEMORY', searchMaterials: () => [] })
     const activeStudy = { roadmapId: crypto.randomUUID(), moduleId: 'module-b', module: 'Saida', topicId: 'module-b:print', topic: 'print', lessonId: 'lesson', currentBlockId: 'block', checkpointId: null, currentExcerpt: 'PRIVATE_EXCERPT' }
 
     for await (const _delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Faça uma análise profunda', activePage: 'practice', activeStudy, practiceContext: { fileName: 'PRIVATE_FILE.py', language: 'python', code: 'PRIVATE_CODE' }, lastExecution: { stdout: 'PRIVATE_STDOUT', stderr: 'PRIVATE_STDERR', exitCode: 1, timedOut: false } }, new AbortController().signal)) { /* consume */ }
 
     const serialized = JSON.stringify(providerRequest)
-    for (const secret of ['Cálculo', 'Dominar derivadas', 'PRIVATE_HISTORY', 'PRIVATE_FILE.py', 'PRIVATE_CODE', 'PRIVATE_STDOUT', 'PRIVATE_STDERR', 'PRIVATE_EDITOR', 'PRIVATE_NOTES', 'PRIVATE_MEMORY', 'PRIVATE_EXCERPT']) expect(serialized).not.toContain(secret)
-    expect(decodePromptField(providerRequest!, 'WORKSPACE_METADATA_BASE64')).toBeNull()
-    expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toBeNull()
-    expect(decodePromptField(providerRequest!, 'WORKSPACE_MEMORY_BASE64')).toBeNull()
-    expect(decodePromptField(providerRequest!, 'MATERIAL_SNIPPETS_BASE64')).toEqual([])
+    expect(serialized).not.toBe('{}')
+    expect(decodePromptField(providerRequest!, 'WORKSPACE_METADATA_BASE64')).not.toBeNull()
+    expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).not.toBeNull()
+    expect(JSON.stringify(providerRequest)).not.toContain('WORKSPACE_MEMORY_BASE64')
+    expect(JSON.stringify(providerRequest)).not.toContain('MATERIAL_SNIPPETS_BASE64')
   })
 
-  it('does not adapt a study block through a provider when privacy is off', async () => {
+  it('adapts a managed study block regardless of the legacy privacy flag', async () => {
     const manager = new AIProviderManager()
     let providerRequest: AIRequest | null = null
     manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Resposta localmente limitada', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
     manager.select('stream')
     const adaptSection = vi.fn()
-    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(false), studyLessonService: { adaptSection, getPreferences: () => ({ detail: 'standard', explanation: 'balanced', examples: 'balanced', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] }), updatePreferences: (_workspaceId, value) => value } })
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(false), studyLessonService: { adaptSection, getPreferences: () => studyPresentationPreferencesSchema.parse({}), updatePreferences: (_workspaceId, value) => value } })
 
     for await (const _delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'use uma analogia', activePage: 'studies', activeStudy: { roadmapId: crypto.randomUUID(), moduleId: 'module', module: 'M', topicId: 'topic', topic: 'T', lessonId: 'lesson', currentBlockId: 'block', checkpointId: null, currentExcerpt: 'PRIVATE_EXCERPT' } }, new AbortController().signal)) { /* consume */ }
 
-    expect(adaptSection).not.toHaveBeenCalled()
+    expect(adaptSection).toHaveBeenCalledTimes(1)
     expect(JSON.stringify(providerRequest)).not.toContain('PRIVATE_EXCERPT')
   })
 
@@ -89,9 +91,9 @@ describe('WorkspaceCoachService', () => {
     for await (const _delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Faça uma análise profunda', activePage: 'practice', activeStudy, practiceContext, lastExecution: execution }, new AbortController().signal)) { /* consume */ }
 
     expect(decodePromptField(providerRequest!, 'WORKSPACE_METADATA_BASE64')).toEqual({ subject: 'Cálculo', objective: 'Dominar derivadas' })
-    expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ fileName: 'PRIVATE_FILE.py', editorContent: 'PRIVATE_EDITOR', notes: 'PRIVATE_NOTES', activeStudy, practiceContext, lastExecution: execution })
-    expect(decodePromptField(providerRequest!, 'WORKSPACE_MEMORY_BASE64')).toBe('PRIVATE_MEMORY')
-    expect(decodePromptField(providerRequest!, 'MATERIAL_SNIPPETS_BASE64')).toEqual([{ chunkId: 'chunk-1', materialId: 'material-1', materialName: 'PRIVATE_MATERIAL.pdf', pageNumber: 2, topicId: null, retrieval: 'lexical' as const, content: 'PRIVATE_SNIPPET' }])
+    expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ fileName: '', editorContent: '', notes: '', activeStudy, practiceContext, lastExecution: execution })
+    expect(JSON.stringify(providerRequest)).not.toContain('WORKSPACE_MEMORY_BASE64')
+    expect(JSON.stringify(providerRequest)).not.toContain('MATERIAL_SNIPPETS_BASE64')
   })
 
   it('does not represent a null execution as execution evidence', async () => {
@@ -107,10 +109,91 @@ describe('WorkspaceCoachService', () => {
     expect(providerRequest!.messages[0]?.content).toContain('Somente afirme que código foi executado quando o contexto autorizado contiver lastExecution')
   })
 
+  it('routes the active inline code block and authoritative validation to the Tutor', async () => {
+    const manager = new AIProviderManager()
+    let providerRequest: AIRequest | null = null
+    manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: JSON.stringify({ kind: 'final_response' }), providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Revise a saída.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
+    manager.select('stream')
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(true), contextHub: { immediate: async () => ({}), read: async () => null } as any })
+    const activeInteractiveCode = { lessonId: 'lesson', blockId: 'run', interactionType: 'FIX_AND_RUN' as const, instruction: 'Corrija a soma', language: 'python' as const, code: 'print(1 + 1)', prediction: null, attempts: 2, lastExecution: { stdout: '2\n', stderr: '', exitCode: 0, timedOut: false }, validationResult: { status: 'passed' as const, message: 'Saída validada.' } }
+    for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Explique o resultado', activePage: 'studies', activeInteractiveCode }, new AbortController().signal)) {}
+    expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ activeInteractiveCode })
+  })
+
+  it('routes the canonically persisted typed draft and records Tutor help once', async () => {
+    const manager = new AIProviderManager()
+    let providerRequest: AIRequest | null = null
+    manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Comece identificando o caso-base.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
+    manager.select('stream')
+    const requestHelp = vi.fn((_input: { workspaceId: string; exerciseId: string; requestId: string; type: 'coach_help_requested' }) => ({ exerciseId: 'exercise-1', helpCount: 1, hint: 'PRIVATE_GENERATED_HINT' }))
+    const activeExercise = { exerciseId: 'exercise-1', roadmapId: 'roadmap-1', moduleId: 'module-1', topicId: 'topic-1', kind: 'FIX_CODE' as const, title: 'Somar itens', statement: 'Some os itens da entrada.', language: 'python' as const, currentCode: 'print("typed before Tutor")', attemptCount: 2, helpUsed: false, progressStatus: 'in_progress' as const, passedTests: 3, totalTests: 5, lastRun: { status: 'executed' as const, passedTests: 0, totalTests: 0, message: 'Execução livre concluída.' }, lastSubmission: { status: 'failed' as const, passedTests: 3, totalTests: 5, message: '3 de 5 testes passaram.' } }
+    let canonical = activeExercise
+    const getPublicContext = vi.fn(() => canonical)
+    requestHelp.mockImplementation((_input) => { canonical = { ...canonical, helpUsed: true }; return { exerciseId: 'exercise-1', helpCount: 1, hint: 'PRIVATE_GENERATED_HINT' } })
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, exerciseService: { getPublicContext, requestHelp } })
+
+    const messageRequestId = crypto.randomUUID()
+    for await (const _ of service.streamMessage(workspace.id, { requestId: messageRequestId, workspaceId: workspace.id, content: 'Me dê uma dica para continuar', activePage: 'exercises', activeExercise: { exerciseId: activeExercise.exerciseId } }, new AbortController().signal)) {}
+
+    expect(requestHelp).toHaveBeenCalledTimes(1)
+    expect(requestHelp).toHaveBeenCalledWith({ workspaceId: workspace.id, exerciseId: 'exercise-1', requestId: `coach-help:${messageRequestId}`, type: 'coach_help_requested' })
+    const helpRequest = requestHelp.mock.calls[0]![0]
+    expect(helpRequest.requestId).toBe(`coach-help:${messageRequestId}`)
+    expect(helpRequest.type).not.toBe('hint_requested')
+    expect(getPublicContext).toHaveBeenCalledWith({ workspaceId: workspace.id, exerciseId: 'exercise-1' })
+    expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ activeExercise: { ...activeExercise, helpUsed: true } })
+    expect(JSON.stringify(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64'))).toContain('typed before Tutor')
+    const serialized = JSON.stringify(providerRequest)
+    expect(serialized).not.toContain('PRIVATE_REFERENCE')
+    expect(serialized).not.toContain('PRIVATE_HIDDEN')
+    expect(serialized).not.toContain('PRIVATE_EXPECTED')
+    expect(serialized).not.toContain('PRIVATE_GENERATED_HINT')
+    expect(serialized).toContain('ajuda graduada')
+    expect(serialized).toContain('Não entregue código final')
+    expect(serialized).toContain('attemptCount')
+  })
+
+  it('does not record exercise help for unrelated or explicitly denied requests', async () => {
+    const manager = new AIProviderManager()
+    manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* () { yield { type: 'completed', response: { content: 'Tudo bem.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
+    manager.select('stream')
+    const requestHelp = vi.fn(() => ({ exerciseId: 'exercise-1', helpCount: 1, hint: 'hint' }))
+    const getPublicContext = vi.fn(() => ({ exerciseId: 'exercise-1', roadmapId: 'roadmap', moduleId: 'module', topicId: 'topic', kind: 'PROGRAMMING_PROBLEM' as const, title: 'Soma', statement: 'Some.', language: 'python' as const, currentCode: '', attemptCount: 0, helpUsed: false, progressStatus: 'not_started' as const, passedTests: 0, totalTests: 0, lastRun: null, lastSubmission: null }))
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, exerciseService: { getPublicContext, requestHelp } })
+    const activeExercise = { exerciseId: 'exercise-1' }
+
+    for (const content of ['Vou tentar outra entrada.', 'Não quero ajuda, só registre minha mensagem.']) for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content, activePage: 'exercises', activeExercise }, new AbortController().signal)) {}
+
+    expect(requestHelp).not.toHaveBeenCalled()
+  })
+
+  it('ignores exercise identifiers outside the exercises page and missing canonical exercises', async () => {
+    const manager = new AIProviderManager(); let providerRequest: AIRequest | null = null
+    manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Tudo bem.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream')
+    const requestHelp = vi.fn(() => ({ exerciseId: 'exercise-1', helpCount: 1, hint: 'hint' })); const getPublicContext = vi.fn(() => null)
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, exerciseService: { getPublicContext, requestHelp } })
+    for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Me ajude', activePage: 'studies', activeExercise: { exerciseId: 'exercise-1' } }, new AbortController().signal)) {}
+    expect(getPublicContext).not.toHaveBeenCalled(); expect(requestHelp).not.toHaveBeenCalled(); expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toBeNull()
+    for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Me ajude', activePage: 'exercises', activeExercise: { exerciseId: 'missing' } }, new AbortController().signal)) {}
+    expect(getPublicContext).toHaveBeenCalledWith({ workspaceId: workspace.id, exerciseId: 'missing' }); expect(requestHelp).not.toHaveBeenCalled(); expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toBeNull()
+  })
+
+  it('allows repeated Tutor help while the repository keeps HELP_USED evidence idempotent', async () => {
+    const manager = new AIProviderManager(); let providerRequest: AIRequest | null = null
+    manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* (request) { providerRequest = request; yield { type: 'completed', response: { content: 'Outra pista.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream')
+    const canonical = { exerciseId: 'exercise-1', roadmapId: 'roadmap', moduleId: 'module', topicId: 'topic', kind: 'FIX_CODE' as const, title: 'Soma', statement: 'Corrija.', language: 'python' as const, currentCode: 'print(0)', lastRun: null, lastSubmission: null, passedTests: 0, totalTests: 0, attemptCount: 1, helpUsed: true, progressStatus: 'in_progress' as const }
+    const requestHelp = vi.fn(() => ({ exerciseId: 'exercise-1', helpCount: 1, hint: 'private' })); const getPublicContext = vi.fn(() => canonical)
+    const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, exerciseService: { getPublicContext, requestHelp } })
+    for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Preciso de outra dica', activePage: 'exercises', activeExercise: { exerciseId: 'exercise-1' } }, new AbortController().signal)) {}
+    expect(requestHelp).toHaveBeenCalledTimes(1); expect(decodePromptField(providerRequest!, 'STUDY_CONTEXT_BASE64')).toMatchObject({ activeExercise: canonical })
+  })
+
   it.each([
     ['simplifique esta parte', 'SIMPLIFY'],
     ['use uma analogia', 'ANALOGY'],
     ['comece pelo código', 'CODE_FIRST'],
+    ['reordene esta seção', 'REORDER'],
+    ['use modo apresentação', 'PRESENTATION'],
     ['dê mais exemplos', 'MORE_EXAMPLES'],
     ['explique passo a passo', 'STEP_BY_STEP'],
     ['aprofunde esta seção', 'MORE_DEPTH'],
@@ -129,8 +212,8 @@ describe('WorkspaceCoachService', () => {
     const stream = vi.fn()
     manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: stream, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
     manager.select('stream')
-    const preferences: StudyPresentationPreferences = { detail: 'standard', explanation: 'balanced', examples: 'balanced', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] }
-    const adaptSection = vi.fn(async () => ({ id: 'adaptation', workspaceId: workspace.id, lessonId: 'lesson', blockId: 'block', revision: 1, reason: 'use uma analogia', mode: 'ANALOGY' as const, originalBlock: { id: 'block', type: 'explanation' as const, title: 'T', content: 'Original' }, adaptedBlock: { id: 'block', type: 'analogy' as const, title: 'T', content: 'Adaptado' }, isActive: true, providerId: 'stream', modelId: 'model', createdAt: 1 }))
+    const preferences: StudyPresentationPreferences = studyPresentationPreferencesSchema.parse({})
+    const adaptSection = vi.fn(async () => ({ id: 'adaptation', workspaceId: workspace.id, lessonId: 'lesson', blockId: 'block', revision: 1, reason: 'use uma analogia', mode: 'ANALOGY' as const, originalBlock: { id: 'block', type: 'explanation' as const, title: 'T', content: 'Original' }, adaptedBlock: { id: 'block', type: 'explanation' as const, title: 'T', content: 'Adaptado' }, isActive: true, providerId: 'stream', modelId: 'model', createdAt: 1 }))
     const updatePreferences = vi.fn((_workspaceId: string, value: StudyPresentationPreferences) => value)
     const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(true), studyLessonService: { adaptSection, getPreferences: () => preferences, updatePreferences } })
     const metadata = vi.fn()
@@ -146,7 +229,7 @@ describe('WorkspaceCoachService', () => {
     const manager = new AIProviderManager()
     manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: async function* () { throw new Error('must not stream') }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) })
     manager.select('stream')
-    let preferences: StudyPresentationPreferences = { detail: 'standard', explanation: 'balanced', examples: 'balanced', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] }
+    let preferences: StudyPresentationPreferences = studyPresentationPreferencesSchema.parse({})
     const service = new WorkspaceCoachService({ repository: new MemoryConversationRepository(), providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(true), studyLessonService: { adaptSection: async (input) => ({ id: crypto.randomUUID(), workspaceId: workspace.id, lessonId: input.lessonId, blockId: input.blockId, revision: 1, reason: input.instruction, mode: input.mode ?? 'CUSTOM', originalBlock: { id: input.blockId, type: 'explanation', title: 'T', content: 'Original' }, adaptedBlock: { id: input.blockId, type: 'explanation', title: 'T', content: 'Adaptado' }, isActive: true, providerId: 'stream', modelId: 'model', createdAt: 1 }), getPreferences: () => preferences, updatePreferences: (_workspaceId, value) => { preferences = value; return value } } })
     const activeStudy = { roadmapId: crypto.randomUUID(), moduleId: crypto.randomUUID(), module: 'M', topicId: 'topic-a', topic: 'T', lessonId: 'lesson', currentBlockId: 'block', checkpointId: null, currentExcerpt: 'Original' }
     for (let index = 0; index < 2; index += 1) for await (const _delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'simplifique esta parte', activePage: 'studies', activeStudy: { ...activeStudy, topicId: `topic-${index}`, currentBlockId: `block-${index}` } }, new AbortController().signal)) { /* consume */ }
@@ -154,6 +237,12 @@ describe('WorkspaceCoachService', () => {
     expect(preferences.detail).toBe('standard')
     expect(preferences.explanation).toBe('simple')
     expect(preferences.evidence).toHaveLength(2)
+  })
+
+  it('falls back to the normal Tutor and never claims mutation when adaptation fails', async () => {
+    const repository = new MemoryConversationRepository(); const manager = new AIProviderManager(); const stream = vi.fn(); manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: '', providerId: 'stream', modelId: 'model' }), streamMessage: stream, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream'); const updatePreferences = vi.fn(); const metadata = vi.fn(); const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(true), studyLessonService: { adaptSection: async () => { throw new Error('offline') }, getPreferences: () => studyPresentationPreferencesSchema.parse({}), updatePreferences } }); const output: string[] = []
+    for await (const delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'simplifique esta parte', activePage: 'studies', activeStudy: { roadmapId: crypto.randomUUID(), moduleId: crypto.randomUUID(), module: 'M', topicId: 'topic', topic: 'T', lessonId: 'lesson', currentBlockId: 'block', checkpointId: null, currentExcerpt: 'Original' } }, new AbortController().signal, metadata)) output.push(delta)
+    expect(output.join('')).toContain('Não consegui alterar a aula'); expect(stream).not.toHaveBeenCalled(); expect(updatePreferences).not.toHaveBeenCalled(); expect(metadata).not.toHaveBeenCalled(); expect(repository.messages.at(-1)?.content).not.toContain('Adaptei')
   })
 
   it('rejects a missing or archived workspace before contacting a provider', async () => {
@@ -174,6 +263,12 @@ describe('WorkspaceCoachService', () => {
     await expect(consume()).rejects.toMatchObject({ name: 'AbortError' })
     expect(repository.messages).toEqual([])
   })
+  it('reserves foreground before action preflight and blocks background generation', async () => { const repository = new MemoryConversationRepository(); const manager = new AIProviderManager(); const queue = new HeavyGenerationQueue(); let backgroundStarted = false; manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => { void queue.run(async () => { backgroundStarted = true }, { priority: 'background' }); await Promise.resolve(); expect(backgroundStarted).toBe(false); return { content: JSON.stringify({ kind: 'final_response', response: 'ok' }), providerId: 'stream', modelId: 'model' } }, streamMessage: async function* () { yield { type: 'completed', response: { content: 'ok', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream'); const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, contextHub: { immediate: async () => ({}), read: async () => null } as any, admission: queue }); for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Adicione uma nota' }, new AbortController().signal)) {} await Promise.resolve(); expect(backgroundStarted).toBe(true) })
+  it('reads one bounded material context without a redundant planning call', async () => { const repository = new MemoryConversationRepository(); const manager = new AIProviderManager(); let streamedRequest: AIRequest | null = null; const decide = vi.fn(); manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: decide, streamMessage: async function* (request) { streamedRequest = request; yield { type: 'completed', response: { content: 'Li a página.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream'); const reads: unknown[] = []; const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, getCurrentContext: async () => currentContext(false), contextHub: { immediate: async () => ({ workspaceId: workspace.id }), read: async (_workspaceId: string, resource: string, options: unknown) => { reads.push([resource, options]); return { content: 'conteúdo' } } } as any }); for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Explique a apostila' }, new AbortController().signal)) {} expect(reads).toHaveLength(1); expect(decide).not.toHaveBeenCalled(); expect(decodePromptField(streamedRequest!, 'CONTEXT_READ_RESULTS_BASE64')).toHaveLength(1) })
+  it('returns only the authoritative backend action result without streaming a claim', async () => { const repository = new MemoryConversationRepository(); const manager = new AIProviderManager(); let streamed = false; manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: JSON.stringify({ kind: 'workspace_action', action: { type: 'notes.add', arguments: { content: 'Revisar arrays' } } }), providerId: 'stream', modelId: 'model' }), streamMessage: async function* () { streamed = true; yield { type: 'completed', response: { content: 'inventado', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream'); const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, contextHub: { immediate: async () => ({}), read: async () => null } as any, workspaceActions: { execute: async () => ({ status: 'failed', message: 'Não consegui aplicar esta ação.', persisted: false }) } as any }); const output: string[] = []; for await (const delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Adicione às notas: revisar arrays' }, new AbortController().signal)) output.push(delta); expect(output).toEqual(['Não consegui aplicar esta ação.']); expect(streamed).toBe(false); expect(repository.messages.at(-1)?.content).toBe('Não consegui aplicar esta ação.') })
+  it('does not run the action planner for a normal question', async () => { const repository = new MemoryConversationRepository(); const manager = new AIProviderManager(); const decide = vi.fn(); manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: decide, streamMessage: async function* () { yield { type: 'completed', response: { content: 'Revise o tópico atual.', providerId: 'stream', modelId: 'model' } } }, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream'); const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, contextHub: { immediate: async () => ({}), read: async () => null } as any }); const output: string[] = []; for await (const delta of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'O que devo revisar?' }, new AbortController().signal)) output.push(delta); expect(decide).not.toHaveBeenCalled(); expect(output.join('')).toBe('') })
+  it('rejects negated authorization and model-invented note content', async () => { const repository = new MemoryConversationRepository(); const manager = new AIProviderManager(); let executions = 0; manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: JSON.stringify({ kind: 'workspace_action', action: { type: 'notes.add', arguments: { content: 'Conteúdo inventado' } } }), providerId: 'stream', modelId: 'model' }), streamMessage: async function* () {}, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream'); const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, contextHub: { immediate: async () => ({}), read: async () => null } as any, workspaceActions: { execute: async () => { executions += 1; return { status: 'succeeded', message: 'feito' } } } as any }); for (const content of ['Não adicione às notas: Conteúdo inventado', 'Adicione às notas: outro conteúdo']) for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content }, new AbortController().signal)) {} expect(executions).toBe(0) })
+  it('rejects vague note payload authorization', async () => { const repository = new MemoryConversationRepository(); const manager = new AIProviderManager(); let executions = 0; manager.register({ id: 'stream', name: 'Stream', testConnection: async () => {}, sendMessage: async () => ({ content: JSON.stringify({ kind: 'workspace_action', action: { type: 'notes.add', arguments: { content: 'isso' } } }), providerId: 'stream', modelId: 'model' }), streamMessage: async function* () {}, getCapabilities: () => ({ streaming: true, usageInformation: false, supportedInput: ['text'] }) }); manager.select('stream'); const service = new WorkspaceCoachService({ repository, providerManager: manager, getWorkspace: async () => workspace, contextHub: { immediate: async () => ({}), read: async () => null } as any, workspaceActions: { execute: async () => { executions += 1; return { status: 'succeeded', message: 'feito' } } } as any }); for await (const _ of service.streamMessage(workspace.id, { requestId: crypto.randomUUID(), workspaceId: workspace.id, content: 'Adicione isso às notas' }, new AbortController().signal)) {} expect(executions).toBe(0) })
 })
 
 function currentContext(shareContextWithAi: boolean) {

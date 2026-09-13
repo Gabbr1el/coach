@@ -9,6 +9,8 @@ export const studyLessons = sqliteTable('study_lessons', {
   moduleId: text('module_id').notNull(),
   topicId: text('topic_id').notNull(),
   generationKind: text('generation_kind', { enum: ['ai_generated', 'provisional_fallback'] }).notNull().default('ai_generated'),
+  contentRevision: integer('content_revision').notNull().default(1),
+  inputHash: text('input_hash').notNull().default('legacy-unavailable'),
   contentJson: text('content_json').notNull(),
   providerId: text('provider_id'),
   modelId: text('model_id'),

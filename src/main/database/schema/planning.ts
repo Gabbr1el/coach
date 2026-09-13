@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { check, index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
+import { check, index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core'
 import { workspaces } from './workspaces'
 
 export const studyDeadlines = sqliteTable('study_deadlines', {
@@ -16,3 +16,4 @@ export const studyDeadlines = sqliteTable('study_deadlines', {
 export const routineNotes = sqliteTable('routine_notes', { id: text('id').primaryKey(), content: text('content').notNull(), createdAt: integer('created_at').notNull() })
 export const academicEvents = sqliteTable('academic_events', { id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull().references(() => workspaces.id, { onDelete: 'cascade' }), type: text('type', { enum: ['exam', 'assignment', 'deadline'] }).notNull(), title: text('title').notNull(), dueAt: integer('due_at').notNull(), createdAt: integer('created_at').notNull(), updatedAt: integer('updated_at').notNull() }, (table) => [index('academic_events_due_idx').on(table.dueAt), index('academic_events_workspace_idx').on(table.workspaceId)])
 export const academicAvailability = sqliteTable('academic_availability', { weekday: integer('weekday').primaryKey(), minutes: integer('minutes').notNull(), updatedAt: integer('updated_at').notNull() }, (table) => [check('academic_availability_weekday_check', sql`${table.weekday} between 0 and 6`), check('academic_availability_minutes_check', sql`${table.minutes} between 0 and 1440`)])
+export const planningSettings = sqliteTable('planning_settings', { id: text('id').primaryKey(), timezone: text('timezone').notNull(), updatedAt: integer('updated_at').notNull() })

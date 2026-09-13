@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import type { WorkspaceService } from '../../application/workspaces/workspace-service'
 import {
   createWorkspaceInputSchema,
+  prepareWorkspaceDraftInputSchema,
   workspaceIdSchema,
 } from '../../shared/contracts/workspace-contract'
 import { WORKSPACE_CHANNELS } from '../../shared/contracts/workspace-channels'
@@ -17,6 +18,10 @@ export function registerWorkspaceHandlers(service: WorkspaceService): void {
     assertTrustedSender(event)
     return service.create(createWorkspaceInputSchema.parse(payload))
   })
+  ipcMain.handle(WORKSPACE_CHANNELS.prepareDraft, (event, payload: unknown) => { assertTrustedSender(event); return service.prepareDraft(prepareWorkspaceDraftInputSchema.parse(payload)) })
+  ipcMain.handle(WORKSPACE_CHANNELS.discardDraft, (event, payload: unknown) => { assertTrustedSender(event); return service.discardDraft(workspaceIdSchema.parse(payload)) })
+  ipcMain.handle(WORKSPACE_CHANNELS.getProvisioning, (event, payload: unknown) => { assertTrustedSender(event); return service.getProvisioning(workspaceIdSchema.parse(payload)) })
+  ipcMain.handle(WORKSPACE_CHANNELS.retryProvisioning, (event, payload: unknown) => { assertTrustedSender(event); return service.retryProvisioning(workspaceIdSchema.parse(payload)) })
 
   ipcMain.handle(WORKSPACE_CHANNELS.open, (event, payload: unknown) => {
     assertTrustedSender(event)

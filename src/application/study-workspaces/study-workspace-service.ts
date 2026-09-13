@@ -11,11 +11,15 @@ export interface StudyWorkspaceServiceDependencies {
   readonly repository: StudyWorkspaceRepository
   readonly getWorkspace: (id: string) => Promise<Workspace | null>
   readonly now?: () => number
+  readonly monotonicNow?: () => number
+  readonly bootId?: string
   readonly createId?: () => string
   readonly eventBus?: WorkspaceEventBus
   readonly getRoadmap?: (workspaceId: string) => Roadmap | null
   readonly getStudyProgress?: (workspaceId: string) => StudyProgressState | null
   readonly getPlanContext?: (workspaceId: string) => { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; learningStates: Map<string, import('../study-progress/topic-learning').TopicLearningState>; startMinutes: number; dayKey: string; lastPlannedDayKey: string | null }
+  readonly getTodayPlan?: (workspaceId: string) => StudyPlanItem[]
+  readonly replanWeek?: () => void
 }
 
 interface WorkspaceCodeProfile { fileName: string; language: string; editorContent: string }
@@ -32,10 +36,14 @@ function createRoadmapPlan(workspaceId: string, roadmap: Roadmap | null, progres
 
 export class StudyWorkspaceService {
   private readonly now: () => number
+  private readonly monotonicNow: () => number
+  private readonly bootId: string
   private readonly createId: () => string
 
   constructor(private readonly dependencies: StudyWorkspaceServiceDependencies) {
     this.now = dependencies.now ?? Date.now
+    this.monotonicNow = dependencies.monotonicNow ?? (() => Math.floor(performance.now()))
+    this.bootId = dependencies.bootId ?? crypto.randomUUID()
     this.createId = dependencies.createId ?? (() => crypto.randomUUID())
   }
 
@@ -43,29 +51,34 @@ export class StudyWorkspaceService {
     const workspace = await this.requireWorkspace(workspaceId)
     const now = this.now()
     const existing = await this.dependencies.repository.findState(workspaceId, now)
-    if (existing) return existing
-    const plan = createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, [], this.createId, this.dependencies.getPlanContext?.(workspaceId))
-    const activePlanItem = plan.find((item) => item.status === 'active') ?? null
-    const timerDurationSeconds = activePlanItem?.durationMinutes ? activePlanItem.durationMinutes * 60 : 60
-    const initialState: StudyWorkspaceState = {
+    if (existing) {
+      if (existing.timerStatus === 'running' && existing.timerBootId !== this.bootId) {
+        const checkpoint = this.checkpointTimer(existing, now)
+        const running = checkpoint.timerRemainingSeconds > 0
+        await this.dependencies.repository.updateTimer(workspaceId, existing.sessionId, { timerStatus: running ? 'running' : 'idle', timerRemainingSeconds: checkpoint.timerRemainingSeconds, timerStartedAt: running ? now : null, timerStartedMonotonicMs: running ? this.monotonicNow() : null, timerBootId: running ? this.bootId : null, accumulatedFocusSeconds: checkpoint.accumulatedFocusSeconds }, now)
+        const reconciled = (await this.dependencies.repository.findState(workspaceId, now))!
+        return this.dependencies.getTodayPlan ? { ...reconciled, plan: this.dependencies.getTodayPlan(workspaceId) } : reconciled
+      }
+      return this.dependencies.getTodayPlan ? { ...existing, plan: this.dependencies.getTodayPlan(workspaceId) } : existing
+    }
+    const initialState: Omit<StudyWorkspaceState, 'plan' | 'timerDurationSeconds' | 'timerRemainingSeconds'> = {
       workspaceId,
       sessionId: this.createId(),
       sessionStartedAt: now,
       ...workspaceCodeProfile(workspace),
       notes: '',
       shareContextWithAi: false,
-      timerDurationSeconds,
-      timerRemainingSeconds: timerDurationSeconds,
       timerStatus: 'idle',
       timerStartedAt: null,
-      plan,
+      timerStartedMonotonicMs: null,
+      timerBootId: null,
       updatedAt: now,
       documentRevision: 0,
       notesRevision: 0,
       accumulatedFocusSeconds: 0,
     }
     try {
-      const created = await this.dependencies.repository.createState(initialState)
+      const created = await this.dependencies.repository.createStateFromAuthoritative(initialState, () => this.dependencies.getTodayPlan?.(workspaceId) ?? createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, [], this.createId, this.dependencies.getPlanContext?.(workspaceId)))
       this.publish(created, 'session.started', { source: 'workspace-initialization' })
       return created
     } catch (error) {
@@ -98,39 +111,46 @@ export class StudyWorkspaceService {
   }
 
   async togglePlanItem(workspaceId: string, itemId: string): Promise<StudyWorkspaceState> {
+    return this.completePlanItem(workspaceId, itemId)
+  }
+
+  async completePlanItem(workspaceId: string, itemId: string): Promise<StudyWorkspaceState> {
+    return this.setPlanItemCompletion(workspaceId, itemId, true)
+  }
+
+  async setPlanItemCompletion(workspaceId: string, itemId: string, completed: boolean): Promise<StudyWorkspaceState> {
     const state = await this.getState(workspaceId)
     const item = state.plan.find((candidate) => candidate.id === itemId)
     if (!item) throw new Error('Study plan item not found')
-    const nextStatuses = state.plan.map((candidate) => ({
+    if ((item.status === 'completed') === completed) return state
+    const now = this.now()
+    const checkpoint = this.checkpointTimer(state, now)
+    const nextStatuses: Array<{ id: string; status: StudyPlanItem['status'] }> = state.plan.map((candidate) => ({
       id: candidate.id,
       status: candidate.id === itemId
-        ? (candidate.status === 'completed' ? 'active' : 'completed') as StudyPlanItem['status']
+        ? (completed ? 'completed' as const : 'pending' as const)
         : candidate.status === 'active' ? 'pending' as const : candidate.status,
     }))
-    let nextActive: StudyPlanItem | null = null
-    if (item.status !== 'completed') {
-      nextActive = state.plan.find((candidate) => candidate.position > item.position && candidate.status !== 'completed' && candidate.id !== itemId)
-        ?? state.plan.find((candidate) => candidate.status !== 'completed' && candidate.id !== itemId)
-        ?? null
-      if (nextActive) {
-        const status = nextStatuses.find((candidate) => candidate.id === nextActive!.id)
-        if (status) status.status = 'active'
-      }
-    } else nextActive = item
-    await this.dependencies.repository.replacePlanStatuses(workspaceId, state.sessionId, nextStatuses, this.now())
-    await this.dependencies.repository.setTimerDuration(workspaceId, state.sessionId, nextActive ? nextActive.durationMinutes * 60 : 60, this.now())
+    const available = state.plan.filter((candidate) => candidate.id !== itemId && candidate.status !== 'completed')
+    const nextActive = !completed ? item : available.find((candidate) => candidate.position > item.position) ?? available[0] ?? null
+    if (nextActive) {
+      const status = nextStatuses.find((candidate) => candidate.id === nextActive.id)
+      if (status) status.status = 'active'
+    }
+    const duration = nextActive ? nextActive.durationMinutes * 60 : 60
+    await this.dependencies.repository.setPlanItemCompletion(workspaceId, state.sessionId, itemId, completed, nextStatuses, { timerDurationSeconds: duration, timerStatus: 'idle', timerRemainingSeconds: duration, timerStartedAt: null, timerStartedMonotonicMs: null, timerBootId: null, accumulatedFocusSeconds: checkpoint.accumulatedFocusSeconds }, now)
     const next = await this.getState(workspaceId)
-    this.publish(next, 'plan.changed', { itemId, status: next.plan.find((candidate) => candidate.id === itemId)?.status })
+    this.publish(next, 'plan.changed', { itemId, status: completed ? 'completed' : 'pending', explicit: true })
     return next
   }
 
   async recalculatePlan(workspaceId: string): Promise<StudyWorkspaceState> {
     const state = await this.getState(workspaceId)
-    const plan = createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, state.plan, this.createId, this.dependencies.getPlanContext?.(workspaceId))
     const context = this.dependencies.getPlanContext?.(workspaceId)
-    await this.dependencies.repository.replacePlan(workspaceId, state.sessionId, plan, this.now(), context?.dayKey)
-    const active = plan.find((item) => item.status === 'active') ?? null
-    await this.dependencies.repository.setTimerDuration(workspaceId, state.sessionId, active ? active.durationMinutes * 60 : 60, this.now())
+    await this.dependencies.repository.recalculatePlanAtomically(workspaceId, state.sessionId, () => {
+      this.dependencies.replanWeek?.()
+      return this.dependencies.getTodayPlan?.(workspaceId) ?? createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, state.plan, this.createId, context)
+    }, this.now(), context?.dayKey)
     return this.getState(workspaceId)
   }
   async refreshLivePlan(workspaceId: string): Promise<StudyWorkspaceState> { const context = this.dependencies.getPlanContext?.(workspaceId); if (!context || context.lastPlannedDayKey === context.dayKey) return this.getState(workspaceId); return this.recalculatePlan(workspaceId) }
@@ -139,26 +159,34 @@ export class StudyWorkspaceService {
     const state = await this.getState(workspaceId)
     const item = state.plan.find((candidate) => candidate.id === itemId)
     if (!item) throw new Error('Study plan item not found')
+    if (item.status === 'completed') return state
+    const now = this.now()
+    const checkpoint = this.checkpointTimer(state, now)
     const statuses = state.plan.map((candidate) => ({ id: candidate.id, status: candidate.id === itemId ? 'active' as const : candidate.status === 'active' ? 'pending' as const : candidate.status }))
-    await this.dependencies.repository.replacePlanStatuses(workspaceId, state.sessionId, statuses, this.now())
-    await this.dependencies.repository.setTimerDuration(workspaceId, state.sessionId, item.durationMinutes * 60, this.now())
+    await this.dependencies.repository.replacePlanStatuses(workspaceId, state.sessionId, statuses, now)
+    await this.dependencies.repository.setTimerDuration(workspaceId, state.sessionId, item.durationMinutes * 60, now)
+    await this.dependencies.repository.updateTimer(workspaceId, state.sessionId, { timerStatus: 'idle', timerRemainingSeconds: item.durationMinutes * 60, timerStartedAt: null, timerStartedMonotonicMs: null, timerBootId: null, accumulatedFocusSeconds: checkpoint.accumulatedFocusSeconds }, now)
     return this.getState(workspaceId)
   }
 
-  async updateTimer(workspaceId: string, action: 'start' | 'pause' | 'reset'): Promise<StudyWorkspaceState> {
+  async updateTimer(workspaceId: string, action: 'start' | 'pause' | 'reset' | 'extend'): Promise<StudyWorkspaceState> {
     const state = await this.getState(workspaceId)
     const now = this.now()
-    const remaining = this.effectiveRemaining(state, now)
+    const checkpoint = this.checkpointTimer(state, now)
+    const remaining = checkpoint.timerRemainingSeconds
     const hasActivePlanItem = state.plan.some((item) => item.status === 'active')
     const timer = action === 'start' && !hasActivePlanItem
-      ? { timerStatus: 'idle' as const, timerRemainingSeconds: state.timerRemainingSeconds, timerStartedAt: null, accumulatedFocusSeconds: state.accumulatedFocusSeconds }
+      ? { timerStatus: 'idle' as const, timerRemainingSeconds: remaining, timerStartedAt: null, timerStartedMonotonicMs: null, timerBootId: null, accumulatedFocusSeconds: checkpoint.accumulatedFocusSeconds }
+      : action === 'extend'
+        ? { timerStatus: 'running' as const, timerRemainingSeconds: Math.min(10800, remaining + 600), timerStartedAt: now, timerStartedMonotonicMs: this.monotonicNow(), timerBootId: this.bootId, accumulatedFocusSeconds: checkpoint.accumulatedFocusSeconds }
       : action === 'reset'
-      ? { timerStatus: 'idle' as const, timerRemainingSeconds: state.timerDurationSeconds, timerStartedAt: null, accumulatedFocusSeconds: state.accumulatedFocusSeconds + (state.timerDurationSeconds - remaining) }
+      ? { timerStatus: 'running' as const, timerRemainingSeconds: state.timerDurationSeconds, timerStartedAt: now, timerStartedMonotonicMs: this.monotonicNow(), timerBootId: this.bootId, accumulatedFocusSeconds: checkpoint.accumulatedFocusSeconds }
       : action === 'pause'
-        ? { timerStatus: 'paused' as const, timerRemainingSeconds: remaining, timerStartedAt: null, accumulatedFocusSeconds: state.accumulatedFocusSeconds }
+        ? { timerStatus: 'paused' as const, timerRemainingSeconds: remaining, timerStartedAt: null, timerStartedMonotonicMs: null, timerBootId: null, accumulatedFocusSeconds: checkpoint.accumulatedFocusSeconds }
         : remaining === 0
-          ? { timerStatus: 'idle' as const, timerRemainingSeconds: 0, timerStartedAt: null, accumulatedFocusSeconds: state.accumulatedFocusSeconds }
-          : { timerStatus: 'running' as const, timerRemainingSeconds: remaining, timerStartedAt: now, accumulatedFocusSeconds: state.accumulatedFocusSeconds }
+          ? { timerStatus: 'idle' as const, timerRemainingSeconds: 0, timerStartedAt: null, timerStartedMonotonicMs: null, timerBootId: null, accumulatedFocusSeconds: checkpoint.accumulatedFocusSeconds }
+          : { timerStatus: 'running' as const, timerRemainingSeconds: remaining, timerStartedAt: now, timerStartedMonotonicMs: this.monotonicNow(), timerBootId: this.bootId, accumulatedFocusSeconds: checkpoint.accumulatedFocusSeconds }
+    if (action === 'extend') await this.dependencies.repository.setTimerDuration(workspaceId, state.sessionId, Math.min(10800, state.timerDurationSeconds + 600), now)
     await this.dependencies.repository.updateTimer(workspaceId, state.sessionId, timer, now)
     const next = await this.getState(workspaceId)
     this.publish(next, 'timer.changed', { action, status: next.timerStatus, remainingSeconds: next.timerRemainingSeconds })
@@ -168,7 +196,10 @@ export class StudyWorkspaceService {
   async setTimerDuration(workspaceId: string, durationSeconds: number): Promise<StudyWorkspaceState> {
     const state = await this.getState(workspaceId)
     if (!state.plan.some((item) => item.status === 'active')) return state
-    await this.dependencies.repository.setTimerDuration(workspaceId, state.sessionId, durationSeconds, this.now())
+    const now = this.now()
+    const checkpoint = this.checkpointTimer(state, now)
+    await this.dependencies.repository.setTimerDuration(workspaceId, state.sessionId, durationSeconds, now)
+    await this.dependencies.repository.updateTimer(workspaceId, state.sessionId, { timerStatus: 'idle', timerRemainingSeconds: durationSeconds, timerStartedAt: null, timerStartedMonotonicMs: null, timerBootId: null, accumulatedFocusSeconds: checkpoint.accumulatedFocusSeconds }, now)
     const next = await this.getState(workspaceId)
     this.publish(next, 'timer.changed', { action: 'duration', durationSeconds })
     return next
@@ -178,7 +209,7 @@ export class StudyWorkspaceService {
     const state = await this.getState(workspaceId)
     const workspace = await this.requireWorkspace(workspaceId)
     const now = this.now()
-    const focusSeconds = state.accumulatedFocusSeconds + state.timerDurationSeconds - this.effectiveRemaining(state, now)
+    const focusSeconds = this.checkpointTimer(state, now).accumulatedFocusSeconds
     this.dependencies.repository.completeAndCreateSession(workspaceId, state.sessionId, this.createId(), createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, state.plan, this.createId, this.dependencies.getPlanContext?.(workspaceId)), focusSeconds, state.timerDurationSeconds, now)
     const next = await this.getState(workspaceId)
     this.dependencies.eventBus?.publish(createWorkspaceEvent(workspaceId, state.sessionId, 'session.completed', { focusSeconds }, now))
@@ -197,7 +228,18 @@ export class StudyWorkspaceService {
 
   private effectiveRemaining(state: StudyWorkspaceState, now: number): number {
     if (state.timerStatus !== 'running' || !state.timerStartedAt) return state.timerRemainingSeconds
-    return Math.max(0, state.timerRemainingSeconds - Math.floor((now - state.timerStartedAt) / 1000))
+    const monotonicElapsed = state.timerBootId === this.bootId && state.timerStartedMonotonicMs !== null && state.timerStartedMonotonicMs !== undefined
+      ? this.monotonicNow() - state.timerStartedMonotonicMs
+      : null
+    const wallElapsed = now - state.timerStartedAt
+    const elapsedMs = monotonicElapsed !== null && monotonicElapsed >= 0 ? monotonicElapsed : Math.min(Math.max(0, wallElapsed), state.timerRemainingSeconds * 1000)
+    return Math.max(0, state.timerRemainingSeconds - Math.floor(elapsedMs / 1000))
+  }
+
+  private checkpointTimer(state: StudyWorkspaceState, now: number): { timerRemainingSeconds: number; accumulatedFocusSeconds: number } {
+    const timerRemainingSeconds = this.effectiveRemaining(state, now)
+    const elapsed = state.timerStatus === 'running' ? state.timerRemainingSeconds - timerRemainingSeconds : 0
+    return { timerRemainingSeconds, accumulatedFocusSeconds: state.accumulatedFocusSeconds + elapsed }
   }
 
   private async requireWorkspace(workspaceId: string): Promise<Workspace> {

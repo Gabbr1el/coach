@@ -33,13 +33,17 @@ export class WorkspaceProvisioningService {
     return this.dependencies.repository.save({ workspaceId, status: 'draft', stage: 'workspace', materialIds: [], readinessState: 'PROVISIONING', backgroundPending: 0, legacyState: null, attemptCount: 0, createdAt: now, startedAt: null, stageUpdatedAt: now, completedAt: null, retryAfter: null, errorCode: null, errorMessage: null })
   }
   get(workspaceId: string): WorkspaceProvisioningState | null { return this.dependencies.repository.find(workspaceId) }
-  discardDraft(workspaceId: string): void { if (!this.dependencies.repository.removeDraft(workspaceId)) throw new Error('Workspace draft not found') }
+  discardDraft(workspaceId: string): void { this.dependencies.repository.removeDraft(workspaceId) }
   start(workspaceId: string): WorkspaceProvisioningState {
     const current = this.require(workspaceId)
     if (current.status === 'ready') return current
     const now = this.now(); const materialIds = this.dependencies.listReadyMaterialIds(workspaceId)
     const queued = this.dependencies.repository.save({ ...current, status: 'queued', stage: materialIds.length ? 'materials' : 'workspace', materialIds, startedAt: current.startedAt ?? now, stageUpdatedAt: now, retryAfter: null, errorCode: null, errorMessage: null })
-    if (this.dependencies.initializeContent) { this.dependencies.initializeContent(workspaceId); return this.require(workspaceId) }
+    if (this.dependencies.initializeContent) {
+      try { this.dependencies.initializeContent(workspaceId) }
+      catch { return this.dependencies.repository.save({ ...queued, status: 'failed_retryable', retryAfter: now + RETRY_DELAY, errorCode: 'PROVISIONING_FAILED', errorMessage: 'A preparação será retomada automaticamente.', stageUpdatedAt: now }) }
+      return this.require(workspaceId)
+    }
     void this.resume(workspaceId)
     return queued
   }

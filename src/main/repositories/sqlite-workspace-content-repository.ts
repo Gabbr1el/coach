@@ -197,7 +197,7 @@ export class SqliteWorkspaceContentRepository implements WorkspaceContentReposit
   }
 
   private promoteEligible(workspaceId: string, revision: number, now: number): void {
-    this.database.sqlite.prepare(`UPDATE content_jobs AS j SET status='queued',updated_at=? WHERE workspace_id=? AND revision=? AND status='pending' AND NOT EXISTS (SELECT 1 FROM content_job_dependencies edge LEFT JOIN content_jobs dependency ON dependency.idempotency_key=edge.dependency_key AND dependency.workspace_id=j.workspace_id AND dependency.revision=j.revision AND dependency.status='ready' WHERE edge.job_id=j.id AND dependency.id IS NULL)`).run(now, workspaceId, revision)
+    this.database.sqlite.prepare(`UPDATE content_jobs AS j SET status='queued',updated_at=? WHERE j.workspace_id=? AND j.revision=? AND j.status='pending' AND NOT EXISTS (SELECT 1 FROM content_job_dependencies edge LEFT JOIN content_jobs dependency ON dependency.idempotency_key=edge.dependency_key AND dependency.workspace_id=j.workspace_id AND dependency.revision=j.revision AND dependency.status='ready' WHERE edge.job_id=j.id AND dependency.id IS NULL)`).run(now, workspaceId, revision)
   }
 
   private reconcileWithinTransaction(now: number): { requeued: number; obsoleted: number } {

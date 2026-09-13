@@ -9,7 +9,7 @@ export interface WorkspaceServiceDependencies {
   readonly createId?: () => string
   readonly ensureLearningPath?: (workspaceId: string) => Promise<unknown>
   readonly academicContext?: AcademicSubjectContextService
-  readonly createWithAcademicContexts?: (workspace: { id: string; name: string; objective: string; createdAt: number; updatedAt: number }, academic: { declaredLevel: CreateWorkspaceInput['declaredLevel']; declaredKnowledge: readonly string[]; declaredDifficulties: readonly string[]; goals: readonly string[] }, related: NonNullable<CreateWorkspaceInput['relatedSubjects']>) => Workspace
+  readonly createAcademicContexts?: (workspaceId: string, workspaceName: string, related: NonNullable<CreateWorkspaceInput['relatedSubjects']>) => void | (() => void)
   readonly saveLearningOverrides?: (workspaceId: string, subject: string, input: Pick<CreateWorkspaceInput, 'analysisRevision' | 'declaredLevel' | 'declaredKnowledge' | 'declaredDifficulties' | 'goals' | 'localKnowledgeProjection' | 'canonicalFocus' | 'canonicalContext'>, now: number) => void
   readonly provisioning?: { createDraft(workspaceId: string): WorkspaceProvisioningState; start(workspaceId: string): WorkspaceProvisioningState; get(workspaceId: string): WorkspaceProvisioningState | null; retry(workspaceId: string): WorkspaceProvisioningState; discardDraft(workspaceId: string): void }
   readonly findSemanticDuplicate?: (canonicalKey: string, excludedId?: string) => Workspace | null
@@ -23,20 +23,20 @@ export class WorkspaceService {
   private readonly createId: () => string
   private ensureLearningPath: ((workspaceId: string) => Promise<unknown>) | null
   private readonly academicContext: AcademicSubjectContextService | null
-  private readonly createWithAcademicContexts?: WorkspaceServiceDependencies['createWithAcademicContexts']
+  private readonly createAcademicContexts?: WorkspaceServiceDependencies['createAcademicContexts']
   private readonly saveLearningOverrides?: WorkspaceServiceDependencies['saveLearningOverrides']
   private readonly provisioning?: WorkspaceServiceDependencies['provisioning']
   private readonly findSemanticDuplicate?: WorkspaceServiceDependencies['findSemanticDuplicate']
   private readonly validateAnalysis?: WorkspaceServiceDependencies['validateAnalysis']
   private discoverOrphanEvents?: WorkspaceServiceDependencies['discoverOrphanEvents']
 
-  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), ensureLearningPath, academicContext, createWithAcademicContexts, saveLearningOverrides, provisioning, findSemanticDuplicate, validateAnalysis, discoverOrphanEvents }: WorkspaceServiceDependencies) {
+  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), ensureLearningPath, academicContext, createAcademicContexts, saveLearningOverrides, provisioning, findSemanticDuplicate, validateAnalysis, discoverOrphanEvents }: WorkspaceServiceDependencies) {
     this.repository = repository
     this.now = now
     this.createId = createId
     this.ensureLearningPath = ensureLearningPath ?? null
     this.academicContext = academicContext ?? null
-    this.createWithAcademicContexts = createWithAcademicContexts
+    this.createAcademicContexts = createAcademicContexts
     this.saveLearningOverrides = saveLearningOverrides
     this.provisioning = provisioning
     this.findSemanticDuplicate = findSemanticDuplicate
@@ -59,7 +59,12 @@ export class WorkspaceService {
       if (!workspace || this.provisioning?.get(input.draftId)?.status !== 'draft') throw new Error('Workspace draft not found')
       if (workspace.name !== input.name.trim() || workspace.objective !== input.objective.trim()) throw new Error('Workspace draft changed after materials were attached; discard it and analyze again')
       this.saveLearningOverrides?.(workspace.id, normalizeSubject(input.name).subject, { ...input, goals: [...(input.goals ?? []), input.objective].filter(Boolean) }, this.now())
-      this.provisioning.start(workspace.id)
+      const rollbackContexts = this.createAcademicContexts?.(workspace.id, workspace.name, input.relatedSubjects ?? [])
+      try { this.provisioning.start(workspace.id) }
+      catch (error) {
+        const state = this.provisioning.get(workspace.id)
+        if (!state || state.status === 'draft') { rollbackContexts?.(); throw error }
+      }
       try { await this.discoverOrphanEvents?.(workspace) } catch {}
       return workspace
     }
@@ -84,11 +89,23 @@ export class WorkspaceService {
       updatedAt: now,
     }
     const academic = { declaredLevel: input.declaredLevel, declaredKnowledge: input.declaredKnowledge ?? [], declaredDifficulties: input.declaredDifficulties ?? [], goals: [...(input.goals ?? []), input.objective].filter(Boolean), localKnowledgeProjection: input.localKnowledgeProjection }
-    const workspace = this.createWithAcademicContexts ? this.createWithAcademicContexts(record, academic, input.relatedSubjects ?? []) : await this.repository.create(record)
-    this.saveLearningOverrides?.(workspace.id, normalized.subject, academic, now)
-    if (!this.createWithAcademicContexts && !this.saveLearningOverrides) this.academicContext?.record({ subject: normalized.subject, declaredLevel: academic.declaredLevel ?? null, declaredKnowledge: academic.declaredKnowledge, declaredDifficulties: academic.declaredDifficulties, goals: academic.goals, sourceEvidence: [] })
-    if (this.provisioning) { this.provisioning.createDraft(workspace.id); if (!draft) this.provisioning.start(workspace.id) }
-    else void this.ensureLearningPath?.(workspace.id).catch(() => {})
+    const workspace = await this.repository.create(record)
+    let rollbackContexts: void | (() => void) = undefined
+    try {
+      if (this.provisioning) this.provisioning.createDraft(workspace.id)
+      this.saveLearningOverrides?.(workspace.id, normalized.subject, academic, now)
+      if (!this.saveLearningOverrides && !draft) this.academicContext?.record({ subject: normalized.subject, declaredLevel: academic.declaredLevel ?? null, declaredKnowledge: academic.declaredKnowledge, declaredDifficulties: academic.declaredDifficulties, goals: academic.goals, sourceEvidence: [] })
+      if (this.provisioning && !draft) {
+        rollbackContexts = this.createAcademicContexts?.(workspace.id, workspace.name, input.relatedSubjects ?? [])
+        try { this.provisioning.start(workspace.id) }
+        catch (error) { const state = this.provisioning.get(workspace.id); if (!state || state.status === 'draft') throw error }
+      } else if (!this.provisioning) { this.createAcademicContexts?.(workspace.id, workspace.name, input.relatedSubjects ?? []); void this.ensureLearningPath?.(workspace.id).catch(() => {}) }
+    } catch (error) {
+      const state = this.provisioning?.get(workspace.id)
+      if (state?.status === 'draft') { rollbackContexts?.(); this.provisioning?.discardDraft(workspace.id) }
+      else if (!state) { rollbackContexts?.(); await this.repository.removeJustCreated(workspace.id, workspace.createdAt) }
+      throw error
+    }
     if (!draft) { try { await this.discoverOrphanEvents?.(workspace) } catch {} }
     return workspace
   }

@@ -11,6 +11,7 @@ export interface CreateWorkspaceRecord {
 export interface WorkspaceRepository {
   listActive(): Promise<WorkspaceSummary[]>
   create(input: CreateWorkspaceRecord): Promise<Workspace>
+  removeJustCreated(id: string, createdAt: number): Promise<boolean>
   findById(id: string): Promise<Workspace | null>
   markOpened(id: string, openedAt: number): Promise<Workspace | null>
   archive(id: string, archivedAt: number): Promise<boolean>

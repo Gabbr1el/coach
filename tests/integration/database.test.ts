@@ -691,6 +691,29 @@ describe('Coach database migrations', () => {
     expect(repository.getLearningPathState(workspace.id)).toBeNull()
     database.close()
   })
+  it('publishes one concept across topics and preserves its memory through rebuild', async () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    const workspace = await new DrizzleWorkspaceRepository(database).create({ id: crypto.randomUUID(), name: 'Compiladores', objective: 'Construir compiladores', createdAt: 1, updatedAt: 1 })
+    const repository = new DrizzleRoadmapRepository(database)
+    const scanner = { key: 'scanner', name: 'Scanner', aliases: ['Analisador léxico', 'Lexer'], domain: 'compilers' }
+    const moduleId = crypto.randomUUID()
+    const topic = (name: string, intentKey: string) => ({ topic: name, concepts: [{ ...scanner, aliases: [...scanner.aliases].reverse() }], assessmentIntents: [{ key: intentKey, conceptKey: 'scanner', objective: `Avaliar ${name}`, evidenceType: 'multiple_choice' as const, difficulty: 'standard' as const, prerequisiteConceptKeys: [] }] })
+    const first = { id: crypto.randomUUID(), workspaceId: workspace.id, title: 'Compiladores', status: 'accepted' as const, generationKind: 'ai_generated' as const, version: 1, providerId: null, modelId: null, modules: [{ id: moduleId, title: 'Front-end', objective: 'Analisar código', estimatedMinutes: 90, position: 1, status: 'active' as const, topics: ['Léxico', 'Tokens'], curricularTopics: [topic('Léxico', 'scan-source'), topic('Tokens', 'scan-tokens')], outcomes: ['Analisar'], practice: 'Criar scanner', completionCriteria: ['Reconhecer tokens'], resources: [] }], createdAt: 2, updatedAt: 2 }
+    repository.activate(first)
+    const concept = database.sqlite.prepare("SELECT id FROM concepts WHERE workspace_id=? AND stable_key='scanner'").get(workspace.id) as { id: string }
+    expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM concepts WHERE workspace_id=? AND stable_key='scanner'").get(workspace.id)).toEqual({ count: 1 })
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM topic_concepts WHERE workspace_id=? AND roadmap_id=? AND concept_id=?').get(workspace.id, first.id, concept.id)).toEqual({ count: 2 })
+    database.sqlite.prepare("INSERT INTO concept_memories (workspace_id,concept_id,performance,evidence_quantity,independence,diversity,recency,retention,confidence,updated_at) VALUES (?,?,'developing','some','supported','single_context','recent','developing','medium',?)").run(workspace.id, concept.id, 3)
+    const preview = { id: crypto.randomUUID(), workspaceId: workspace.id, currentRoadmapId: first.id, title: 'Compiladores revisto', modules: [{ ...first.modules[0]!, title: 'Front-end revisto' }], materialIds: [crypto.randomUUID()], impact: { preservedModuleIds: [moduleId], preservedTopicIds: [`${moduleId}:Léxico`, `${moduleId}:Tokens`], addedTopics: [], removedTopics: [], unsafeProgressTopicIds: [], requiresAcknowledgement: false }, status: 'pending' as const, appliedRoadmapId: null, createdAt: 4, resolvedAt: null }
+    repository.saveRebuildPreview(preview)
+    repository.applyRebuildPreview(preview, 5, 'rebuild')
+    expect(database.sqlite.prepare('SELECT concept_id AS conceptId,performance FROM concept_memories WHERE workspace_id=?').get(workspace.id)).toEqual({ conceptId: concept.id, performance: 'developing' })
+
+    const conflicting = { ...first, id: crypto.randomUUID(), version: 3, modules: [{ ...first.modules[0]!, id: crypto.randomUUID(), curricularTopics: [topic('Léxico', 'scan-source-v3'), { ...topic('Tokens', 'scan-tokens-v3'), concepts: [{ ...scanner, name: 'Tokenizer' }] }] }], updatedAt: 6 }
+    expect(() => repository.activate(conflicting)).toThrow('conflicting definitions')
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM roadmaps WHERE id=?').get(conflicting.id)).toEqual({ count: 0 })
+    database.close()
+  })
   it('keeps a schema-compatible legacy lesson available', async () => {
     const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
     const workspace = await new DrizzleWorkspaceRepository(database).create({ id: crypto.randomUUID(), name: 'Python', objective: 'Aprender Python', createdAt: 1, updatedAt: 1 })

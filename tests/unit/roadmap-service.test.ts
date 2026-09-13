@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { AIProviderManager } from '../../src/application/ai/ai-provider-manager'
 import { RoadmapService, hasGenericModules, hasSetupAsPrimaryCurriculum, type RoadmapRepository } from '../../src/application/roadmaps/roadmap-service'
-import type { LearningPathState, Roadmap } from '../../src/shared/contracts/roadmap-contract'
+import { validateCurriculum, type LearningPathState, type Roadmap } from '../../src/shared/contracts/roadmap-contract'
 
 class MemoryRoadmaps implements RoadmapRepository {
   roadmap: Roadmap | null = null; state: LearningPathState | null = null; activations = 0
@@ -35,6 +35,18 @@ const context = () => ({ difficulties: [], deadline: null, availability: [], kno
 const sources: any = { sourcesFor: async () => [{ id: 'cppreference-c', title: 'C reference', url: 'https://en.cppreference.com/w/c', type: 'reference', authority: 'cppreference', retrieved: true, retrievedAt: 1, excerpt: 'C language syntax and semantics.' }] }
 
 describe('RoadmapService learning path lifecycle', () => {
+  it('validates assessment prerequisites against the module and topic total order', () => {
+    const concept = (key: string) => ({ key, name: key, aliases: [], domain: 'compiler' })
+    const intent = (key: string, conceptKey: string, prerequisiteConceptKeys: string[]) => ({ key, conceptKey, objective: key, evidenceType: 'multiple_choice' as const, difficulty: 'standard' as const, prerequisiteConceptKeys })
+    const modules = (scannerPrerequisites: string[]) => [
+      { position: 2, curricularTopics: [{ topic: 'Parsing', concepts: [concept('parser')], assessmentIntents: [intent('parse', 'parser', ['scanner'])] }] },
+      { position: 1, curricularTopics: [{ topic: 'Scanning', concepts: [concept('scanner'), concept('token')], assessmentIntents: [intent('scan', 'scanner', scannerPrerequisites)] }, { topic: 'Tokens', concepts: [concept('stream')], assessmentIntents: [intent('tokenize', 'stream', ['scanner'])] }] },
+    ]
+
+    expect(() => validateCurriculum(modules(['token']))).not.toThrow()
+    expect(() => validateCurriculum(modules(['parser']))).toThrow('first introduced after')
+  })
+
   it('labels declared context separately from observed evidence', async () => { const repository = new MemoryRoadmaps(); let request = ''; const manager = providerManager(async (input) => { request = JSON.stringify(input); return { content: generated, providerId: 'p', modelId: 'm' } }); await new RoadmapService(repository, manager, async () => workspace, () => ({ difficulties: ['ponteiros'], deadline: null, availability: [], knownContext: ['Nível declarado: advanced', 'Uso bibliotecas'] }), sources, () => 10).ensureLearningPath(workspace.id); expect(request).toContain('declaredContext'); expect(request).toContain('observedLearning'); expect(request).toContain('auto-relato'); expect(request).not.toContain('"knownContext"') })
   it('waits for provider without creating a generic roadmap', async () => { const repository = new MemoryRoadmaps(); const result = await new RoadmapService(repository, new AIProviderManager(), async () => workspace, context, sources, () => 10).ensureLearningPath(workspace.id); expect(result.status).toBe('waiting_for_provider'); expect(repository.roadmap).toBeNull() })
   it('reads a missing roadmap without starting generation', async () => { const repository = new MemoryRoadmaps(); let calls = 0; const manager = providerManager(async () => { calls += 1; return { content: generated, providerId: 'test', modelId: 'test' } }); const service = new RoadmapService(repository, manager, async () => workspace, context, sources, () => 10); await expect(service.get(workspace.id)).resolves.toBeNull(); expect(calls).toBe(0); expect(repository.state).toBeNull() })

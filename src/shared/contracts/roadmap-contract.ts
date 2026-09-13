@@ -31,6 +31,36 @@ export const getRoadmapRebuildPreviewInputSchema = z.object({ workspaceId: works
 
 export const roadmapModuleSchema = roadmapModuleProposalSchema.extend({ id: z.string().min(1).max(200), position: z.number().int().positive(), status: z.enum(['locked', 'available', 'active', 'completed']) }).strict()
 export const roadmapSchema = z.object({ id: z.string().min(1).max(200), workspaceId: workspaceIdSchema, title: z.string().trim().min(1).max(160), status: z.enum(['proposed', 'accepted', 'archived']), generationKind: z.enum(['ai_generated', 'provisional_fallback']), version: z.number().int().positive(), providerId: z.string().nullable(), modelId: z.string().nullable(), modules: z.array(roadmapModuleSchema).min(1).max(16), createdAt: z.number().int().nonnegative(), updatedAt: z.number().int().nonnegative() }).strict()
+
+type CurriculumModule = { readonly position?: number; readonly curricularTopics?: ReadonlyArray<z.infer<typeof curricularTopicSchema>> }
+const normalizeDefinitionText = (value: string) => value.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9+#]+/g, ' ').trim()
+
+export function validateCurriculum(modules: readonly CurriculumModule[]): void {
+  const definitions = new Map<string, string>()
+  const introductions = new Map<string, number>()
+  const intents = new Set<string>()
+  const topics = modules
+    .map((module, index) => ({ module, index }))
+    .sort((left, right) => (left.module.position ?? left.index) - (right.module.position ?? right.index) || left.index - right.index)
+    .flatMap(({ module }) => module.curricularTopics ?? [])
+  for (const [topicIndex, topic] of topics.entries()) for (const concept of topic.concepts) {
+    const definition = JSON.stringify({ key: concept.key, name: normalizeDefinitionText(concept.name), domain: normalizeDefinitionText(concept.domain), aliases: [...new Set(concept.aliases.map(normalizeDefinitionText))].sort() })
+    const existing = definitions.get(concept.key)
+    if (existing !== undefined && existing !== definition) throw new Error(`Curriculum concept ${concept.key} has conflicting definitions`)
+    definitions.set(concept.key, definition)
+    if (!introductions.has(concept.key)) introductions.set(concept.key, topicIndex)
+  }
+  for (const [topicIndex, topic] of topics.entries()) for (const intent of topic.assessmentIntents) {
+    if (intents.has(intent.key)) throw new Error(`Curriculum assessment intent ${intent.key} is declared more than once`)
+    intents.add(intent.key)
+    if (!topic.concepts.some((concept) => concept.key === intent.conceptKey)) throw new Error(`Assessment intent ${intent.key} must reference a concept declared in its topic`)
+    for (const prerequisite of intent.prerequisiteConceptKeys) {
+      const introducedAt = introductions.get(prerequisite)
+      if (introducedAt === undefined) throw new Error(`Assessment prerequisite ${prerequisite} is not declared by the roadmap`)
+      if (introducedAt > topicIndex) throw new Error(`Assessment prerequisite ${prerequisite} is first introduced after intent ${intent.key}`)
+    }
+  }
+}
 export const roadmapRebuildImpactSchema = z.object({ preservedModuleIds: z.array(z.string()), preservedTopicIds: z.array(z.string()), addedTopics: z.array(z.string()), removedTopics: z.array(z.string()), unsafeProgressTopicIds: z.array(z.string()), requiresAcknowledgement: z.boolean() }).strict()
 export const roadmapRebuildPreviewSchema = z.object({ id: z.string().min(1).max(200), workspaceId: workspaceIdSchema, currentRoadmapId: z.string().min(1).max(200), title: z.string().trim().min(1).max(160), modules: z.array(roadmapModuleSchema).min(1).max(16), materialIds: z.array(z.uuid()).min(1).max(20), impact: roadmapRebuildImpactSchema, status: z.enum(['pending', 'applied', 'stale']), appliedRoadmapId: z.string().nullable(), createdAt: z.number().int().nonnegative(), resolvedAt: z.number().int().nonnegative().nullable() }).strict()
 

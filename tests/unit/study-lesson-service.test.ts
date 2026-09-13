@@ -70,6 +70,12 @@ describe('StudyLessonService', () => {
     expect(studyLessonBlockSchema.parse(legacy)).toMatchObject({ requiredForTopicCompletion: false })
   })
 
+  it('keeps legacy checkpoint justification parsing compatible', () => {
+    const base = { id: 'check', type: 'checkpoint' as const, questionType: 'multiple_choice' as const, title: 'Friday', question: 'Como traduzir Friday?', options: Array.from({ length: 5 }, (_, index) => ({ id: `o${index}`, text: `Opção ${index}`, rationale: `Razão ${index}` })), correctOptionId: 'o0', hint: 'Traduza.', reinforcement: 'Friday significa sexta-feira.' }
+    expect(studyLessonBlockSchema.parse({ ...base, requiresJustification: false })).toMatchObject({ reasoningRequirement: 'none' })
+    expect(studyLessonBlockSchema.parse({ ...base, requiresJustification: true })).toMatchObject({ reasoningRequirement: 'required' })
+  })
+
   it('keeps only the two genuinely specific local lessons', () => {
     const item = module(['print()', 'decorators', 'ponteiros'])
     expect(localLesson(workspace('Python'), item, 'print()', `${item.id}:print()`)).not.toBeNull()
@@ -229,7 +235,13 @@ describe('StudyLessonService', () => {
     const result = await new StudyLessonService(new MemoryLessons(), providerManager(send), async () => ws, () => path).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId })
     expect(result.status).toBe('ready')
     expect(send).toHaveBeenCalledTimes(2)
-    expect(send.mock.calls[1]![0].messages[0]!.content).toContain('Corrija apenas a estrutura JSON da aula')
+    const repairPrompt = send.mock.calls[1]![0].messages[0]!.content
+    expect(repairPrompt).toContain('Corrija apenas a estrutura JSON da aula')
+    expect(repairPrompt).toContain('assessmentIntentKey')
+    expect(repairPrompt).toContain('reasoningRequirement none|optional|required')
+    expect(repairPrompt).toContain('recordação factual direta ou tradução')
+    expect(repairPrompt).toContain('pergunta causal de por que/se usa required')
+    expect(repairPrompt).not.toContain('requiresJustification')
   })
 
   it('uses strict generation schema instead of silently normalizing provider fields', async () => { const item = module(['decorators']); const ws = workspace('Python Avançado'); const path = roadmap(ws.id, item); const topicId = `${item.id}:decorators`; const malformed = JSON.parse(generated(topicId, 'decorators')); delete malformed.blocks[3].expectedOutput; const send = vi.fn<AIProvider['sendMessage']>(async () => ({ content: JSON.stringify(malformed), providerId: 'test', modelId: 'model' })); const result = await new StudyLessonService(new MemoryLessons(), providerManager(send), async () => ws, () => path).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId }); expect(result).toEqual({ status: 'failed_retryable', errorCode: 'LESSON_SCHEMA_INVALID' }); expect(send).toHaveBeenCalledTimes(2) })

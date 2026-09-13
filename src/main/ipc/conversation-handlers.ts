@@ -14,7 +14,6 @@ import type { PerformanceTimelineStore } from '../telemetry/performance-timeline
 export function registerConversationHandlers(service: HomePlannerService, workspaceService: WorkspaceCoachService, organizer: HomeOrganizerService, workspaceActions?: WorkspaceActionService, database?: CoachDatabase, timelines?: PerformanceTimelineStore): void {
   const activeStreams = new Map<string, { controller: AbortController; senderId: number; threadKey: string }>()
   let homeStreamActive = false
-  if (workspaceActions) ipcMain.handle(CONVERSATION_CHANNELS.executeWorkspaceAction, (event, payload) => { assertTrustedSender(event); return workspaceActions.execute(payload) })
   ipcMain.handle(CONVERSATION_CHANNELS.listHomeMessages, (event) => {
     assertTrustedSender(event)
     return service.listMessages()

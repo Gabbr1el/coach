@@ -19,7 +19,7 @@ export interface StudyWorkspaceServiceDependencies {
   readonly getStudyProgress?: (workspaceId: string) => StudyProgressState | null
   readonly getPlanContext?: (workspaceId: string) => { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; learningStates: Map<string, import('../study-progress/topic-learning').TopicLearningState>; startMinutes: number; dayKey: string; lastPlannedDayKey: string | null }
   readonly getTodayPlan?: (workspaceId: string) => StudyPlanItem[]
-  readonly replanWeek?: () => void
+  readonly replanWeek?: (workspaceId: string) => void
 }
 
 interface WorkspaceCodeProfile { fileName: string; language: string; editorContent: string }
@@ -148,7 +148,7 @@ export class StudyWorkspaceService {
     const state = await this.getState(workspaceId)
     const context = this.dependencies.getPlanContext?.(workspaceId)
     await this.dependencies.repository.recalculatePlanAtomically(workspaceId, state.sessionId, () => {
-      this.dependencies.replanWeek?.()
+      this.dependencies.replanWeek?.(workspaceId)
       return this.dependencies.getTodayPlan?.(workspaceId) ?? createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, state.plan, this.createId, context)
     }, this.now(), context?.dayKey)
     return this.getState(workspaceId)

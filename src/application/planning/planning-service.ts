@@ -22,6 +22,7 @@ export interface PlanningRepository {
   setTodayBudget?(dateKey: string, timezone: string, minutes: number, now: number): void
   listTodayBudgets?(weekStart: string, timezone: string): Array<{ dateKey: string; minutes: number }>
   setWeeklyPlanItemCompletion?(workspaceId: string, itemId: string, completed: boolean, now: number): boolean
+  adjustWorkspaceDayLoad?(planId: string, workspaceId: string, dateKey: string, deltaMinutes: number, now: number): boolean
   transaction?<T>(operation: () => T): T
   getAcademicOverview?(now: number): AcademicOverview
   findWeeklyPlan?(weekStart: string, timezone: string): { id: string; revision: number; generatedAt: number; items: ExistingWeeklyItem[] } | null
@@ -133,6 +134,23 @@ export class PlanningService {
     if (!changed) throw new Error('Weekly plan item was not found or already had that completion state')
     return this.getWeeklyPlan(canonicalTimezone)
   }
+  adjustWorkspaceDayLoad(input: { workspaceId: string; dateKey: string; timezone: string; deltaMinutes: number }): WeeklyPlan {
+    if (!this.repository.adjustWorkspaceDayLoad) throw new Error('Workspace planning load persistence is unavailable')
+    const apply = () => {
+      const plan = this.peekWeeklyPlan(input.timezone)
+      if (!plan) throw new Error('There is no authoritative weekly plan to adjust')
+      if (!plan.days.some((day) => day.dateKey === input.dateKey)) throw new Error('The requested date is outside the authoritative week')
+      const targetItems = plan.days.flatMap((day) => day.items).filter((item) => item.workspaceId === input.workspaceId && item.dateKey === input.dateKey)
+      if (!targetItems.length) throw new Error('Workspace has no study item on the requested date')
+      const before = plan.days.flatMap((day) => day.items).filter((item) => item.workspaceId === input.workspaceId && item.dateKey === input.dateKey).reduce((sum, item) => sum + item.durationMinutes, 0)
+      if (!this.repository.adjustWorkspaceDayLoad!(plan.id, input.workspaceId, input.dateKey, input.deltaMinutes, this.now())) throw new Error('Workspace has no adjustable study item on that date')
+      const persisted = this.getWeeklyPlan(plan.timezone)
+      const after = persisted.days.flatMap((day) => day.items).filter((item) => item.workspaceId === input.workspaceId && item.dateKey === input.dateKey).reduce((sum, item) => sum + item.durationMinutes, 0)
+      if (after !== before + input.deltaMinutes) throw new Error('Workspace planning load was not persisted')
+      return persisted
+    }
+    return this.repository.transaction ? this.repository.transaction(apply) : apply()
+  }
   getSchedule(timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): StudyScheduleItem[] { if (!this.repository.findWeeklyPlan) return []; const plan = this.getWeeklyPlan(timezone); const today = zonedDateKey(this.now(), plan.timezone); return plan.days.find((day) => day.dateKey === today)?.items.map((item) => ({ workspaceId: item.workspaceId, workspaceName: item.workspaceName, title: item.title, suggestedMinutes: item.durationMinutes, reason: item.reason })) ?? [] }
   getWeeklyPlan(timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): WeeklyPlan {
     timezone = this.repository.getCanonicalPlanningTimezone?.(timezone) ?? timezone
@@ -161,6 +179,21 @@ export class PlanningService {
     this.repository.saveWeeklyPlan({ id, weekStart, timezone, revision, generatedAt: now, items })
     const persisted = this.repository.findWeeklyPlan(weekStart, timezone)
     if (!persisted || persisted.revision !== revision) throw new Error('Weekly plan was not persisted')
+    return this.presentWeeklyPlan(persisted.id, weekStart, timezone, revision, persisted.generatedAt, persisted.items, now)
+  }
+  replanWorkspace(workspaceId: string, timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): WeeklyPlan {
+    timezone = this.repository.getCanonicalPlanningTimezone?.(timezone) ?? timezone
+    if (!this.repository.findWeeklyPlan || !this.repository.listWeeklyPlanningTopics || !this.repository.listWeeklyAvailability || !this.repository.saveWeeklyPlan) throw new Error('Weekly planning persistence is unavailable')
+    const now = this.now(); const today = zonedDateKey(now, timezone); const weekStart = weekStartKey(now, timezone); const existing = this.repository.findWeeklyPlan(weekStart, timezone)
+    if (!existing) return this.replanWeek(timezone)
+    const availability = new Map(this.repository.listWeeklyAvailability(now).map((item) => [item.weekday, item.minutes]))
+    const dayBudgets = new Map((this.repository.listTodayBudgets?.(weekStart, timezone) ?? []).map((item) => [item.dateKey, item.minutes]))
+    const proposed = distributeWeeklyPlan({ weekStart, today, timezone, now, availability, dayBudgets, topics: this.repository.listWeeklyPlanningTopics(now), reviews: this.repository.listWeeklyPlanningReviews?.(now) ?? [], existing: existing.items, createId: () => crypto.randomUUID() })
+    const items = [...existing.items.filter((item) => item.workspaceId !== workspaceId), ...proposed.filter((item) => item.workspaceId === workspaceId)].sort((a, b) => a.dateKey.localeCompare(b.dateKey) || a.position - b.position)
+    const revision = existing.revision + 1
+    this.repository.saveWeeklyPlan({ id: existing.id, weekStart, timezone, revision, generatedAt: now, items })
+    const persisted = this.repository.findWeeklyPlan(weekStart, timezone)
+    if (!persisted || persisted.revision !== revision) throw new Error('Scoped weekly plan was not persisted')
     return this.presentWeeklyPlan(persisted.id, weekStart, timezone, revision, persisted.generatedAt, persisted.items, now)
   }
   ensureAuthoritativeNextStudyItem(workspaceId: string, timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): WeeklyPlan {

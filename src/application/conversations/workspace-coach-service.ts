@@ -14,6 +14,8 @@ import type { WorkspaceActionService } from '../workspaces/workspace-action-serv
 import type { MaterialSearchResult } from '../../shared/contracts/material-contract'
 import { extractJsonDocument } from '../ai/structured-json'
 import type { HeavyGenerationRunner } from '../ai/heavy-generation-queue'
+import type { PlannerActionService } from '../planning/planner-action-service'
+import type { PlannerAction } from '../../shared/contracts/planner-action-contract'
 
 type StudyLessonAdapter = {
   adaptSection(input: { workspaceId: string; roadmapId: string; moduleId: string; topicId: string; lessonId: string; blockId: string; instruction: string; mode?: StudyPresentationIntent }, signal?: AbortSignal): Promise<StudyLessonAdaptation>
@@ -26,7 +28,7 @@ type ExerciseHelper = {
   requestHelp(input: { workspaceId: string; exerciseId: string; requestId: string; type: 'coach_help_requested' }): { exerciseId: string; helpCount: number; hint: string }
 }
 
-export interface WorkspaceCoachResponseMetadata { readonly lessonAdapted: { readonly lessonId: string; readonly blockId: string } }
+export interface WorkspaceCoachResponseMetadata { readonly lessonAdapted?: { readonly lessonId: string; readonly blockId: string }; readonly plannerAction?: PlannerAction }
 
 export interface WorkspaceCoachServiceDependencies {
   readonly repository: ConversationRepository
@@ -38,6 +40,7 @@ export interface WorkspaceCoachServiceDependencies {
   readonly getCurrentContext?: (workspaceId: string) => Promise<CurrentWorkspaceContext>
   readonly contextHub?: WorkspaceContextHub
   readonly workspaceActions?: WorkspaceActionService
+  readonly plannerActions?: PlannerActionService
   readonly searchMaterials?: (workspaceId: string, query: string) => MaterialSearchResult[]
   readonly studyLessonService?: StudyLessonAdapter
   readonly exerciseService?: ExerciseHelper
@@ -50,7 +53,7 @@ export type WorkspaceChatIntent = 'current_topic' | 'planning' | 'materials' | '
 export type WorkspaceChatProgress = 'context_started' | 'context_ready' | 'provider_request_started' | 'provider_first_token' | 'provider_completed' | 'persistence_completed' | 'executing'
 
 export function workspaceChatIntent(input: Pick<StreamWorkspaceMessageInput, 'content' | 'activePage' | 'activeMaterial'>): WorkspaceChatIntent {
-  if (/\b(adicione|registre|anote|salve|recalcule|refaça|refaca|conclu[íi]|finalizei|terminei|adapte|incorpore|integre)\b/i.test(input.content)) return 'action'
+  if (/\b(adicione|registre|anote|salve|recalcule|refaça|refaca|conclu[íi]|finalizei|terminei|aumente|diminua|reduza|disponibilidade|adapte|incorpore|integre)\b/i.test(input.content)) return 'action'
   if (input.activeMaterial || input.activePage === 'materials' || /\b(material|apostila|pdf|slide|documento|fonte)\b/i.test(input.content)) return 'materials'
   if (input.activePage === 'plan' || /\b(plano|planej|prazo|agenda|semana|hoje|amanhã|amanha)\b/i.test(input.content)) return 'planning'
   return 'current_topic'
@@ -80,6 +83,23 @@ const EXPLICIT_PRESENTATION_PREFERENCES: ReadonlyArray<[StudyPresentationIntent,
 ]
 
 type PresentationRequest = { intent: StudyPresentationIntent; source: 'situational' | 'explicit' }
+
+function explicitPlanningAction(content: string, immediate: unknown): { type: 'plan.recalculate' | 'plan.complete' | 'plan.load.adjust' | 'plan.availability.set'; arguments: Record<string, unknown> } | null {
+  const context = immediate as { todayDateKey?: string | null; activePlanItemId?: string | null } | undefined
+  if (/\b(?:amanhã|amanha|tomorrow|ontem|yesterday)\b/i.test(content)) return null
+  const amount = /(\d+(?:[.,]\d+)?)\s*(h|horas?|min|minutos?)\b/i.exec(content)
+  const minutes = amount ? Math.round(Number(amount[1]!.replace(',', '.')) * (/^h|hora/i.test(amount[2]!) ? 60 : 1)) : null
+  if (minutes !== null && context?.todayDateKey && /\b(?:hoje|today)\b/i.test(content)) {
+    const direction = /\b(?:diminua|reduza|retire|menos)\b|(?:^|\s)-\s*\d/i.test(content) ? -1 : /\b(?:aumente|adicione|some|mais)\b|(?:^|\s)\+\s*\d/i.test(content) ? 1 : 0
+    if (direction) return { type: 'plan.load.adjust', arguments: { dateKey: context.todayDateKey, deltaMinutes: direction * minutes } }
+  }
+  const weekdays = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado']
+  const weekday = weekdays.findIndex((day) => content.toLocaleLowerCase('pt-BR').includes(day))
+  if (minutes !== null && weekday >= 0 && /\b(?:confirmo|autorizo)\b.{0,80}\b(?:global|todos os workspaces|disponibilidade geral)\b/i.test(content)) return { type: 'plan.availability.set', arguments: { weekday, minutes, confirmedGlobal: true } }
+  if (/\b(?:recalcule|refaça|refaca|atualize)\b.{0,40}\bplano\b/i.test(content)) return { type: 'plan.recalculate', arguments: {} }
+  if (context?.activePlanItemId && /\b(?:conclu[íi]|finalizei|terminei|complete)\b.{0,50}\b(?:atividade|item|plano)\b|\b(?:atividade|item)\b.{0,50}\b(?:conclu[íi]d[ao]|finalizad[ao]|terminad[ao])\b/i.test(content)) return { type: 'plan.complete', arguments: { itemId: context.activePlanItemId } }
+  return null
+}
 
 export function presentationRequestFor(content: string): PresentationRequest | null {
   const explicit = EXPLICIT_PRESENTATION_PREFERENCES.find(([, pattern]) => pattern.test(content))
@@ -207,8 +227,9 @@ export class WorkspaceCoachService {
     } : undefined
     const routed = (this.dependencies.contextRouter ?? new ContextRouter()).route(routedInput, observer, authorizedContext)
     const userContent = input.content.trim()
+    const originMessageId = this.createId()
     let supplementalContext: unknown[] = []
-    let proposedAction: { type: 'notes.add' | 'plan.recalculate' | 'plan.complete' | 'roadmap.preview-materials'; arguments: Record<string, unknown> } | null = null
+    let proposedAction: { type: 'notes.add' | 'plan.recalculate' | 'plan.complete' | 'plan.load.adjust' | 'plan.availability.set' | 'roadmap.preview-materials'; arguments: Record<string, unknown> } | null = null
     if (this.dependencies.contextHub && intent === 'materials') {
       const options = input.activeMaterial?.materialId
         ? { id: input.activeMaterial.materialId, ...(input.activeMaterial.pageOrSlide ? { pageNumber: input.activeMaterial.pageOrSlide } : {}), limit: 6000 }
@@ -217,15 +238,30 @@ export class WorkspaceCoachService {
     } else if (this.dependencies.contextHub && intent === 'planning') {
       supplementalContext = await Promise.all([this.dependencies.contextHub.read(workspaceId, 'plan', { limit: 20 }), this.dependencies.contextHub.read(workspaceId, 'academic', { limit: 20 })])
     }
-    if (intent === 'action' && provider.sendMessage && this.dependencies.contextHub) { try { const response = await provider.sendMessage({ messages: [{ role: 'system', content: 'Retorne somente JSON com final_response, uma única context_read de até 3 recursos independentes, ou workspace_action. Nunca afirme que uma ação ocorreu antes do resultado autoritativo.' }, { role: 'user', content: JSON.stringify({ message: userContent, immediateContext }) }], maxOutputTokens: 500, signal }); const decision = workspaceCoachDecisionSchema.parse(extractJsonDocument(response.content)); if (decision.kind === 'workspace_action') proposedAction = decision.action; else if (decision.kind === 'context_read') supplementalContext = await Promise.all(decision.requests.map((request) => this.dependencies.contextHub!.read(workspaceId, request.resource, request))) } catch (error) { if (signal.aborted) throw error } }
+    if (intent === 'action') proposedAction = explicitPlanningAction(userContent, immediateContext)
+    if (!proposedAction && intent === 'action' && provider.sendMessage && this.dependencies.contextHub) { try { const response = await provider.sendMessage({ messages: [{ role: 'system', content: 'Retorne somente JSON com final_response, uma única context_read de até 3 recursos independentes, ou workspace_action. O provider não tem permissão para escolher argumentos de ações deló planning; pedidos de plano serão validados deterministicamente pelo aplicativo. Nunca afirme que uma ação ocorreu antes do resultado autoritativo.' }, { role: 'user', content: JSON.stringify({ message: userContent, immediateContext }) }], maxOutputTokens: 500, signal }); const decision = workspaceCoachDecisionSchema.parse(extractJsonDocument(response.content)); if (decision.kind === 'workspace_action' && !decision.action.type.startsWith('plan.')) proposedAction = decision.action; else if (decision.kind === 'context_read') supplementalContext = await Promise.all(decision.requests.map((request) => this.dependencies.contextHub!.read(workspaceId, request.resource, request))) } catch (error) { if (signal.aborted) throw error } }
     if (proposedAction) {
       const denied = /\b(?:não|nao|nunca|não quero|nao quero|não faça|nao faca)\b/i.test(userContent)
       const noteContent = String(proposedAction.arguments.content ?? '').trim()
       const noteWords = noteContent.match(/[\p{L}\p{N}]{3,}/gu) ?? []
-      const explicitlyAuthorized = !denied && (proposedAction.type === 'notes.add' ? /\b(?:adicione|registre|anote|salve)\b/i.test(userContent) && /\b(?:nota|notas|anotaç(?:ão|ões)|anotac(?:ao|oes))\b/i.test(userContent) && noteContent.length >= 10 && noteWords.length >= 2 && userContent.toLocaleLowerCase('pt-BR').includes(noteContent.toLocaleLowerCase('pt-BR')) : proposedAction.type === 'plan.complete' ? /\b(?:conclu[íi]|finalizei|terminei|complete)\b.{0,50}\b(?:atividade|item|plano)\b|\b(?:atividade|item)\b.{0,50}\b(?:conclu[íi]d[ao]|finalizad[ao]|terminad[ao])\b/i.test(userContent) : proposedAction.type === 'roadmap.preview-materials' ? /\b(?:adapte|incorpore|integre|use|baseie)\b.{0,80}\b(?:pdf|material|apostila|slides?|curr[ií]culo|trilha|estudo)\b/i.test(userContent) : /\b(?:recalcule|refaça|refaca|atualize)\b.{0,40}\bplano\b/i.test(userContent))
+      const immediate = immediateContext as { todayDateKey?: string | null; planningTimezone?: string | null } | undefined
+      const isValidTodayLoad = proposedAction.type !== 'plan.load.adjust' || (!denied && /\b(?:hoje|today)\b/i.test(userContent) && !/\b(?:amanhã|amanha|tomorrow|ontem|yesterday)\b/i.test(userContent) && proposedAction.arguments.dateKey === immediate?.todayDateKey)
+      let pendingAction: PlannerAction | null = null
+      const isPlanning = proposedAction.type.startsWith('plan.')
+      if (isPlanning && !denied && isValidTodayLoad && this.dependencies.plannerActions && immediate?.planningTimezone) {
+        const contextVersion = Math.max(1, Number((immediateContext as { weeklyPlanRevision?: number | null } | undefined)?.weeklyPlanRevision ?? 1))
+        if (proposedAction.type === 'plan.load.adjust') { const deltaMinutes = Number(proposedAction.arguments.deltaMinutes); pendingAction = this.dependencies.plannerActions.propose({ type: 'plan.workspace-day-load.adjust', payload: { workspaceId, dateKey: immediate.todayDateKey, timezone: immediate.planningTimezone, deltaMinutes }, label: `${deltaMinutes > 0 ? 'Aumentar' : 'Diminuir'} em ${Math.abs(deltaMinutes)} min a carga de hoje neste Workspace`, originMessageId, contextVersion }) }
+        if (proposedAction.type === 'plan.recalculate') pendingAction = this.dependencies.plannerActions.propose({ type: 'plan.recalculate', payload: { timezone: immediate.planningTimezone }, label: 'Recalcular o plano global com este Workspace', originMessageId, contextVersion })
+        if (proposedAction.type === 'plan.complete' && typeof proposedAction.arguments.itemId === 'string') pendingAction = this.dependencies.plannerActions.propose({ type: 'plan.item-completion.set', payload: { workspaceId, itemId: proposedAction.arguments.itemId, completed: true }, label: 'Concluir a atividade atual deste Workspace', originMessageId, contextVersion })
+        if (proposedAction.type === 'plan.availability.set' && proposedAction.arguments.confirmedGlobal === true) pendingAction = this.dependencies.plannerActions.propose({ type: 'plan.weekday-availability.set', payload: { weekday: proposedAction.arguments.weekday, minutes: proposedAction.arguments.minutes, timezone: immediate.planningTimezone }, label: 'Alterar a disponibilidade global confirmada', originMessageId, contextVersion })
+      }
+      if (pendingAction) {
+        onMetadata?.({ plannerAction: pendingAction })
+      }
+      const explicitlyAuthorized = !denied && !isPlanning && (proposedAction.type === 'notes.add' ? /\b(?:adicione|registre|anote|salve)\b/i.test(userContent) && /\b(?:nota|notas|anotaç(?:ão|ões)|anotac(?:ao|oes))\b/i.test(userContent) && noteContent.length >= 10 && noteWords.length >= 2 && userContent.toLocaleLowerCase('pt-BR').includes(noteContent.toLocaleLowerCase('pt-BR')) : /\b(?:adapte|incorpore|integre|use|baseie)\b.{0,80}\b(?:pdf|material|apostila|slides?|curr[ií]culo|trilha|estudo)\b/i.test(userContent))
       if (explicitlyAuthorized) onProgress?.('executing')
       const result = explicitlyAuthorized && this.dependencies.workspaceActions ? await this.dependencies.workspaceActions.execute({ workspaceId, ...proposedAction }) : null
-      const response = result?.message ?? (proposedAction.type === 'notes.add' ? `Posso adicionar às notas: "${String(proposedAction.arguments.content ?? '').slice(0, 300)}". Peça explicitamente para eu adicionar essa nota.` : proposedAction.type === 'plan.complete' ? 'Posso concluir a atividade do plano. Diga explicitamente que terminou essa atividade.' : proposedAction.type === 'roadmap.preview-materials' ? 'Posso gerar uma prévia persistida da Trilha usando os materiais aprovados. Peça explicitamente para integrar esse material ao estudo.' : 'Posso recalcular o plano. Peça explicitamente para eu recalculá-lo.')
+      const response = pendingAction ? `Preparei a ação “${pendingAction.label}”. Confirme ou descarte antes de qualquer alteração no plano.` : result?.message ?? (proposedAction.type === 'notes.add' ? `Posso adicionar às notas: "${String(proposedAction.arguments.content ?? '').slice(0, 300)}". Peça explicitamente para eu adicionar essa nota.` : proposedAction.type === 'plan.complete' ? 'Não encontrei uma atividade atual elegível para confirmação. Nenhuma alteração foi feita.' : proposedAction.type === 'plan.load.adjust' ? 'Só consigo ajustar uma carga quando você indicar explicitamente hoje e uma quantidade válida. Nenhuma alteração foi feita.' : proposedAction.type === 'plan.availability.set' ? 'A disponibilidade global deve ser alterada pelo Organizador com confirmação. Nenhuma alteração foi feita.' : proposedAction.type === 'roadmap.preview-materials' ? 'Posso gerar uma prévia persistida da Trilha usando os materiais aprovados. Peça explicitamente para integrar esse material ao estudo.' : 'Não consegui preparar a confirmação do recálculo. Nenhuma alteração foi feita.')
       if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
       yield response
       const now = this.now()
@@ -278,7 +314,7 @@ export class WorkspaceCoachService {
     const now = this.now()
     await this.dependencies.repository.addTurn({
       threadId,
-      user: { id: this.createId(), threadId, role: 'user', content: userContent, createdAt: now, providerId: null, modelId: null },
+        user: { id: originMessageId, threadId, role: 'user', content: userContent, createdAt: now, providerId: null, modelId: null },
       assistant: { id: this.createId(), threadId, role: 'assistant', content, createdAt: now + 1, providerId, modelId },
     })
     onProgress?.('persistence_completed')

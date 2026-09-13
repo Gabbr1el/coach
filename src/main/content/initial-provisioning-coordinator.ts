@@ -10,9 +10,26 @@ export class InitialProvisioningCoordinator {
 
   initialize(workspaceId: string): void {
     const now = this.now()
-    const { inputHash } = this.authoritativeInput(workspaceId)
+    this.ensureProjection(workspaceId, now)
     const existing = this.repository.getRevision(workspaceId)
+    if (existing?.inputHash === 'legacy-unavailable') {
+      const accepted = this.database.sqlite.prepare("SELECT id FROM roadmaps WHERE workspace_id=? AND status='accepted' ORDER BY version DESC LIMIT 1").get(workspaceId) as { id: string } | undefined
+      if (accepted) {
+        this.repository.adoptRoadmapRevision({ workspaceId, roadmapId: accepted.id, inputHash: 'legacy-unavailable', now })
+        this.advance(workspaceId)
+        this.wake()
+      }
+      return
+    }
+    const { inputHash } = this.authoritativeInput(workspaceId)
     if (existing && existing.inputHash === inputHash) { this.advance(workspaceId); return }
+    const accepted = this.database.sqlite.prepare("SELECT id FROM roadmaps WHERE workspace_id=? AND status='accepted' ORDER BY version DESC LIMIT 1").get(workspaceId) as { id: string } | undefined
+    if (accepted && !existing) {
+      this.repository.adoptRoadmapRevision({ workspaceId, roadmapId: accepted.id, inputHash, now })
+      this.advance(workspaceId)
+      this.wake()
+      return
+    }
     const revision = this.repository.ensureRevision({ workspaceId, inputHash, now })
     this.enqueue(workspaceId, revision.revision, inputHash, 'roadmap_generate', 'roadmap', 900, [])
     this.timelines?.markProvisioning(workspaceId, 'roadmap', { outcome: 'queued' })
@@ -38,8 +55,9 @@ export class InitialProvisioningCoordinator {
   }
 
   private authoritativeInput(workspaceId: string): { baseInputHash: string; inputHash: string } {
-    const workspace = this.database.sqlite.prepare('SELECT name,objective FROM workspaces WHERE id=?').get(workspaceId) as { name: string; objective: string }
-    const override = this.database.sqlite.prepare('SELECT canonical_focus AS focus,canonical_context AS context,declared_level AS level,declared_knowledge_json AS knowledge,declared_difficulties_json AS difficulties,goals_json AS goals,onboarding_analysis_revision AS analysisRevision,onboarding_analysis_fingerprint AS analysisFingerprint FROM workspace_learning_overrides WHERE workspace_id=?').get(workspaceId) as Record<string, unknown>
+    const workspace = this.database.sqlite.prepare('SELECT name,objective FROM workspaces WHERE id=?').get(workspaceId) as { name: string; objective: string } | undefined
+    if (!workspace) throw new Error('Workspace not found')
+    const override = this.database.sqlite.prepare('SELECT canonical_focus AS focus,canonical_context AS context,declared_level AS level,declared_knowledge_json AS knowledge,declared_difficulties_json AS difficulties,goals_json AS goals,onboarding_analysis_revision AS analysisRevision,onboarding_analysis_fingerprint AS analysisFingerprint FROM workspace_learning_overrides WHERE workspace_id=?').get(workspaceId) as Record<string, unknown> | undefined ?? {}
     this.timelines?.markProvisioning(workspaceId, 'analyze', { outcome: override.analysisFingerprint ? 'validated' : 'unavailable' })
     const materials = this.database.sqlite.prepare("SELECT id,content_hash AS contentHash,analysis_fingerprint AS analysisFingerprint,role,relevance,semantic_analysis_json AS analysis FROM materials WHERE workspace_id=? AND status='ready' ORDER BY CASE role WHEN 'priority' THEN 0 WHEN 'base' THEN 1 ELSE 2 END,created_at,id").all(workspaceId)
     this.timelines?.markProvisioning(workspaceId, 'context')
@@ -64,9 +82,19 @@ export class InitialProvisioningCoordinator {
     this.enqueue(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', first, 900, [lessonKey])
     const exerciseKey = this.key(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', first)
     this.enqueue(workspaceId, revision.revision, revision.inputHash, 'plan_recalculate', 'current-week', 850, [exerciseKey])
-    const planKey = this.key(workspaceId, revision.revision, revision.inputHash, 'plan_recalculate', 'current-week')
-    const next = topics[1]
-    if (next) this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', next, 500, [planKey])
+    const progress = this.database.sqlite.prepare('SELECT current_topic_id AS topicId FROM study_progress WHERE workspace_id=? AND roadmap_id=?').get(workspaceId, roadmap.id) as { topicId: string } | undefined
+    const foundIndex = progress ? topics.indexOf(progress.topicId) : -1
+    const currentIndex = foundIndex >= 0 ? foundIndex : 0
+    const current = topics[currentIndex] ?? first
+    const next = topics[currentIndex + 1]
+    const currentLessonKey = this.key(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', current)
+    this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', current, 700, [roadmapKey])
+    this.enqueue(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', current, 700, [currentLessonKey])
+    if (next) {
+      const nextLessonKey = this.key(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', next)
+      this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', next, 500, [roadmapKey])
+      this.enqueue(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', next, 500, [nextLessonKey])
+    }
     const units = [
       { kind: 'roadmap_generate' as const, unitKey: 'roadmap', inputHash: revision.inputHash },
       ...topics.flatMap((unitKey) => [
@@ -101,6 +129,24 @@ export class InitialProvisioningCoordinator {
     const stage = job.kind === 'roadmap_generate' ? 'roadmap' : job.kind === 'lesson_generate' ? 'lesson' : job.kind === 'exercise_generate' ? 'exercises' : job.kind === 'plan_recalculate' ? 'planning' : null
     if (stage) this.timelines?.markProvisioning(job.workspaceId, stage, { jobKind: job.kind, outcome: 'published' })
     this.advance(job.workspaceId)
+  }
+  reconcileWorkspace(workspaceId: string): void { this.initialize(workspaceId) }
+  reconcileAll(): void {
+    const rows = this.database.sqlite.prepare("SELECT id FROM workspaces WHERE status='active'").all() as Array<{ id: string }>
+    for (const row of rows) { try { this.initialize(row.id) } catch (error) { console.error(`Workspace content reconciliation failed for ${row.id}:`, error) } }
+  }
+  onJobSettled(job: ContentJob): void { this.syncFailure(job.workspaceId) }
+  private syncFailure(workspaceId: string): void {
+    const revision = this.repository.getRevision(workspaceId)
+    if (!revision) return
+    const failed = this.database.sqlite.prepare("SELECT status,last_error_code AS code,available_at AS retryAfter FROM content_jobs WHERE workspace_id=? AND revision=? AND status IN ('failed','queued') AND last_error_code IS NOT NULL ORDER BY CASE status WHEN 'failed' THEN 0 ELSE 1 END,priority DESC LIMIT 1").get(workspaceId, revision.revision) as { status: string; code: string; retryAfter: number } | undefined
+    if (!failed) return
+    const terminal = failed.status === 'failed'
+    const message = terminal ? 'A preparação falhou definitivamente. O conteúdo já pronto permanece disponível.' : failed.code === 'PROVIDER_UNAVAILABLE' ? 'Aguardando o provedor de IA ficar disponível.' : 'Falha temporária. O Coach tentará novamente automaticamente.'
+    this.database.sqlite.prepare("UPDATE workspace_provisioning SET status='failed_retryable',stage_updated_at=?,retry_after=?,error_code=?,error_message=? WHERE workspace_id=? AND status<>'draft'").run(this.now(), terminal ? null : failed.retryAfter, terminal ? `TERMINAL_${failed.code}` : failed.code, message, workspaceId)
+  }
+  private ensureProjection(workspaceId: string, now: number): void {
+    this.database.sqlite.prepare("INSERT OR IGNORE INTO workspace_provisioning (workspace_id,status,stage,material_ids_json,attempt_count,created_at,started_at,stage_updated_at) VALUES (?,'queued','workspace','[]',0,?,?,?)").run(workspaceId, now, now, now)
   }
   private stage(workspaceId: string, stage: string): void { this.database.sqlite.prepare("UPDATE workspace_provisioning SET status='running',stage=?,stage_updated_at=?,retry_after=NULL,error_code=NULL,error_message=NULL WHERE workspace_id=? AND status<>'draft'").run(stage, this.now(), workspaceId) }
   private jobReady(workspaceId: string, revision: number, kind: string, unitKey: string): boolean { return Boolean(this.database.sqlite.prepare("SELECT 1 FROM content_jobs WHERE workspace_id=? AND revision=? AND kind=? AND unit_key=? AND status='ready'").get(workspaceId, revision, kind, unitKey)) }

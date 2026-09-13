@@ -43,6 +43,13 @@ describe('ContentGenerationWorker', () => {
     expect(repository.failLease).not.toHaveBeenCalled(); worker.retryProviderUnavailable(); expect(repository.retryProviderUnavailable).toHaveBeenCalledWith(0); await worker.stop()
   })
 
+  it('reports retry and terminal settlements for a persistent UI projection', async () => {
+    const fake = clock(); let available = true; const leased = job({ attemptCount: 3, maxAttempts: 3 }); const onSettled = vi.fn()
+    const repository = { reconcile: vi.fn(() => ({ requeued: 0, obsoleted: 0 })), retryProviderUnavailable: vi.fn(() => 0), claimNext: vi.fn(() => available ? (available = false, leased) : null), renewLease: vi.fn(() => true), publishLease: vi.fn(), getJob: vi.fn(() => leased), releaseLease: vi.fn(), failLease: vi.fn(() => true) }
+    const worker = new ContentGenerationWorker({ repository: repository as never, admission: new HeavyGenerationQueue(), handlers: { lesson_generate: async () => { throw new Error('temporary failure') } }, clock: fake, onSettled })
+    worker.start(); fake.advance(0); await vi.waitFor(() => expect(repository.failLease).toHaveBeenCalled()); expect(onSettled).toHaveBeenCalledWith(leased); await worker.stop()
+  })
+
   it('rejects publication after a revision cancellation while the provider is running', async () => {
     const fake = clock(); let available = true; let finish!: (value: { publish(): unknown }) => void; const leased = job({ claimedCancellationGeneration: 1 })
     const repository = { reconcile: vi.fn(() => ({ requeued: 0, obsoleted: 0 })), retryProviderUnavailable: vi.fn(() => 0), claimNext: vi.fn(() => available ? (available = false, leased) : null), renewLease: vi.fn(() => true), publishLease: vi.fn(() => false), getJob: vi.fn(() => leased), releaseLease: vi.fn(), failLease: vi.fn(), cancelRevision: vi.fn((_workspaceId: string, _now: number) => 2) }

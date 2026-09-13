@@ -61,7 +61,9 @@ export interface StudyPlanItem {
   readonly status: 'pending' | 'active' | 'completed'
   readonly moduleId?: string
   readonly topicId?: string
-  readonly activityType?: 'introduction' | 'review' | 'exercise' | 'practice' | 'video'
+  readonly activityType?: 'study' | 'lesson' | 'introduction' | 'exercise' | 'assessment' | 'review' | 'practice' | 'coding' | 'material' | 'video'
+  readonly exerciseSetId?: string
+  readonly materialId?: string
   readonly scheduledStartMinutes?: number
 }
 

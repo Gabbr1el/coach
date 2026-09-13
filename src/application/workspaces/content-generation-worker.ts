@@ -27,6 +27,7 @@ export interface ContentGenerationWorkerOptions {
   readonly renewAfterMs?: number
   readonly timeoutMs?: number
   readonly onPublished?: (job: ContentJob) => void
+  readonly onSettled?: (job: ContentJob) => void
 }
 
 const systemClock: WorkerClock = {
@@ -54,6 +55,7 @@ export class ContentGenerationWorker {
   private readonly renewAfterMs: number
   private readonly timeoutMs: number
   private readonly onPublished?: (job: ContentJob) => void
+  private readonly onSettled?: (job: ContentJob) => void
   private pollHandle: unknown = null
   private running = false
   private stopping: Promise<void> | null = null
@@ -71,6 +73,7 @@ export class ContentGenerationWorker {
     this.renewAfterMs = options.renewAfterMs ?? CONTENT_JOB_DEFAULTS.renewAfterMs
     this.timeoutMs = options.timeoutMs ?? this.leaseMs * 3
     this.onPublished = options.onPublished
+    this.onSettled = options.onSettled
   }
 
   start(): void {
@@ -117,6 +120,7 @@ export class ContentGenerationWorker {
     const handler = this.handlers[job.kind]
     if (!handler) {
       this.repository.failLease({ jobId: job.id, leaseToken: job.leaseToken, now: this.clock.now(), errorCode: 'UNSUPPORTED_JOB_KIND' })
+      try { this.onSettled?.(job) } catch (error) { console.error('Content job settlement projection failed:', error) }
       this.schedule(0)
       return
     }
@@ -142,6 +146,7 @@ export class ContentGenerationWorker {
         else this.repository.failLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: errorCode(error), errorMessage: error instanceof Error ? error.message : undefined })
       }
     } finally {
+      try { this.onSettled?.(job) } catch (error) { console.error('Content job settlement projection failed:', error) }
       this.clock.clearInterval(renewal)
       this.clock.clearTimeout(timeout)
       if (this.active === active) this.active = null

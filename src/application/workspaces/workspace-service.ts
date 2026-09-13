@@ -11,7 +11,7 @@ export interface WorkspaceServiceDependencies {
   readonly academicContext?: AcademicSubjectContextService
   readonly createAcademicContexts?: (workspaceId: string, workspaceName: string, related: NonNullable<CreateWorkspaceInput['relatedSubjects']>) => void | (() => void)
   readonly saveLearningOverrides?: (workspaceId: string, subject: string, input: Pick<CreateWorkspaceInput, 'analysisRevision' | 'declaredLevel' | 'declaredKnowledge' | 'declaredDifficulties' | 'goals' | 'localKnowledgeProjection' | 'canonicalFocus' | 'canonicalContext'>, now: number) => void
-  readonly provisioning?: { createDraft(workspaceId: string): WorkspaceProvisioningState; start(workspaceId: string): WorkspaceProvisioningState; get(workspaceId: string): WorkspaceProvisioningState | null; retry(workspaceId: string): WorkspaceProvisioningState; discardDraft(workspaceId: string): void }
+  readonly provisioning?: { createDraft(workspaceId: string): WorkspaceProvisioningState; start(workspaceId: string): WorkspaceProvisioningState; get(workspaceId: string): WorkspaceProvisioningState | null; retry(workspaceId: string): WorkspaceProvisioningState; discardDraft(workspaceId: string): void; reconcile?(workspaceId: string): void }
   readonly findSemanticDuplicate?: (canonicalKey: string, excludedId?: string) => Workspace | null
   readonly validateAnalysis?: (token: string, revision: number, subject: string, focus?: string, context?: string) => boolean
   readonly discoverOrphanEvents?: (workspace: Workspace) => Promise<unknown> | unknown
@@ -123,6 +123,7 @@ export class WorkspaceService {
 
   async open(id: string): Promise<Workspace | null> {
     const workspace = await this.repository.markOpened(id, this.now())
+    if (workspace) this.provisioning?.reconcile?.(workspace.id)
     if (workspace && !this.provisioning) void this.ensureLearningPath?.(workspace.id).catch(() => {})
     return workspace
   }

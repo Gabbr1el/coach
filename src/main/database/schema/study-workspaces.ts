@@ -56,7 +56,7 @@ export const studyPlanItems = sqliteTable('study_plan_items', {
   status: text('status', { enum: ['pending', 'active', 'completed'] }).notNull().default('pending'),
   moduleId: text('module_id'),
   topicId: text('topic_id'),
-  activityType: text('activity_type', { enum: ['introduction', 'review', 'exercise', 'practice', 'video'] }),
+  activityType: text('activity_type', { enum: ['study', 'lesson', 'introduction', 'exercise', 'assessment', 'review', 'practice', 'coding', 'material', 'video'] }),
   scheduledStartMinutes: integer('scheduled_start_minutes'),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),

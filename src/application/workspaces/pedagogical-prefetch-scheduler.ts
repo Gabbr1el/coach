@@ -6,6 +6,7 @@ export type PedagogicalPrefetchTrigger =
   | { type: 'topic_selected' | 'topic_opened'; workspaceId: string; topicId: string }
   | { type: 'checkpoint_interacted' | 'required_exercise_near_completion'; workspaceId: string; topicId: string }
   | { type: 'topic_unlocked'; workspaceId: string; topicId: string }
+  | { type: 'reconcile'; workspaceId: string; topicId: string }
 
 export interface PedagogicalPrefetchSchedulerOptions {
   readonly repository: WorkspaceContentRepository
@@ -32,7 +33,7 @@ export class PedagogicalPrefetchScheduler {
     const current = topics[index]!
     const next = topics[index + 1]
     const specs: Array<{ kind: ContentUnitKind; unitKey: string; priority: number; dependencies?: string[] }> = []
-    if (trigger.type === 'topic_selected' || trigger.type === 'topic_opened' || trigger.type === 'topic_unlocked') {
+    if (trigger.type === 'topic_selected' || trigger.type === 'topic_opened' || trigger.type === 'topic_unlocked' || trigger.type === 'reconcile') {
       specs.push({ kind: 'lesson_generate', unitKey: current.topicId, priority: 1_000 })
       specs.push({ kind: 'exercise_generate', unitKey: current.topicId, priority: 1_000, dependencies: [key(trigger.workspaceId, revision.revision, 'lesson_generate', current.topicId, revision.inputHash)] })
     }
@@ -40,7 +41,7 @@ export class PedagogicalPrefetchScheduler {
       specs.push({ kind: 'exercise_generate', unitKey: current.topicId, priority: 700, dependencies: [key(trigger.workspaceId, revision.revision, 'lesson_generate', current.topicId, revision.inputHash)] })
     }
     if (next) specs.push({ kind: 'lesson_generate', unitKey: next.topicId, priority: trigger.type === 'topic_unlocked' ? 700 : 500 })
-    if (next && trigger.type === 'required_exercise_near_completion') specs.push({ kind: 'exercise_generate', unitKey: next.topicId, priority: 500, dependencies: [key(trigger.workspaceId, revision.revision, 'lesson_generate', next.topicId, revision.inputHash)] })
+    if (next && (trigger.type === 'required_exercise_near_completion' || trigger.type === 'reconcile')) specs.push({ kind: 'exercise_generate', unitKey: next.topicId, priority: 500, dependencies: [key(trigger.workspaceId, revision.revision, 'lesson_generate', next.topicId, revision.inputHash)] })
     const jobs = specs.map((spec) => this.options.repository.enqueue({ workspaceId: trigger.workspaceId, revision: revision.revision, kind: spec.kind, unitKey: spec.unitKey, priority: spec.priority, inputHash: revision.inputHash, generatorContractVersion: CONTENT_GENERATOR_VERSIONS[spec.kind], dependencyKeys: spec.dependencies }, this.now()))
     if (jobs.length) this.options.onJobsChanged?.()
     return jobs

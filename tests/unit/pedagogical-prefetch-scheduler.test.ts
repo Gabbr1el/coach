@@ -24,4 +24,22 @@ describe('PedagogicalPrefetchScheduler', () => {
     expect(jobs.map((job) => `${job.kind}:${job.unitKey}`)).toEqual(['exercise_generate:m:one', 'lesson_generate:m:two', 'exercise_generate:m:two'])
     expect(jobs[2].dependencyKeys).toEqual([expect.any(String)])
   })
+
+  it('reconciles current and N+1 lesson plus exercises without a click trigger, across a module boundary', () => {
+    const jobs: any[] = []; const revision = { workspaceId: '00000000-0000-4000-8000-000000000001', revision: 2, inputHash: 'a'.repeat(64) }
+    const repository = { getRevision: () => revision, enqueue: vi.fn((input) => { jobs.push(input); return input }) }
+    const scheduler = new PedagogicalPrefetchScheduler({ repository: repository as never, getRoadmap: () => ({ id: 'roadmap', workspaceId: revision.workspaceId, modules: [{ id: 'm1', topics: ['last'] }, { id: 'm2', topics: ['first'] }] }) as never })
+    scheduler.schedule({ type: 'reconcile', workspaceId: revision.workspaceId, topicId: 'm1:last' })
+    expect(jobs.map((value) => `${value.kind}:${value.unitKey}`)).toEqual(['lesson_generate:m1:last', 'exercise_generate:m1:last', 'lesson_generate:m2:first', 'exercise_generate:m2:first'])
+    expect(jobs.every((value) => value.priority <= 1000)).toBe(true)
+  })
+
+  it('treats topic opening as priority promotion only, not creation authority', () => {
+    const jobs: any[] = []; const revision = { workspaceId: '00000000-0000-4000-8000-000000000001', revision: 1, inputHash: 'a'.repeat(64) }
+    const repository = { getRevision: () => revision, enqueue: vi.fn((input) => { jobs.push(input); return input }) }
+    const scheduler = new PedagogicalPrefetchScheduler({ repository: repository as never, getRoadmap: () => ({ modules: [{ id: 'm', topics: ['one', 'two'] }] }) as never })
+    scheduler.schedule({ type: 'topic_opened', workspaceId: revision.workspaceId, topicId: 'm:one' })
+    expect(jobs.map((value) => `${value.kind}:${value.unitKey}`)).toEqual(['lesson_generate:m:one', 'exercise_generate:m:one', 'lesson_generate:m:two'])
+    expect(jobs.some((value) => value.kind === 'exercise_generate' && value.unitKey === 'm:two')).toBe(false)
+  })
 })

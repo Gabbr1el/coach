@@ -38,7 +38,9 @@ export function planActionLabel(item: StudyPlanItem | undefined): string {
   if (!item) return 'Plano concluído'
   const topic = item.title.split(' / ')[0]
   if (item.activityType === 'review') return `Responder revisão: ${topic}`
-  if (item.activityType === 'exercise' || item.activityType === 'practice') return `Praticar: ${topic}`
+  if (item.activityType === 'exercise' || item.activityType === 'assessment') return `Resolver exercícios: ${topic}`
+  if (item.activityType === 'practice' || item.activityType === 'coding') return `Praticar: ${topic}`
+  if (item.activityType === 'material') return `Consultar material: ${topic}`
   if (item.activityType === 'video') return `Assistir vídeo: ${topic}`
   return `Continuar: ${topic}`
 }

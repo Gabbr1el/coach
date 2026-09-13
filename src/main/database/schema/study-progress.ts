@@ -8,7 +8,7 @@ export const studyProgress = sqliteTable('study_progress', {
   roadmapId: text('roadmap_id').notNull(),
   currentModuleId: text('current_module_id').notNull(),
   currentTopicId: text('current_topic_id').notNull(),
-  currentLessonId: text('current_lesson_id').notNull(),
+  currentLessonId: text('current_lesson_id'),
   currentCheckpointId: text('current_checkpoint_id'),
   topicStatusesJson: text('topic_statuses_json').notNull().default('{}'),
   lessonPositionsJson: text('lesson_positions_json').notNull().default('{}'),

@@ -65,7 +65,7 @@ export type StudyLessonPosition = z.infer<typeof studyLessonPositionSchema>
 export type StudyCheckpointState = z.infer<typeof studyCheckpointStateSchema>
 export type CheckpointReasoningStatus = z.infer<typeof checkpointReasoningStatusSchema>
 export type CheckpointReasoningAssessment = z.infer<typeof checkpointReasoningAssessmentSchema>
-export interface StudyProgressState extends StudySelection { readonly topicStatuses: Record<string, StudyItemStatus>; readonly lessonPositions: Record<string, StudyLessonPosition>; readonly checkpointStates?: Record<string, StudyCheckpointState>; readonly currentPosition: StudyLessonPosition | null; readonly updatedAt: number }
+export interface StudyProgressState extends Omit<StudySelection, 'lessonId'> { readonly lessonId: string | null; readonly topicStatuses: Record<string, StudyItemStatus>; readonly lessonPositions: Record<string, StudyLessonPosition>; readonly checkpointStates?: Record<string, StudyCheckpointState>; readonly currentPosition: StudyLessonPosition | null; readonly updatedAt: number }
 export interface StudyProgressEvent { readonly id: string; readonly type: StudyEventType; readonly topicId: string; readonly checkpointId: string | null; readonly correct: boolean | null; readonly shouldReplan?: boolean; readonly createdAt: number }
 export interface StudyProgressApi {
   get(workspaceId: string): Promise<StudyProgressState | null>

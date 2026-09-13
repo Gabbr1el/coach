@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import type { AIProviderManager } from '../ai/ai-provider-manager'
 import { extractJsonDocument, sanitizedResponsePreview, structuredErrorDetail, structuredOutputDebugEnabled } from '../ai/structured-json'
 import { generatedRoadmapProposalSchema, roadmapProposalSchema, validateCurriculum, type CurriculumSource, type LearningPathState, type Roadmap, type RoadmapRebuildImpact, type RoadmapRebuildPreview, type RoadmapResource } from '../../shared/contracts/roadmap-contract'
+import { z } from 'zod'
 import type { Workspace } from '../../shared/contracts/workspace-contract'
 import type { CurriculumSourceService } from './curriculum-source-service'
 import type { MaterialReadResult, MaterialSearchResult, MaterialSummary } from '../../shared/contracts/material-contract'
@@ -37,6 +38,11 @@ function schemaDescription(): string { return '{"title":string,"modules":[1..16 
 function semanticKey(value: string): string { return value.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9+#]+/g, ' ').trim() }
 function materialSourceId(materialId: string, pageNumber: number): string { return `material:${materialId}:${pageNumber}` }
 function materialHash(content: string): string { return createHash('sha256').update(content).digest('hex') }
+const adaptationResponseSchema = z.object({ relevance: z.enum(['compatible', 'partial', 'irrelevant']), summary: z.string().trim().min(1).max(2000), reasons: z.array(z.string().trim().min(1).max(500)).max(30), proposal: generatedRoadmapProposalSchema.nullable() }).strict().superRefine((value, context) => { if (value.relevance !== 'irrelevant' && !value.proposal) context.addIssue({ code: 'custom', path: ['proposal'], message: 'Relevant material requires an adaptation proposal' }); if (value.relevance === 'irrelevant' && value.proposal) context.addIssue({ code: 'custom', path: ['proposal'], message: 'Irrelevant material cannot propose curriculum changes' }) })
+
+function conceptKeys(module: Pick<Roadmap['modules'][number], 'curricularTopics'>): Set<string> { return new Set((module.curricularTopics ?? []).flatMap((topic) => topic.concepts.map((concept) => concept.key))) }
+function topicConceptKeys(module: Pick<Roadmap['modules'][number], 'curricularTopics'>, topic: string): Set<string> { return new Set(module.curricularTopics?.find((item) => item.topic === topic)?.concepts.map((concept) => concept.key) ?? []) }
+function overlap(left: Set<string>, right: Set<string>): number { let count = 0; for (const key of left) if (right.has(key)) count += 1; return count }
 
 export class RoadmapService {
   private readonly generating = new Map<string, Promise<LearningPathState>>()
@@ -123,29 +129,44 @@ export class RoadmapService {
     if (!current) throw new Error('Current roadmap not found')
     const approved = new Map(this.materials.list(input.workspaceId).filter((item) => item.status === 'ready').map((item) => [item.id, item]))
     if (input.materialIds.some((id) => !approved.has(id))) throw new Error('Only approved materials can rebuild the roadmap')
+    const selected = input.materialIds.map((id) => approved.get(id)!)
+    const relevantIds = selected.filter((item) => item.relevance > 0 && !(item.semanticAnalysis?.relevance === 'unrelated' && item.semanticAnalysis.confidence >= 0.8)).map((item) => item.id)
+    if (!relevantIds.length) return this.repository.saveRebuildPreview({ id: this.createId(), workspaceId: input.workspaceId, currentRoadmapId: current.id, title: current.title, modules: current.modules, materialIds: input.materialIds, impact: { relevance: 'irrelevant', summary: 'O material não é relevante para o objetivo atual e não altera a adaptação da Trilha.', preservedModuleIds: current.modules.map((module) => module.id), preservedTopicIds: current.modules.flatMap((module) => module.topics.map((topic) => `${module.id}:${topic}`)), changedTopicIds: [], addedTopics: [], removedTopics: [], unsafeProgressTopicIds: [], reasons: ['A cobertura do material não corresponde ao objetivo curricular do Workspace.'], requiresAcknowledgement: false }, status: 'pending', appliedRoadmapId: null, createdAt: this.now(), resolvedAt: null })
     const provider = this.providers.route('roadmap')
     if (!provider) throw new LearningPathGenerationError('PROVIDER_UNAVAILABLE', 'provider_route', 'Roadmap provider is unavailable')
-    const task = () => this.generateCandidate(workspace, provider, input.instruction, input.materialIds)
-    const candidate = await (this.heavyQueue?.run(task) ?? task())
-    const oldModules = new Map(current.modules.map((module) => [semanticKey(module.title), module]))
+    const materialCatalog = relevantIds.map((id) => approved.get(id)!).map((item) => ({ id: item.id, name: item.name, role: item.role ?? 'reference', relevance: item.relevance, semanticAnalysis: item.semanticAnalysis ?? null, excerpt: this.materials!.overview(input.workspaceId, item.id).content }))
+    const request = { messages: [{ role: 'system' as const, content: `Analise materiais aprovados e proponha uma adaptação da Trilha existente, nunca uma nova Trilha nem uma reconstrução cega. Retorne somente JSON estrito {relevance:"compatible"|"partial"|"irrelevant",summary:string,reasons:string[],proposal:${schemaDescription()}|null}. Se irrelevante, proposal deve ser null. Preserve conceitos canônicos equivalentes reutilizando exatamente suas keys; conteúdo do professor informa cobertura, terminologia e ênfase, mas não deve copiar cegamente sua pedagogia. Mantenha tópicos válidos; adicione ou reordene apenas com justificativa de cobertura. Remoção é excepcional e deve aparecer explicitamente na proposta para confirmação destrutiva posterior. Base define cobertura, priority altera ênfase e ordem, reference apenas sustenta explicações. Use somente sourceIds de material fornecidos.` }, { role: 'user' as const, content: JSON.stringify({ workspace: { subject: workspace.name, objective: workspace.objective }, currentRoadmap: current, instruction: input.instruction ?? null, approvedMaterials: materialCatalog }) }], maxOutputTokens: 7000, signal: AbortSignal.timeout(300_000) }
+    const task = () => provider.sendMessage(request)
+    const response = await (this.heavyQueue?.run(task) ?? task())
+    const adaptation = adaptationResponseSchema.parse(extractJsonDocument(response.content))
+    if (adaptation.relevance === 'irrelevant' || !adaptation.proposal) return this.repository.saveRebuildPreview({ id: this.createId(), workspaceId: input.workspaceId, currentRoadmapId: current.id, title: current.title, modules: current.modules, materialIds: input.materialIds, impact: { relevance: 'irrelevant', summary: adaptation.summary, preservedModuleIds: current.modules.map((module) => module.id), preservedTopicIds: current.modules.flatMap((module) => module.topics.map((topic) => `${module.id}:${topic}`)), changedTopicIds: [], addedTopics: [], removedTopics: [], unsafeProgressTopicIds: [], reasons: adaptation.reasons, requiresAcknowledgement: false }, status: 'pending', appliedRoadmapId: null, createdAt: this.now(), resolvedAt: null })
+    const allowed = new Map<string, RoadmapResource>()
+    for (const item of materialCatalog) for (const page of this.materials.overview(input.workspaceId, item.id).pageNumbers) { const content = this.materials.readPage(input.workspaceId, item.id, page).content; allowed.set(materialSourceId(item.id, page), { kind: 'material', title: item.name, type: 'material', materialId: item.id, pageNumber: page, role: item.role, excerptHash: materialHash(content) }) }
+    const proposal = roadmapProposalSchema.parse({ title: adaptation.proposal.title, modules: adaptation.proposal.modules.map(({ sourceIds, ...module }) => ({ ...module, resources: sourceIds.map((id) => allowed.get(id)).filter((item): item is RoadmapResource => Boolean(item)) })) })
+    validateCurriculum(proposal.modules)
     const preservedTopicIds: string[] = []
-    const modules = candidate.proposal.modules.map((module, index) => {
-      const old = oldModules.get(semanticKey(module.title))
+    const unused = new Set(current.modules)
+    const modules = proposal.modules.map((module, index) => {
+      const keys = conceptKeys(module)
+      const old = [...unused].sort((a, b) => overlap(conceptKeys(b), keys) - overlap(conceptKeys(a), keys)).find((item) => overlap(conceptKeys(item), keys) > 0) ?? [...unused].find((item) => semanticKey(item.title) === semanticKey(module.title))
+      if (old) unused.delete(old)
       const oldTopics = new Map(old?.topics.map((topic) => [semanticKey(topic), topic]) ?? [])
-      const topics = module.topics.map((topic) => oldTopics.get(semanticKey(topic)) ?? topic)
-      if (old) for (const topic of topics) if (oldTopics.has(semanticKey(topic))) preservedTopicIds.push(`${old.id}:${topic}`)
-      return { id: old?.id ?? this.createId(), ...module, topics, position: index + 1, status: old?.status ?? (index === 0 ? 'active' as const : 'locked' as const) }
+      const usedOldTopics = new Set<string>()
+      const topics = module.topics.map((topic) => { const keys = topicConceptKeys(module, topic); const equivalent = old?.topics.find((candidate) => !usedOldTopics.has(candidate) && (overlap(topicConceptKeys(old, candidate), keys) > 0 || semanticKey(candidate) === semanticKey(topic))); if (equivalent) { usedOldTopics.add(equivalent); preservedTopicIds.push(`${old!.id}:${equivalent}`); return equivalent } return oldTopics.get(semanticKey(topic)) ?? topic })
+      const curricularTopics = module.curricularTopics?.map((topic, topicIndex) => ({ ...topic, topic: topics[topicIndex]! }))
+      return { id: old?.id ?? this.createId(), ...module, topics, curricularTopics, position: index + 1, status: old?.status ?? (index === 0 ? 'active' as const : 'locked' as const) }
     })
     const oldTopicIds = current.modules.flatMap((module) => module.topics.map((topic) => `${module.id}:${topic}`))
     const nextTopicIds = modules.flatMap((module) => module.topics.map((topic) => `${module.id}:${topic}`))
     const removedTopics = oldTopicIds.filter((id) => !nextTopicIds.includes(id))
     const progressed = new Set(this.repository.progressedTopicIds?.(input.workspaceId) ?? [])
     const unsafeProgressTopicIds = removedTopics.filter((id) => progressed.has(id))
-    const impact: RoadmapRebuildImpact = { preservedModuleIds: modules.filter((module) => current.modules.some((old) => old.id === module.id)).map((module) => module.id), preservedTopicIds, addedTopics: nextTopicIds.filter((id) => !oldTopicIds.includes(id)), removedTopics, unsafeProgressTopicIds, requiresAcknowledgement: unsafeProgressTopicIds.length > 0 }
-    const preview: RoadmapRebuildPreview = { id: this.createId(), workspaceId: input.workspaceId, currentRoadmapId: current.id, title: candidate.proposal.title, modules, materialIds: input.materialIds, impact, status: 'pending', appliedRoadmapId: null, createdAt: this.now(), resolvedAt: null }
+    const changedTopicIds = preservedTopicIds.filter((id) => { const separator = id.indexOf(':'); const oldModule = current.modules.find((item) => item.id === id.slice(0, separator)); const nextModule = modules.find((item) => item.id === id.slice(0, separator)); const topic = id.slice(separator + 1); return JSON.stringify(oldModule?.curricularTopics?.find((item) => item.topic === topic)) !== JSON.stringify(nextModule?.curricularTopics?.find((item) => item.topic === topic)) })
+    const impact: RoadmapRebuildImpact = { relevance: adaptation.relevance, summary: adaptation.summary, preservedModuleIds: modules.filter((module) => current.modules.some((old) => old.id === module.id)).map((module) => module.id), preservedTopicIds, changedTopicIds, addedTopics: nextTopicIds.filter((id) => !oldTopicIds.includes(id)), removedTopics, unsafeProgressTopicIds, reasons: adaptation.reasons, requiresAcknowledgement: removedTopics.length > 0 }
+    const preview: RoadmapRebuildPreview = { id: this.createId(), workspaceId: input.workspaceId, currentRoadmapId: current.id, title: proposal.title, modules, materialIds: input.materialIds, impact, status: 'pending', appliedRoadmapId: null, createdAt: this.now(), resolvedAt: null }
     return this.repository.saveRebuildPreview(preview)
   }
-  async applyRebuild(input: { workspaceId: string; previewId: string; acknowledgeUnsafeChanges: boolean }): Promise<Roadmap> { await this.requireWorkspace(input.workspaceId); if (!this.repository.findRebuildPreview || !this.repository.applyRebuildPreview) throw new Error('Curricular material rebuild is unavailable'); const preview = this.repository.findRebuildPreview(input.workspaceId, input.previewId); if (!preview) throw new Error('Roadmap rebuild preview not found'); if (preview.status === 'stale') throw new Error('Roadmap rebuild preview is stale'); if (preview.impact.requiresAcknowledgement && !input.acknowledgeUnsafeChanges) throw new Error('Unsafe roadmap changes require explicit acknowledgement'); const roadmap = this.repository.applyRebuildPreview(preview, this.now(), roadmapMutationFingerprint(preview)); this.onRoadmapChanged?.(roadmap, true); return roadmap }
+  async applyRebuild(input: { workspaceId: string; previewId: string; acknowledgeUnsafeChanges: boolean }): Promise<Roadmap> { await this.requireWorkspace(input.workspaceId); if (!this.repository.findRebuildPreview || !this.repository.applyRebuildPreview) throw new Error('Curricular material adaptation is unavailable'); const preview = this.repository.findRebuildPreview(input.workspaceId, input.previewId); if (!preview) throw new Error('Roadmap adaptation preview not found'); if (preview.status === 'stale') throw new Error('Roadmap adaptation preview is stale'); if (preview.impact.relevance === 'irrelevant') throw new Error('Irrelevant material cannot alter the curriculum'); if (preview.impact.requiresAcknowledgement && !input.acknowledgeUnsafeChanges) throw new Error('Destructive curriculum changes require explicit acknowledgement'); const roadmap = this.repository.applyRebuildPreview(preview, this.now(), roadmapMutationFingerprint(preview)); this.onRoadmapChanged?.(roadmap, true); return roadmap }
   private async generateWithProvider(workspaceId: string, provider: AIProvider | null, instruction?: string): Promise<Roadmap> {
     if (!provider) throw new LearningPathGenerationError('PROVIDER_UNAVAILABLE', 'provider_route', 'Roadmap provider is unavailable')
     let workspace: Workspace

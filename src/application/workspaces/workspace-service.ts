@@ -1,6 +1,6 @@
 import type { CreateWorkspaceInput, Workspace, WorkspaceProvisioningState, WorkspaceSummary } from '../../shared/contracts/workspace-contract'
 import type { WorkspaceRepository } from './workspace-repository'
-import { isProgrammingSubject, normalizeSubject, semanticSubjectKey } from './subject-normalizer'
+import { normalizeSubject, semanticSubjectKey } from './subject-normalizer'
 import type { AcademicSubjectContextService } from './academic-subject-context'
 
 export interface WorkspaceServiceDependencies {
@@ -113,7 +113,6 @@ export class WorkspaceService {
   private assertAnalyzed(input: CreateWorkspaceInput): void {
     if (this.provisioning && (!input.analysisToken || !input.analysisRevision)) throw new Error('Workspace analysis is required')
     if (this.provisioning && this.validateAnalysis && !this.validateAnalysis(input.analysisToken!, input.analysisRevision!, input.name, input.canonicalFocus, input.canonicalContext)) throw new Error('Workspace analysis is unknown or expired; analyze the theme again')
-    if (this.provisioning && isProgrammingSubject(input.name) && !input.declaredLevel && !input.fundamentals) throw new Error('Programming fundamentals must be answered with yes, no, or unknown')
   }
 
   private assertNoDuplicate(input: CreateWorkspaceInput, excludedId?: string): void {

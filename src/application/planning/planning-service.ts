@@ -146,6 +146,7 @@ export class PlanningService {
     const now = this.now(); const weekStart = weekStartKey(now, timezone); const found = this.repository.findWeeklyPlan?.(weekStart, timezone)
     return found ? this.presentWeeklyPlan(found.id, weekStart, timezone, found.revision, found.generatedAt, found.items, now) : null
   }
+  listReviewNeeds(): WeeklyPlanningReview[] { return this.repository.listWeeklyPlanningReviews?.(this.now()) ?? [] }
   replanWeek(timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): WeeklyPlan {
     this.repository.setCanonicalPlanningTimezone?.(timezone, this.now())
     if (!this.repository.findWeeklyPlan || !this.repository.listWeeklyPlanningTopics || !this.repository.listWeeklyAvailability || !this.repository.saveWeeklyPlan) throw new Error('Weekly planning persistence is unavailable')

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const ORGANIZER_READ_CAPABILITIES = ['workspaces.list', 'workspaces.search', 'academicLife.list', 'academicLife.search', 'plan.week.get', 'deadlines.list', 'availability.get'] as const
+export const ORGANIZER_READ_CAPABILITIES = ['workspaces.list', 'workspaces.search', 'academicLife.list', 'academicLife.search', 'plan.today.get', 'plan.week.get', 'availability.get', 'deadlines.list', 'review.needs.list'] as const
 export const ORGANIZER_WRITE_CAPABILITIES = ['workspace.prepare', 'academic.event.create', 'academic.event.update', 'academic.event.cancel', 'academic.event.linkWorkspace', 'academic.event.unlinkWorkspace', 'academic.event.keepUnlinked', 'academic-life.save', 'academic-life.transition', 'plan.today-budget.set', 'plan.weekday-availability.set', 'plan.recalculate', 'plan.item-completion.set'] as const
 export const organizerCapabilitySchema = z.enum([...ORGANIZER_READ_CAPABILITIES, ...ORGANIZER_WRITE_CAPABILITIES])
 
@@ -44,9 +44,11 @@ export const ORGANIZER_CAPABILITY_REGISTRY = {
   'workspaces.search': { access: 'read', mode: 'query' },
   'academicLife.list': { access: 'read', mode: 'query' },
   'academicLife.search': { access: 'read', mode: 'query' },
+  'plan.today.get': { access: 'read', mode: 'query' },
   'plan.week.get': { access: 'read', mode: 'query' },
   'deadlines.list': { access: 'read', mode: 'query' },
   'availability.get': { access: 'read', mode: 'query' },
+  'review.needs.list': { access: 'read', mode: 'query' },
   'workspace.prepare': { access: 'write', mode: 'mutation' },
   'academic.event.create': { access: 'write', mode: 'mutation' },
   'academic.event.update': { access: 'write', mode: 'mutation' },
@@ -63,3 +65,10 @@ export const ORGANIZER_CAPABILITY_REGISTRY = {
 } as const satisfies Record<OrganizerCapability, CapabilityDefinition>
 
 export const ORGANIZER_CAPABILITY_CATALOG = Object.entries(ORGANIZER_CAPABILITY_REGISTRY).map(([capability, definition]) => ({ capability, access: definition.access, mode: definition.mode }))
+
+export const ORGANIZER_UNAVAILABLE_CAPABILITIES = [
+  { capability: 'plan.reserveBlock', reason: 'reserva de bloco ainda não suportada' },
+  { capability: 'plan.moveItem', reason: 'movimentação manual de item ainda não suportada' },
+  { capability: 'availability.workingUntil', reason: 'horário de trabalho não é representável pela disponibilidade atual' },
+  { capability: 'availability.vacationUntil', reason: 'período de férias não é representável pela disponibilidade atual' },
+] as const

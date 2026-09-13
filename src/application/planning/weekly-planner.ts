@@ -1,6 +1,6 @@
 import type { WeeklyPlanItem, WeeklyPlanItemStatus } from '../../shared/contracts/planning-contract'
 
-export interface WeeklyPlanningTopic { workspaceId: string; workspaceName: string; moduleId: string; modulePosition: number; topicId: string; topic: string; progress: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED'; evidenceCount: number; masteryEstimate: number | null; confidence: 'low' | 'medium' | 'high'; needsReview: boolean; difficultyLevel: 'low' | 'medium' | 'high'; conceptMemory: { performance: 'unknown' | 'struggling' | 'developing' | 'secure'; retention: 'unknown' | 'fragile' | 'developing' | 'durable'; confidence: 'low' | 'medium' | 'high'; nextReviewAt: number | null } | null; dueAt: number | null; deadlineTitle: string | null }
+export interface WeeklyPlanningTopic { workspaceId: string; workspaceName: string; moduleId: string; modulePosition: number; topicId: string; topic: string; progress: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED'; evidenceCount: number; masteryEstimate: number | null; confidence: 'low' | 'medium' | 'high'; needsReview: boolean; difficultyLevel: 'low' | 'medium' | 'high'; conceptMemory: { performance: 'unknown' | 'struggling' | 'developing' | 'secure'; retention: 'unknown' | 'fragile' | 'developing' | 'durable'; confidence: 'low' | 'medium' | 'high'; nextReviewAt: number | null } | null; dueAt: number | null; deadlineTitle: string | null; deadlineEstimatedMinutes?: number | null }
 export interface WeeklyPlanningReview { workspaceId: string; workspaceName: string; conceptId: string; conceptName: string; nextReviewAt: number | null; retention: 'unknown' | 'fragile' | 'developing' | 'durable'; performance: 'unknown' | 'struggling' | 'developing' | 'secure'; dueAt: number | null }
 export interface ExistingWeeklyItem extends Omit<WeeklyPlanItem, 'workspaceName'> { sourceKey: string; workspaceName?: string }
 export interface WeeklyPlanDraftItem { id: string; sourceKey: string; workspaceId: string; workspaceName: string; dateKey: string; title: string; durationMinutes: number; position: number; status: WeeklyPlanItemStatus; moduleId: string | null; topicId: string | null; activityType: 'introduction' | 'review' | 'exercise'; scheduledStartMinutes: number; reason: string }
@@ -22,6 +22,7 @@ function activityTypes(topic: WeeklyPlanningTopic): Array<'introduction' | 'revi
   return ['introduction', 'exercise']
 }
 function preferredDuration(topic: WeeklyPlanningTopic, type: 'introduction' | 'review' | 'exercise'): number {
+  if (topic.deadlineEstimatedMinutes && type === activityTypes(topic)[0]) return topic.deadlineEstimatedMinutes
   const base = type === 'introduction' ? 30 : type === 'review' ? 25 : 35
   if (topic.conceptMemory) {
     if (topic.conceptMemory.performance === 'secure' && topic.conceptMemory.retention === 'durable' && topic.conceptMemory.confidence === 'high') return Math.max(15, Math.round(base * 0.6))

@@ -74,9 +74,9 @@ export class HomeOrganizerService {
         this.states?.save(this.conversation.threadId, state)
       }
 
-      const plan = this.planning.peekWeeklyPlan(clock.timezone); const deadlines = this.planning.getAcademicOverview().events
+      const plan = this.planning.peekWeeklyPlan(clock.timezone); const overview = this.planning.getAcademicOverview(); const deadlines = overview.events; const reviewNeeds = this.planning.listReviewNeeds()
       const referencedEvent = !explicitSubject(content) && isEventReference(content) && intent.entities.target ? academicLife.find((item) => item.status === 'active' && item.replacedById === null && normalized(item.title) === normalized(intent.entities.target!)) : null
-      const execution = this.executor.execute(intent, { content, originContent: semanticContent, originMessageId, ...executionClock, version: clock.currentTime, workspaces, academicLife, deadlines, plan, focusedAcademicEventId: referencedEvent?.id ?? null })
+      const execution = this.executor.execute(intent, { content, originContent: semanticContent, originMessageId, ...executionClock, version: clock.currentTime, workspaces, academicLife, deadlines, availability: overview.availability, reviewNeeds, plan, focusedAcademicEventId: referencedEvent?.id ?? null })
       if (execution) {
         if (execution.result.actions.length) { state = { ...state, pending: null, updatedAt: clock.currentTime }; this.states?.save(this.conversation.threadId, state) }
         return this.persist(content, execution.result, execution.assistantId, userMessageId)
@@ -89,8 +89,14 @@ export class HomeOrganizerService {
   }
 
   onPlannerActionResolved(action: PlannerAction): void {
-    if (action.status !== 'applied' || !this.states) return
-    const current = this.states.load(this.conversation.threadId); const item = this.resultItem(action.result); const payload = action.payload as { id?: string; eventId?: string; workspaceId?: string; replacesId?: string }
+    if (action.status !== 'applied') return
+    const item = this.resultItem(action.result)
+    const academicPayload = action.payload as { kind?: string; timezone?: string; workspaceId?: string | null }
+    const savedLinkedEvent = action.type === 'academic-life.save' && (academicPayload.kind === 'event' || academicPayload.kind === 'commitment') && (item?.workspaceId ?? academicPayload.workspaceId) != null
+    const linkedEvent = action.type === 'academic.event.linkWorkspace' && item?.workspaceId != null
+    if (savedLinkedEvent || linkedEvent) this.actions.propose({ type: 'plan.recalculate', payload: { timezone: item?.timezone ?? academicPayload.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone }, label: 'Recalcular o plano após vincular o evento', originMessageId: `followup:${action.id}`, contextVersion: action.resolvedAt ?? this.now(), idempotencyScope: `organizer:event-replan:${action.id}` })
+    if (!this.states) return
+    const current = this.states.load(this.conversation.threadId); const payload = action.payload as { id?: string; eventId?: string; workspaceId?: string; replacesId?: string }
     const eventId = item?.id ?? payload.eventId ?? (action.type === 'academic-life.transition' ? payload.id : null)
     const workspaceId = item?.workspaceId ?? payload.workspaceId ?? null
     const metadata = item ? eventMetadata(item) : null
@@ -104,8 +110,12 @@ export class HomeOrganizerService {
     const focusedEvent = state.focusedAcademicEventId ? activeEvents.get(state.focusedAcademicEventId) : null
     const pendingAge = state.pending ? now - state.pending.originalCreatedAt : 0
     const pending = state.pending && pendingAge >= 0 && pendingAge <= PENDING_TTL_MS ? state.pending : null
-    const next = { ...state, focusedAcademicEventId: focusedEvent?.id ?? null, focusedWorkspaceId: state.focusedWorkspaceId && activeWorkspaces.has(state.focusedWorkspaceId) ? state.focusedWorkspaceId : null, focusedSubject: focusedEvent ? eventMetadata(focusedEvent)?.subject ?? state.focusedSubject : state.focusedSubject, pending, recentResolvedAcademicEventIds: state.recentResolvedAcademicEventIds.filter((id) => activeEvents.has(id)).slice(0, 4), recentResolvedWorkspaceIds: state.recentResolvedWorkspaceIds.filter((id) => activeWorkspaces.has(id)).slice(0, 4), updatedAt: now }
-    if (JSON.stringify(next) !== JSON.stringify(state)) this.states?.save(this.conversation.threadId, next)
+    const semantic = { focusedAcademicEventId: focusedEvent?.id ?? null, focusedWorkspaceId: state.focusedWorkspaceId && activeWorkspaces.has(state.focusedWorkspaceId) ? state.focusedWorkspaceId : null, focusedSubject: focusedEvent ? eventMetadata(focusedEvent)?.subject ?? state.focusedSubject : state.focusedSubject, pending, recentResolvedAcademicEventIds: state.recentResolvedAcademicEventIds.filter((id) => activeEvents.has(id)).slice(0, 4), recentResolvedWorkspaceIds: state.recentResolvedWorkspaceIds.filter((id) => activeWorkspaces.has(id)).slice(0, 4) }
+    const unchanged = JSON.stringify(semantic) === JSON.stringify({ focusedAcademicEventId: state.focusedAcademicEventId, focusedWorkspaceId: state.focusedWorkspaceId, focusedSubject: state.focusedSubject, pending: state.pending, recentResolvedAcademicEventIds: state.recentResolvedAcademicEventIds, recentResolvedWorkspaceIds: state.recentResolvedWorkspaceIds })
+    if (unchanged) return state
+    // Revalidation writes only when it removes stale references or an expired pending intent.
+    const next = { ...state, ...semantic, updatedAt: now }
+    this.states?.save(this.conversation.threadId, next)
     return next
   }
 

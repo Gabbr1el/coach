@@ -403,6 +403,42 @@ describe('Coach database migrations', () => {
     database = openCoachDatabase({ databasePath, migrationsFolder }); const reopened = database.sqlite.prepare('SELECT status FROM weekly_plan_items WHERE id=?').get(itemId) as { status: string }; expect(reopened.status).toBe('pending'); expect(database.sqlite.prepare('SELECT completed,duration_minutes AS duration FROM plan_item_completion_history WHERE item_id=? ORDER BY created_at').all(itemId)).toEqual([{ completed: 1, duration: 60 }, { completed: 0, duration: 60 }]); expect(database.sqlite.prepare('SELECT minutes FROM daily_planning_budgets WHERE date_key=? AND timezone=?').get('2026-09-10', 'UTC')).toEqual({ minutes: 240 }); database.close()
   })
 
+  it('uses identical effective availability and complete active deadlines for read projections', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const now = Date.now(); const workspaceId = crypto.randomUUID(); const repository = new DrizzlePlanningRepository(database)
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,?,?,'active',?,?)").run(workspaceId, 'Redes', 'Estudar redes', now, now)
+    repository.setAvailability(5, 60, now - 10)
+    database.sqlite.prepare("INSERT INTO academic_life_items (id,kind,title,details,workspace_id,starts_at,ends_at,expires_at,timezone,weekday,minutes,status,share_with_ai,provenance_source,provenance_reference,replaces_id,replaced_by_id,fingerprint,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',1,'conversation',NULL,NULL,NULL,?,?,?)").run(crypto.randomUUID(), 'availability', 'Sexta', '', null, null, null, null, 'UTC', 5, 90, 'availability-newer', now, now)
+    database.sqlite.prepare('INSERT INTO study_deadlines (id,workspace_id,title,due_at,estimated_minutes,mastery_percent,completed,created_at) VALUES (?,?,?,?,?,?,0,?)').run('deadline-only', workspaceId, 'Prazo avulso', now + 86_400_000, 120, null, now)
+    database.sqlite.prepare('INSERT INTO academic_events (id,workspace_id,type,title,due_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?)').run('event-only', workspaceId, 'exam', 'Prova Redes', now + 172_800_000, now, now)
+    const overview = repository.getAcademicOverview(now)
+    expect(overview.availability).toEqual(repository.listWeeklyAvailability(now).sort((a, b) => a.weekday - b.weekday)); expect(overview.availability).toContainEqual({ weekday: 5, minutes: 90 }); expect(overview.events.map((item) => item.id)).toEqual(['deadline-only', 'event-only'])
+    database.close()
+  })
+
+  it('consumes validated academic event effort metadata and keeps legacy defaults', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const now = Date.now(); const workspaceId = crypto.randomUUID(); const repository = new DrizzlePlanningRepository(database)
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,?,?,'active',?,?)").run(workspaceId, 'Redes', 'Estudar redes', now, now)
+    const insert = (id: string, title: string, details: string) => database.sqlite.prepare("INSERT INTO academic_life_items (id,kind,title,details,workspace_id,starts_at,ends_at,expires_at,timezone,weekday,minutes,status,share_with_ai,provenance_source,provenance_reference,replaces_id,replaced_by_id,fingerprint,created_at,updated_at) VALUES (?,'event',?,?,?,NULL,?,?, 'UTC',NULL,NULL,'active',1,'conversation',NULL,NULL,NULL,?,?,?)").run(id, title, details, workspaceId, now + 86_400_000, now + 86_400_000, id, now, now)
+    insert('effort', 'Prova Redes', JSON.stringify({ schema: 'academic-event/v1', eventKind: 'exam', subject: 'Redes', estimatedMinutes: 300 })); insert('legacy', 'Prova antiga', JSON.stringify({ schema: 'academic-event/v1', eventKind: 'exam', subject: 'Redes' })); insert('unsafe', 'Prova inválida', JSON.stringify({ schema: 'academic-event/v1', eventKind: 'exam', subject: 'Redes', estimatedMinutes: 100001 }))
+    const efforts = new Map(repository.listPriorityInputs().map((item) => [item.title, item.estimatedMinutes])); expect(efforts.get('Prova Redes')).toBe(300); expect(efforts.get('Prova antiga')).toBe(240); expect(efforts.get('Prova inválida')).toBe(240)
+    database.close()
+  })
+
+  it('keeps unlinked event effort out, then consumes 300 minutes after link and explicit replan', () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const now = Date.now(); const workspaceId = crypto.randomUUID(); const roadmapId = crypto.randomUUID(); const moduleId = crypto.randomUUID(); const eventId = crypto.randomUUID(); const repository = new DrizzlePlanningRepository(database); const service = new PlanningService(repository, () => now)
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,?,?,'active',?,?)").run(workspaceId, 'Redes', 'Estudar redes', now, now)
+    database.sqlite.prepare("INSERT INTO roadmaps (id,workspace_id,title,status,generation_kind,version,created_at,updated_at) VALUES (?,?,?,'accepted','ai_generated',1,?,?)").run(roadmapId, workspaceId, 'Redes', now, now)
+    database.sqlite.prepare("INSERT INTO roadmap_modules (id,roadmap_id,title,objective,estimated_minutes,position,status,topics_json,outcomes_json,practice,completion_criteria_json,resources_json) VALUES (?,?,?,?,?,?,'active',?,?,?,?,?)").run(moduleId, roadmapId, 'Fundamentos', 'Estudar OSI', 300, 0, JSON.stringify(['OSI']), JSON.stringify(['Entender OSI']), 'Praticar', JSON.stringify(['Concluir']), '[]')
+    const details = JSON.stringify({ schema: 'academic-event/v1', eventKind: 'exam', subject: 'Redes', estimatedMinutes: 300 })
+    database.sqlite.prepare("INSERT INTO academic_life_items (id,kind,title,details,workspace_id,starts_at,ends_at,expires_at,timezone,weekday,minutes,status,share_with_ai,provenance_source,provenance_reference,replaces_id,replaced_by_id,fingerprint,created_at,updated_at) VALUES (?,'event',?,?,NULL,NULL,?,?,'UTC',NULL,NULL,'active',1,'conversation',NULL,NULL,NULL,?,?,?)").run(eventId, 'Prova Redes', details, now + 86_400_000, now + 86_400_000, eventId, now, now)
+    expect(repository.listPriorityInputs()).toEqual([])
+    database.sqlite.prepare('UPDATE academic_life_items SET workspace_id=? WHERE id=?').run(workspaceId, eventId)
+    expect(repository.listPriorityInputs()).toEqual([expect.objectContaining({ title: 'Prova Redes', estimatedMinutes: 300 })])
+    for (let weekday = 0; weekday < 7; weekday++) repository.setAvailability(weekday, 300, now)
+    const plan = service.replanWeek('UTC'); expect(plan.days.flatMap((day) => day.items)).toContainEqual(expect.objectContaining({ workspaceId, durationMinutes: 300 })); expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM roadmaps').get()).toEqual({ count: 1 }); expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM roadmap_modules').get()).toEqual({ count: 1 })
+    database.close()
+  })
+
   it('persists one weekly plan across restart without duplicate work', () => {
     const databasePath = createDatabasePath(); const workspaceId = crypto.randomUUID(); let database = openCoachDatabase({ databasePath, migrationsFolder })
     database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,'C','Ponteiros','active',1,1)").run(workspaceId)

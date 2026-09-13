@@ -27,10 +27,11 @@ function executionMessage(execution: ExerciseExecution): string {
   return 'A solução ainda não passou em todos os testes.'
 }
 
-export function ExercisesWorkspace({ workspaceId, roadmap, initialTopicId, onBack, onContext }: {
+export function ExercisesWorkspace({ workspaceId, roadmap, initialTopicId, expectedSetId, onBack, onContext }: {
   workspaceId: string
   roadmap: Roadmap
   initialTopicId: string
+  expectedSetId?: string | null
   onBack(): void
   onContext(context: ActiveExerciseContext | null): void
 }) {
@@ -70,13 +71,22 @@ export function ExercisesWorkspace({ workspaceId, roadmap, initialTopicId, onBac
     setBusy('load'); setError(null); setResult(null); setHint(null); setActiveId(null)
     void window.coach.exercise.getSet({ workspaceId, topicId }).then((next) => {
       if (!next) { setError('Os exercícios deste tópico ainda estão sendo preparados.'); return }
+      if (expectedSetId && next.id !== expectedSetId) { setError('O conjunto solicitado não está disponível para este tópico.'); return }
       if (loadEpoch.current !== epoch) return
       setSets((current) => ({ ...current, [topicId]: next }))
       const first = next.exercises[0]
       setActiveId(first?.id ?? null)
       if (first) { setCode(next.progress.find((item) => item.exerciseId === first.id)?.currentCode ?? first.starterCode); setPrediction(''); submitIdentity.current = null }
     }).catch(() => { if (loadEpoch.current === epoch) setError('Não foi possível consultar os exercícios preparados.') }).finally(() => { if (loadEpoch.current === epoch) setBusy(null) })
-  }, [workspaceId, roadmap.id, topicId, location?.module.id, location?.module.status])
+  }, [workspaceId, roadmap.id, topicId, expectedSetId, location?.module.id, location?.module.status])
+
+  useEffect(() => {
+    if (set?.status === 'ready' || (set?.status === 'failed_retryable' && set.retryAfter === null)) return
+    const interval = window.setInterval(() => {
+      void window.coach.exercise.getSet({ workspaceId, topicId }).then((next) => { if (next && (!expectedSetId || next.id === expectedSetId)) setSets((current) => ({ ...current, [topicId]: next })) }).catch(() => {})
+    }, 2_000)
+    return () => window.clearInterval(interval)
+  }, [workspaceId, topicId, expectedSetId, set?.status, set?.retryAfter])
 
   useEffect(() => {
     if (!active) { onContext(null); return }

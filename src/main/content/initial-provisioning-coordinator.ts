@@ -6,17 +6,21 @@ import type { CoachDatabase } from '../database/connection'
 import type { PerformanceTimelineStore } from '../telemetry/performance-timeline'
 
 export class InitialProvisioningCoordinator {
+  private startupQueue: string[] = []
+  private startupTimer: ReturnType<typeof setTimeout> | null = null
   constructor(private readonly database: CoachDatabase, private readonly repository: WorkspaceContentRepository, private readonly wake: () => void, private readonly now = Date.now, private readonly timelines?: PerformanceTimelineStore) {}
 
   initialize(workspaceId: string): void {
     const now = this.now()
+    const provisioning = this.database.sqlite.prepare('SELECT status FROM workspace_provisioning WHERE workspace_id=?').get(workspaceId) as { status: string } | undefined
+    if (provisioning?.status === 'draft') return
     this.ensureProjection(workspaceId, now)
     const existing = this.repository.getRevision(workspaceId)
     if (existing?.inputHash === 'legacy-unavailable') {
       const accepted = this.database.sqlite.prepare("SELECT id FROM roadmaps WHERE workspace_id=? AND status='accepted' ORDER BY version DESC LIMIT 1").get(workspaceId) as { id: string } | undefined
       if (accepted) {
         this.repository.adoptRoadmapRevision({ workspaceId, roadmapId: accepted.id, inputHash: 'legacy-unavailable', now })
-        this.advance(workspaceId)
+        this.resumeApprovedRoadmap(workspaceId)
         this.wake()
       }
       return
@@ -69,7 +73,7 @@ export class InitialProvisioningCoordinator {
 
   advance(workspaceId: string): void {
     const revision = this.repository.getRevision(workspaceId)
-    if (!revision || revision.inputHash === 'legacy-unavailable') return
+    if (!revision) return
     const roadmap = this.database.sqlite.prepare("SELECT id FROM roadmaps WHERE workspace_id=? AND status='accepted' AND content_revision=? ORDER BY version DESC LIMIT 1").get(workspaceId, revision.revision) as { id: string } | undefined
     if (!roadmap) { this.stage(workspaceId, 'roadmap'); return }
     const topics = (this.database.sqlite.prepare('SELECT id,topics_json AS topics FROM roadmap_modules WHERE roadmap_id=? ORDER BY position').all(roadmap.id) as Array<{ id: string; topics: string }>).flatMap((module) => (JSON.parse(module.topics) as string[]).map((topic) => `${module.id}:${topic}`))
@@ -132,8 +136,15 @@ export class InitialProvisioningCoordinator {
   }
   reconcileWorkspace(workspaceId: string): void { this.initialize(workspaceId) }
   reconcileAll(): void {
-    const rows = this.database.sqlite.prepare("SELECT id FROM workspaces WHERE status='active'").all() as Array<{ id: string }>
-    for (const row of rows) { try { this.initialize(row.id) } catch (error) { console.error(`Workspace content reconciliation failed for ${row.id}:`, error) } }
+    const rows = this.database.sqlite.prepare("SELECT w.id FROM workspaces w JOIN workspace_provisioning p ON p.workspace_id=w.id WHERE w.status='active' AND p.status<>'draft' ORDER BY COALESCE(w.last_opened_at,w.updated_at) DESC").all() as Array<{ id: string }>
+    this.startupQueue = rows.map((row) => row.id)
+    this.reconcileStartupBatch()
+  }
+  private reconcileStartupBatch(): void {
+    this.startupTimer = null
+    const batch = this.startupQueue.splice(0, 5)
+    for (const workspaceId of batch) { try { this.initialize(workspaceId) } catch (error) { console.error(`Workspace content reconciliation failed for ${workspaceId}:`, error) } }
+    if (this.startupQueue.length) this.startupTimer = setTimeout(() => this.reconcileStartupBatch(), 25)
   }
   onJobSettled(job: ContentJob): void { this.syncFailure(job.workspaceId) }
   private syncFailure(workspaceId: string): void {

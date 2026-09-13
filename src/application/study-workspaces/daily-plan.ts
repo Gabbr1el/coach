@@ -3,7 +3,7 @@ import type { StudyPlanItem } from '../../shared/contracts/study-workspace-contr
 import type { StudyProgressState } from '../../shared/contracts/study-progress-contract'
 import type { TopicLearningState } from '../study-progress/topic-learning'
 
-export interface DailyPlanContext { workspaceId: string; roadmap: Roadmap; progress: StudyProgressState | null; availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; learningStates: Map<string, TopicLearningState>; startMinutes: number }
+export interface DailyPlanContext { workspaceId: string; roadmap: Roadmap; progress: StudyProgressState | null; availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; learningStates: Map<string, TopicLearningState>; startMinutes: number; exerciseSetIds?: ReadonlyMap<string, string>; materialIds?: ReadonlyMap<string, string> }
 
 export function deriveDailyPlan(context: DailyPlanContext, existing: StudyPlanItem[], createId: () => string): StudyPlanItem[] {
   const completed = existing.filter((item) => item.status === 'completed')
@@ -25,7 +25,9 @@ export function deriveDailyPlan(context: DailyPlanContext, existing: StudyPlanIt
       const durationMinutes = Math.min(preferred, remaining)
       const preserved = completedByKey.get(`${item.topicId}:${type}`)
       if (preserved) continue
-      plan.push({ id: createId(), title: `${item.topic} / ${type === 'introduction' ? 'introdução' : type === 'review' ? 'revisão' : 'exercícios'}`, durationMinutes, position: plan.length + 1, status: plan.some((entry) => entry.status === 'active') ? 'pending' : 'active', moduleId: item.module.id, topicId: item.topicId, activityType: type, scheduledStartMinutes: start })
+      const exerciseSetId = type === 'exercise' ? context.exerciseSetIds?.get(item.topicId) : undefined
+      const materialId = type === 'material' ? context.materialIds?.get(item.topicId) : undefined
+      plan.push({ id: createId(), title: `${item.topic} / ${type === 'introduction' ? 'introdução' : type === 'review' ? 'revisão' : 'exercícios'}`, durationMinutes, position: plan.length + 1, status: plan.some((entry) => entry.status === 'active') ? 'pending' : 'active', moduleId: item.module.id, topicId: item.topicId, activityType: type, ...(exerciseSetId ? { exerciseSetId } : {}), ...(materialId ? { materialId } : {}), scheduledStartMinutes: start })
       futureCount++
       start += durationMinutes; remaining -= durationMinutes
     }

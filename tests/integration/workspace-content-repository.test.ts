@@ -59,6 +59,36 @@ function migrationsThrough0045(): string {
 }
 
 describe('SqliteWorkspaceContentRepository', () => {
+  it('keeps prepared drafts completely outside reconciliation and worker claims until confirmed', async () => {
+    const db = database(); const id = workspace(db); db.sqlite.prepare("INSERT INTO workspace_provisioning (workspace_id,status,stage,material_ids_json,attempt_count,created_at,stage_updated_at) VALUES (?,'draft','workspace','[]',0,1,1)").run(id)
+    const repository = new SqliteWorkspaceContentRepository(db); const handler = vi.fn(async () => ({ publish: vi.fn() })); const worker = new ContentGenerationWorker({ repository, admission: new HeavyGenerationQueue(), handlers: { roadmap_generate: handler }, pollMs: 5 })
+    worker.start(); const coordinator = new InitialProvisioningCoordinator(db, repository, () => worker.wake()); coordinator.reconcileAll(); coordinator.initialize(id); await new Promise((resolve) => setTimeout(resolve, 20)); await worker.stop()
+    expect(handler).not.toHaveBeenCalled(); expect(db.sqlite.prepare('SELECT COUNT(*) count FROM workspace_content_revisions').get()).toEqual({ count: 0 }); expect(db.sqlite.prepare('SELECT COUNT(*) count FROM content_jobs').get()).toEqual({ count: 0 }); db.close()
+  })
+
+  it('claimNext excludes jobs belonging to drafts even if corrupt data already queued them', () => {
+    const db = database(); const id = workspace(db); db.sqlite.prepare("INSERT INTO workspace_provisioning (workspace_id,status,stage,material_ids_json,attempt_count,created_at,stage_updated_at) VALUES (?,'draft','workspace','[]',0,1,1)").run(id)
+    const repository = new SqliteWorkspaceContentRepository(db); const revision = repository.ensureRevision({ workspaceId: id, inputHash: hash('d'), now: 1 }); repository.enqueue({ workspaceId: id, revision: revision.revision, kind: 'roadmap_generate', unitKey: 'roadmap', priority: 900, inputHash: revision.inputHash, generatorContractVersion: 'roadmap-material-first-v2' }, 1)
+    expect(repository.claimNext({ owner: 'worker', now: 1 })).toBeNull(); db.close()
+  })
+
+  it('adopts legacy roadmap without changing curriculum IDs and enqueues current plus N+1 complete units', () => {
+    const db = database(); const id = workspace(db); const repository = new SqliteWorkspaceContentRepository(db); const now = 10
+    db.sqlite.prepare("INSERT INTO workspace_provisioning (workspace_id,status,stage,material_ids_json,attempt_count,created_at,started_at,stage_updated_at) VALUES (?,'ready','background','[]',0,?,?,?)").run(id, now, now, now)
+    const revision = repository.ensureRevision({ workspaceId: id, inputHash: 'legacy-unavailable', now })
+    const roadmapId = 'legacy-roadmap'; const firstModule = 'legacy-module-1'; const secondModule = 'legacy-module-2'
+    db.sqlite.prepare("INSERT INTO roadmaps (id,workspace_id,title,status,generation_kind,version,content_revision,content_hash,created_at,updated_at) VALUES (?,?,'Legacy','accepted','ai_generated',1,?,'legacy-unavailable',?,?)").run(roadmapId, id, revision.revision, now, now)
+    db.sqlite.prepare("INSERT INTO roadmap_modules (id,roadmap_id,title,objective,estimated_minutes,position,status,topics_json,outcomes_json,practice,completion_criteria_json,resources_json) VALUES (?,?, 'M1','O',60,1,'active','[\"one\"]','[]','P','[]','[]'),(?,?, 'M2','O',60,2,'available','[\"two\"]','[]','P','[]','[]')").run(firstModule, roadmapId, secondModule, roadmapId)
+    db.sqlite.prepare("INSERT INTO study_progress (workspace_id,roadmap_id,current_module_id,current_topic_id,topic_statuses_json,lesson_positions_json,checkpoint_states_json,updated_at) VALUES (?,?,?,?,'{}','{}','{}',?)").run(id, roadmapId, firstModule, `${firstModule}:one`, now)
+    new InitialProvisioningCoordinator(db, repository, () => {}).initialize(id)
+    expect(db.sqlite.prepare('SELECT id FROM roadmaps WHERE workspace_id=?').all(id)).toEqual([{ id: roadmapId }])
+    expect(db.sqlite.prepare("SELECT kind,unit_key AS unitKey FROM content_jobs WHERE workspace_id=? AND kind IN ('lesson_generate','exercise_generate') ORDER BY unit_key,kind").all(id)).toEqual([
+      { kind: 'exercise_generate', unitKey: `${firstModule}:one` }, { kind: 'lesson_generate', unitKey: `${firstModule}:one` },
+      { kind: 'exercise_generate', unitKey: `${secondModule}:two` }, { kind: 'lesson_generate', unitKey: `${secondModule}:two` },
+    ])
+    db.close()
+  })
+
   it('upgrades a copied 45-migration profile through the current journal without touching the source database', () => {
     const sourceDirectory = mkdtempSync(join(tmpdir(), 'coach-profile-source-')); directories.push(sourceDirectory)
     const sourcePath = join(sourceDirectory, 'coach.sqlite'); const source = openCoachDatabase({ databasePath: sourcePath, migrationsFolder: migrationsThrough0045() }); workspace(source); source.close()

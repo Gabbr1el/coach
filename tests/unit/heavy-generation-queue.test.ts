@@ -20,4 +20,10 @@ describe('HeavyGenerationQueue', () => {
     release(); await Promise.all([foreground, background])
     expect(events).toEqual(['foreground', 'background'])
   })
+  it('contains a many-workspace startup storm at one provider call and still puts foreground next', async () => {
+    const queue = new HeavyGenerationQueue(); let active = 0; let maximum = 0; let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve }); const events: string[] = []
+    const background = Array.from({ length: 40 }, (_, index) => queue.run(async () => { active += 1; maximum = Math.max(maximum, active); events.push(`background:${index}`); if (index === 0) await gate; active -= 1 }, { priority: 'background' }))
+    await new Promise((resolve) => setTimeout(resolve, 0)); const foreground = queue.run(async () => { active += 1; maximum = Math.max(maximum, active); events.push('foreground'); active -= 1 }, { priority: 'foreground' }); release(); await Promise.all([foreground, ...background])
+    expect(maximum).toBe(1); expect(events.slice(0, 2)).toEqual(['background:0', 'foreground'])
+  })
 })

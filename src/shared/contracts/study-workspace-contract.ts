@@ -62,8 +62,8 @@ export interface StudyPlanItem {
   readonly moduleId?: string
   readonly topicId?: string
   readonly activityType?: 'study' | 'lesson' | 'introduction' | 'exercise' | 'assessment' | 'review' | 'practice' | 'coding' | 'material' | 'video'
-  readonly exerciseSetId?: string
-  readonly materialId?: string
+  readonly exerciseSetId?: string | null
+  readonly materialId?: string | null
   readonly scheduledStartMinutes?: number
 }
 

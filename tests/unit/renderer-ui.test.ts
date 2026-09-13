@@ -92,6 +92,8 @@ describe('renderer UI safeguards', () => {
     expect(app).toContain("activeExercise: workspacePage === 'exercises'")
     expect(exercises).toContain('window.coach.exercise.getSet')
     expect(exercises).not.toContain('window.coach.exercise.ensureSet')
+    expect(exercises).toContain('window.setInterval')
+    expect(exercises).toContain('window.clearInterval')
     expect(exercises).toContain('estão na fila de preparação')
     expect(exercises).toContain('getSet({ workspaceId, topicId })')
     expect(exercises).not.toContain('localStorage')

@@ -1,6 +1,6 @@
 import type { StudyPlanItem } from '../../shared/contracts/study-workspace-contract'
 
-export type NextStepRoute = 'studies' | 'exercises' | 'review' | 'practice' | 'materials'
+export type NextStepRoute = 'studies' | 'exercises' | 'review' | 'practice' | 'materials' | 'videos'
 
 export interface NextStepCta {
   readonly label: string
@@ -18,10 +18,11 @@ export function deriveNextStepCta(item: StudyPlanItem | undefined): NextStepCta 
   const identity = { moduleId: item.moduleId ?? null, topicId: item.topicId ?? null, exerciseSetId: item.exerciseSetId ?? null, materialId: item.materialId ?? null }
   switch (item.activityType) {
     case 'study': case 'lesson': case 'introduction': return { ...identity, label: 'Abrir Estudos', description: `Continue a aula de ${topic}.`, route: 'studies' }
-    case 'exercise': case 'assessment': return { ...identity, label: 'Abrir Exercícios', description: `Resolva o conjunto preparado para ${topic}.`, route: 'exercises' }
+    case 'exercise': case 'assessment': return item.exerciseSetId ? { ...identity, label: 'Abrir Exercícios', description: `Resolva o conjunto preparado para ${topic}.`, route: 'exercises' } : null
     case 'review': return { ...identity, label: 'Abrir Revisão', description: `Revise as evidências de aprendizagem de ${topic}.`, route: 'review' }
     case 'practice': case 'coding': return { ...identity, label: 'Abrir Prática', description: `Pratique ${topic} no projeto do Workspace.`, route: 'practice' }
-    case 'material': return { ...identity, label: 'Abrir Material', description: `Consulte o material específico de ${topic}.`, route: 'materials' }
+    case 'material': return item.materialId ? { ...identity, label: 'Abrir Material', description: `Consulte o material específico de ${topic}.`, route: 'materials' } : null
+    case 'video': return { ...identity, label: 'Abrir Vídeos', description: `Continue o conteúdo em vídeo de ${topic}.`, route: 'videos' }
     default: return null
   }
 }

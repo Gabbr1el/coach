@@ -47,8 +47,13 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
     try {
       const turn = await organizer.organize(input)
       if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
-      send({ requestId: input.requestId, type: 'text-delta', content: turn.result.message })
-      send({ requestId: input.requestId, type: 'completed', messages: turn.messages })
+      const chunkSize = 48
+      for (let offset = 0; offset < turn.result.message.length; offset += chunkSize) {
+        if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
+        send({ requestId: input.requestId, type: 'text-delta', content: turn.result.message.slice(offset, offset + chunkSize) })
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      send({ requestId: input.requestId, type: 'completed', messages: await organizer.listMessages() })
     } catch (error) {
       send(controller.signal.aborted
         ? { requestId: input.requestId, type: 'cancelled' }

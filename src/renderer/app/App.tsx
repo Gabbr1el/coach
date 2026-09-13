@@ -27,6 +27,7 @@ import { planActionLabel } from '../../application/study-workspaces/daily-plan'
 import type { AcademicLifeProjection } from '../../shared/contracts/academic-life-contract'
 import { ReviewWorkspace } from './ReviewWorkspace'
 import { MATERIAL_FALLBACK, publicCreationError, WorkspaceCreationOperations } from './workspace-creation-operations'
+import { appendOptimisticMessage, isNearChatBottom, optimisticMessage, reconcileConversationMessages, scrollChatToLatest, WorkspaceChatController } from './chat-experience'
 
 function useDialogFocus<T extends HTMLElement>(open: boolean, onClose: () => void) {
   const dialogRef = useRef<T | null>(null)
@@ -275,6 +276,7 @@ export function App() {
   const [plannerSending, setPlannerSending] = useState(false)
   const [streamedContent, setStreamedContent] = useState('')
   const streamHandle = useRef<{ cancel(): void; dispose(): void } | null>(null)
+  const homeRequestEpoch = useRef(0)
   const [plannerLoading, setPlannerLoading] = useState(true)
   const [plannerError, setPlannerError] = useState<string | null>(null)
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null)
@@ -290,6 +292,8 @@ export function App() {
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const workspaceStreamHandle = useRef<{ cancel(): void; dispose(): void } | null>(null)
   const workspaceLoadEpoch = useRef(0)
+  const workspaceOpenEpoch = useRef(0)
+  const workspaceChat = useRef(new WorkspaceChatController())
   const studySelectionEpoch = useRef(0)
   const workspaceDrafts = useRef(new Map<string, string>())
   const workspaceMessageEnd = useRef<HTMLDivElement | null>(null)
@@ -363,7 +367,8 @@ export function App() {
   useEffect(() => {
     void window.coach.application.getInfo().then(setApplicationInfo).catch(() => setPlannerError('A integração desktop está indisponível.'))
     void loadWorkspaces()
-    void window.coach.conversation.listHomeMessages().then(setMessages).catch(() => setPlannerError('Não foi possível carregar a conversa do Planner.')).finally(() => setPlannerLoading(false))
+    const epoch = ++homeRequestEpoch.current
+    void window.coach.conversation.listHomeMessages().then((loaded) => { if (homeRequestEpoch.current === epoch) setMessages((current) => reconcileConversationMessages(current, loaded)) }).catch(() => setPlannerError('Não foi possível carregar a conversa do Planner.')).finally(() => { if (homeRequestEpoch.current === epoch) setPlannerLoading(false) })
     void window.coach.planning.listPriorities().then(setPriorities)
     void window.coach.planning.getAcademicOverview().then(setAcademicOverview)
     void window.coach.planning.getWeeklyPlan().then(setWeeklyPlan).catch(() => setPlannerError('Não foi possível carregar o plano semanal.'))
@@ -376,17 +381,24 @@ export function App() {
 
   useEffect(() => { if (!workspaces.some((workspace) => workspace.provisioning && workspace.provisioning.status !== 'ready')) return; const timer = window.setInterval(() => void loadWorkspaces(), 1500); return () => window.clearInterval(timer) }, [workspaces, loadWorkspaces])
 
+  const stopWorkspaceStream = useCallback(() => {
+    const stream = workspaceStreamHandle.current
+    const snapshot = workspaceChat.current.activate(null, () => { stream?.cancel(); stream?.dispose() })
+    workspaceStreamHandle.current = null
+    setWorkspaceStreamedContent(snapshot.partial)
+    setWorkspaceSending(false)
+  }, [])
+
   useEffect(() => () => {
     streamHandle.current?.cancel()
     streamHandle.current?.dispose()
-    workspaceStreamHandle.current?.cancel()
-    workspaceStreamHandle.current?.dispose()
-  }, [])
+    stopWorkspaceStream()
+  }, [stopWorkspaceStream])
 
   useEffect(() => {
     const epoch = ++workspaceLoadEpoch.current
-    workspaceStreamHandle.current?.cancel()
-    workspaceStreamHandle.current?.dispose()
+    const stream = workspaceStreamHandle.current
+    const snapshot = workspaceChat.current.activate(selected?.id ?? null, () => { stream?.cancel(); stream?.dispose() })
     workspaceStreamHandle.current = null
     setWorkspaceSending(false)
     setPlanUpdating(false)
@@ -394,8 +406,8 @@ export function App() {
     setTimerUpdating(false)
     setWorkspaceInput(selected ? workspaceDrafts.current.get(selected.id) ?? '' : '')
     workspaceFollowLatest.current = true
-    setWorkspaceMessages([])
-    setWorkspaceStreamedContent('')
+    setWorkspaceMessages(snapshot.messages)
+    setWorkspaceStreamedContent(snapshot.partial)
     setActiveMaterial(null)
     setRoadmapRebuild(null)
     setWorkspaceError(null)
@@ -420,7 +432,7 @@ export function App() {
     if (!selected) return
     setWorkspaceLoading(true)
     void Promise.all([window.coach.conversation.listWorkspaceMessages(selected.id), window.coach.studyWorkspace.refreshLivePlan({ workspaceId: selected.id }), window.coach.observer.getState(selected.id)])
-      .then(([loaded, state, observer]) => { if (workspaceLoadEpoch.current === epoch) { setWorkspaceMessages(loaded); setStudyState(state); setObserverState(observer); setEditorContent(state.editorContent); setStudyNotes(state.notes); documentRevision.current = state.documentRevision; notesRevision.current = state.notesRevision } })
+      .then(([loaded, state, observer]) => { if (workspaceLoadEpoch.current === epoch) { setWorkspaceMessages((current) => workspaceChat.current.reconcileLoad(selected.id, snapshot.generation, current, loaded) ?? current); setStudyState(state); setObserverState(observer); setEditorContent(state.editorContent); setStudyNotes(state.notes); documentRevision.current = state.documentRevision; notesRevision.current = state.notesRevision } })
       .catch(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceError('Não foi possível carregar a conversa deste Workspace.') })
       .finally(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceLoading(false) })
     void window.coach.roadmap.getRebuildPreview({ workspaceId: selected.id }).then((preview) => { if (workspaceLoadEpoch.current === epoch) setRoadmapRebuild(preview) }).catch(() => {})
@@ -536,20 +548,32 @@ export function App() {
 
   useEffect(() => {
     const pane = workspaceConversationPane.current
-    if (pane && workspaceFollowLatest.current) pane.scrollTop = pane.scrollHeight
+    if (pane && workspaceFollowLatest.current) scrollChatToLatest(pane)
   }, [workspaceMessages, workspaceStreamedContent])
 
   async function sendPlannerMessage() {
     const content = plannerInput.trim()
     if (!content || plannerSending || plannerLoading) return
-    setPlannerSending(true); setPlannerInput(''); setPlannerError(null)
-    try {
-      const turn = await window.coach.conversation.organizeHomeMessage({ content })
-      setMessages(turn.messages); setPlannerActions(await window.coach.plannerAction.listPending())
-      if (turn.result.outcome === 'applied') { const [nextPriorities, nextSchedule, overview, nextWeek] = await Promise.all([window.coach.planning.listPriorities(), window.coach.planning.getSchedule(), window.coach.planning.getAcademicOverview(), window.coach.planning.getWeeklyPlan()]); setPriorities(nextPriorities); setSchedule(nextSchedule); setAcademicOverview(overview); setWeeklyPlan(nextWeek) }
-      if (turn.result.outcome === 'failed') setPlannerError(turn.result.message)
-    } catch { setPlannerInput(content); setPlannerError('A ação pode ter sido salva, mas não foi possível atualizar toda a tela. Recarregue para confirmar o estado persistido.') }
-    finally { setPlannerSending(false); setStreamedContent('') }
+    const requestId = crypto.randomUUID()
+    const epoch = ++homeRequestEpoch.current
+    setPlannerSending(true); setPlannerInput(''); setPlannerError(null); setStreamedContent('')
+    setMessages((current) => appendOptimisticMessage(current, optimisticMessage(content, (current.at(-1)?.sequence ?? 0) + 1, requestId)))
+    streamHandle.current?.dispose()
+    streamHandle.current = window.coach.conversation.streamHomeMessage({ requestId, content }, (event) => {
+      if (homeRequestEpoch.current !== epoch) return
+      if (event.type === 'text-delta') setStreamedContent((current) => current + event.content)
+      if (event.type === 'completed') {
+        setMessages((current) => reconcileConversationMessages(current, event.messages))
+        setPlannerSending(false); setStreamedContent(''); streamHandle.current = null
+        void window.coach.plannerAction.listPending().then((actions) => { if (homeRequestEpoch.current === epoch) setPlannerActions(actions) })
+        void Promise.all([window.coach.planning.listPriorities(), window.coach.planning.getSchedule(), window.coach.planning.getAcademicOverview(), window.coach.planning.getWeeklyPlan()]).then(([nextPriorities, nextSchedule, overview, nextWeek]) => { if (homeRequestEpoch.current === epoch) { setPriorities(nextPriorities); setSchedule(nextSchedule); setAcademicOverview(overview); setWeeklyPlan(nextWeek) } }).catch(() => { if (homeRequestEpoch.current === epoch) setPlannerError('A ação pode ter sido salva, mas não foi possível atualizar toda a tela. Recarregue para confirmar o estado persistido.') })
+      }
+      if (event.type === 'cancelled' || event.type === 'error') {
+        setPlannerSending(false); setStreamedContent(''); setPlannerInput(content); streamHandle.current = null
+        setPlannerError(event.type === 'error' ? 'A IA não conseguiu responder. Sua mensagem continua pronta para tentar novamente.' : null)
+        void window.coach.conversation.listHomeMessages().then((loaded) => { if (homeRequestEpoch.current === epoch) setMessages((current) => reconcileConversationMessages(current, loaded)) })
+      }
+    })
   }
 
   async function createWorkspace(input: CreateWorkspaceInput) {
@@ -572,14 +596,20 @@ export function App() {
   }
 
   async function openWorkspace(id: string) {
+    const openEpoch = ++workspaceOpenEpoch.current
+    stopWorkspaceStream()
     try {
       const workspace = await window.coach.workspace.open(id)
+      if (workspaceOpenEpoch.current !== openEpoch) return
       if (!workspace) throw new Error('Workspace not found')
+      const snapshot = workspaceChat.current.activate(workspace.id)
+      setWorkspaceMessages(snapshot.messages)
+      setWorkspaceStreamedContent(snapshot.partial)
       setWorkspacePage('overview')
       setSelected(workspace)
       await loadWorkspaces()
     } catch {
-      setError('Este Workspace não está mais disponível.')
+      if (workspaceOpenEpoch.current === openEpoch) setError('Este Workspace não está mais disponível.')
     }
   }
 
@@ -620,15 +650,20 @@ export function App() {
     setWorkspaceSending(true)
     setWorkspaceSendStage('sending')
     setWorkspaceContextSummary(null)
-    setWorkspaceMessages((current) => [...current, { id: `optimistic-${crypto.randomUUID()}`, role: 'user', content, createdAt: Date.now(), sequence: (current.at(-1)?.sequence ?? 0) + 1, providerId: null, modelId: null }])
+    const requestId = crypto.randomUUID()
+    setWorkspaceMessages((current) => {
+      const next = appendOptimisticMessage(current, optimisticMessage(content, (current.at(-1)?.sequence ?? 0) + 1, requestId))
+      workspaceChat.current.cacheMessages(selected.id, next)
+      return next
+    })
     workspaceDrafts.current.set(selected.id, content)
     setWorkspaceInput('')
     setWorkspaceStreamedContent('')
     setWorkspaceError(null)
-    const requestId = crypto.randomUUID()
     const workspaceId = selected.id
-    const epoch = workspaceLoadEpoch.current
-    const isCurrentRequest = () => workspaceLoadEpoch.current === epoch
+    const generation = workspaceChat.current.beginStream(workspaceId)
+    setWorkspaceMessages((current) => workspaceChat.current.cacheMessages(workspaceId, current))
+    const isCurrentRequest = () => workspaceChat.current.accepts(workspaceId, generation)
     const latestExecution = workspacePage === 'practice' ? practiceContext?.execution ?? execution : null
     const activeTopic = studyModule?.topics.find((topic) => `${studyModule.id}:${topic}` === studyProgress?.topicId)
     const activeLesson = studyLesson?.topicId === studyProgress?.topicId ? studyLesson : null
@@ -639,9 +674,9 @@ export function App() {
       if (!isCurrentRequest()) return
       if (event.type === 'started' || event.type === 'state') setWorkspaceSendStage(event.state)
       if (event.type === 'state' && event.metadata) setWorkspaceContextSummary(`${event.metadata.historyCount ?? 0} mensagens · ${event.metadata.contextResources?.length ?? 0} fontes`)
-      if (event.type === 'text-delta') { setWorkspaceSendStage(null); setWorkspaceStreamedContent((current) => current + event.content) }
+      if (event.type === 'text-delta') { setWorkspaceSendStage(null); const next = workspaceChat.current.appendPartial(workspaceId, generation, event.content); if (next !== null) setWorkspaceStreamedContent(next) }
       if (event.type === 'completed') {
-        setWorkspaceMessages(event.messages)
+        setWorkspaceMessages((current) => workspaceChat.current.reconcileCurrent(workspaceId, current, event.messages) ?? current)
         setWorkspaceStreamedContent('')
         setWorkspaceSending(false)
         setWorkspaceSendStage(null)
@@ -653,6 +688,7 @@ export function App() {
         }
       }
       if (event.type === 'cancelled') {
+        workspaceChat.current.clearPartial(workspaceId, generation)
         setWorkspaceStreamedContent('')
         setWorkspaceSending(false)
         setWorkspaceSendStage(null)
@@ -661,14 +697,13 @@ export function App() {
         workspaceStreamHandle.current = null
       }
       if (event.type === 'error') {
-        setWorkspaceStreamedContent('')
         setWorkspaceSending(false)
         setWorkspaceSendStage(null)
         workspaceDrafts.current.set(workspaceId, content)
         setWorkspaceInput(content)
         setWorkspaceError('A IA não conseguiu responder. Sua pergunta foi preservada localmente quando possível.')
         workspaceStreamHandle.current = null
-        void window.coach.conversation.listWorkspaceMessages(workspaceId).then((loaded) => { if (isCurrentRequest()) setWorkspaceMessages(loaded) })
+        void window.coach.conversation.listWorkspaceMessages(workspaceId).then((loaded) => { if (isCurrentRequest()) { setWorkspaceMessages((current) => workspaceChat.current.reconcileCurrent(workspaceId, current, loaded) ?? current); workspaceChat.current.clearPartial(workspaceId, generation); setWorkspaceStreamedContent('') } })
       }
     })
   }
@@ -738,7 +773,7 @@ export function App() {
     const leaveExercises = async () => { await activeExerciseContext?.flushDraft(); setActiveExerciseContext(null) }
     const selectPage = (page: WorkspacePage) => { void (async () => { if (workspacePage === 'exercises' && page !== 'exercises') await leaveExercises(); if (page === 'studies') openStudies(); else if (page === 'exercises') openExercises(); else { studySelectionEpoch.current += 1; setLearningPathOpen(false); setStudyModule(null); if (page === 'materials') openMaterials(); else if (page === 'reports') openReports(); else if (page === 'plan') { setWorkspacePage(page); void window.coach.studyWorkspace.recalculatePlan({ workspaceId: selected.id }).then(setStudyState).catch(() => setWorkspaceError('Não foi possível recalcular o plano de hoje.')) } else setWorkspacePage(page) } })() }
     return (
-      <WorkspaceShell name={selected.name} objective={selected.objective} page={workspacePage} timerLabel={timerLabel} timerRunning={studyState?.timerStatus === 'running'} finishing={sessionCompleting} coachMessages={workspaceMessages} streamedMessage={workspaceStreamedContent} coachInput={workspaceInput} coachBusy={workspaceSending || workspaceLoading} coachStage={workspaceSendStage} coachContextSummary={workspaceContextSummary} coachError={workspaceError} conversationRef={workspaceConversationPane} messageEndRef={workspaceMessageEnd} onConversationScroll={() => { const pane = workspaceConversationPane.current; if (pane) workspaceFollowLatest.current = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 72 }} onPage={selectPage} onHome={() => { void (workspacePage === 'exercises' ? leaveExercises() : Promise.resolve()).then(() => { setSelected(null); setHomeSection('home'); void window.coach.planning.listPriorities().then(setPriorities) }) }} onSettings={() => setProviderDialogOpen(true)} onToggleTimer={() => { if (!studyState || timerUpdating) return; const workspaceId = selected.id; const epoch = workspaceLoadEpoch.current; const action = studyState.timerStatus === 'running' ? 'pause' : 'start'; setTimerUpdating(true); const configure = action === 'start' && studyState.timerStatus === 'idle' && studyState.timerDurationSeconds !== adaptiveMinutes * 60 ? window.coach.studyWorkspace.setTimerDuration({ workspaceId, durationSeconds: adaptiveMinutes * 60 }) : Promise.resolve(studyState); void configure.then(() => window.coach.studyWorkspace.updateTimer({ workspaceId, action })).then(applyStudyState(workspaceId, epoch)).catch(() => setWorkspaceError('Não foi possível atualizar o foco.')).finally(() => setTimerUpdating(false)) }} onFinish={() => { if (sessionCompleting) return; setSessionCompleting(true); void window.coach.studyWorkspace.completeSession(selected.id).then(setStudyState).finally(() => setSessionCompleting(false)) }} onCoachInput={setWorkspaceInput} onCoachSend={sendWorkspaceMessage} onNotes={() => setNotesOpen(true)}>
+      <WorkspaceShell name={selected.name} objective={selected.objective} page={workspacePage} timerLabel={timerLabel} timerRunning={studyState?.timerStatus === 'running'} finishing={sessionCompleting} coachMessages={workspaceMessages} streamedMessage={workspaceStreamedContent} coachInput={workspaceInput} coachBusy={workspaceSending || workspaceLoading} coachStage={workspaceSendStage} coachContextSummary={workspaceContextSummary} coachError={workspaceError} conversationRef={workspaceConversationPane} messageEndRef={workspaceMessageEnd} onConversationScroll={() => { const pane = workspaceConversationPane.current; if (pane) workspaceFollowLatest.current = isNearChatBottom(pane) }} onPage={selectPage} onHome={() => { workspaceOpenEpoch.current += 1; stopWorkspaceStream(); void (workspacePage === 'exercises' ? leaveExercises() : Promise.resolve()).then(() => { setSelected(null); setHomeSection('home'); void window.coach.planning.listPriorities().then(setPriorities) }) }} onSettings={() => setProviderDialogOpen(true)} onToggleTimer={() => { if (!studyState || timerUpdating) return; const workspaceId = selected.id; const epoch = workspaceLoadEpoch.current; const action = studyState.timerStatus === 'running' ? 'pause' : 'start'; setTimerUpdating(true); const configure = action === 'start' && studyState.timerStatus === 'idle' && studyState.timerDurationSeconds !== adaptiveMinutes * 60 ? window.coach.studyWorkspace.setTimerDuration({ workspaceId, durationSeconds: adaptiveMinutes * 60 }) : Promise.resolve(studyState); void configure.then(() => window.coach.studyWorkspace.updateTimer({ workspaceId, action })).then(applyStudyState(workspaceId, epoch)).catch(() => setWorkspaceError('Não foi possível atualizar o foco.')).finally(() => setTimerUpdating(false)) }} onFinish={() => { if (sessionCompleting) return; setSessionCompleting(true); void window.coach.studyWorkspace.completeSession(selected.id).then(setStudyState).finally(() => setSessionCompleting(false)) }} onCoachInput={setWorkspaceInput} onCoachSend={sendWorkspaceMessage} onNotes={() => setNotesOpen(true)}>
         {timerExpired && activePlan && <div role="dialog" aria-modal="true" aria-labelledby="timer-expired-title" className="absolute inset-0 z-30 grid place-items-center bg-black/65 p-5"><section className="w-full max-w-lg rounded-2xl border border-coach-yellow/40 bg-[#111217] p-7 shadow-2xl"><p className="text-xs font-black uppercase tracking-[.18em] text-coach-yellow">Bloco de foco encerrado</p><h2 id="timer-expired-title" className="mt-2 font-display text-2xl font-black">O tempo terminou. A atividade não foi concluída.</h2><p className="mt-3 text-sm leading-6 text-coach-muted">O cronômetro registrou o tempo de foco, sem concluir a atividade, o tópico ou alterar seu domínio. Escolha o próximo passo para “{activePlan.title}”.</p><div className="mt-6 flex flex-wrap gap-3"><button disabled={timerUpdating} onClick={() => { setTimerUpdating(true); void window.coach.studyWorkspace.updateTimer({ workspaceId: selected.id, action: 'extend' }).then((state) => { setStudyState(state); setTimerExpired(false) }).finally(() => setTimerUpdating(false)) }} className="rounded-xl bg-coach-yellow px-4 py-3 text-sm font-black text-[#0c0d10]">Estender +10 min</button><button disabled={timerUpdating} onClick={() => { setTimerUpdating(true); void window.coach.studyWorkspace.updateTimer({ workspaceId: selected.id, action: 'pause' }).then((state) => { setStudyState(state); setTimerExpired(false) }).finally(() => setTimerUpdating(false)) }} className="rounded-xl border border-coach-line px-4 py-3 text-sm font-black">Continuar depois</button><button disabled={planUpdating} onClick={() => { setPlanUpdating(true); void window.coach.studyWorkspace.completePlanItem({ workspaceId: selected.id, itemId: activePlan.id }).then((state) => { setStudyState(state); setTimerExpired(false) }).finally(() => setPlanUpdating(false)) }} className="rounded-xl bg-coach-green px-4 py-3 text-sm font-black text-white">Concluir atividade</button></div></section></div>}
         {workspacePage === 'studies' && <div className="relative flex h-full min-h-0 flex-col overflow-hidden">{livePriority?.eventPhase === 'today' && <div className="shrink-0 border-b border-coach-orange/30 bg-coach-orange/10 px-6 py-3 text-xs text-coach-muted"><strong className="text-coach-orange">Revisão para a prova hoje.</strong> A aula continua completa; pontos de revisão recebem destaque visual.</div>}{studyModule && studyRoadmap && studyProgress && studyLesson ? <><div className="flex shrink-0 items-center justify-between gap-4 border-b border-coach-line px-6 py-3"><p className="min-w-0 truncate text-xs text-coach-muted"><span className="text-coach-ink">{selected.name}</span><span className="mx-2">›</span>{studyModule.title}<span className="mx-2">›</span><span className="text-coach-ink">{studyModule.topics.find((topic) => `${studyModule.id}:${topic}` === studyProgress.topicId) ?? studyModule.title}</span></p><button aria-expanded={learningPathOpen} aria-controls="learning-path-drawer" onClick={() => setLearningPathOpen(true)} className="shrink-0 rounded-lg border border-coach-line px-3 py-2 text-xs font-black text-coach-green hover:bg-white/[.03]">Trilha de aprendizado</button></div><div className="min-h-0 flex-1"><StudyLessonView workspaceId={selected.id} module={studyModule} roadmap={studyRoadmap} lesson={studyLesson} progress={studyProgress} reviewMode={livePriority?.eventPhase === 'today'} onExercises={() => openExercises(studyRoadmap, studyProgress.topicId)} onPosition={(position, checkpointStates) => { void window.coach.studyProgress.updatePosition({ workspaceId: selected.id, position, checkpointStates }).then(setStudyProgress) }} onLessonChanged={setStudyLesson} onInteractiveContext={(block, state) => setInteractiveCodeContext({ block, state })} onCheckpoint={() => { void window.coach.studyWorkspace.recalculatePlan({ workspaceId: selected.id }).then(setStudyState) }} onComplete={() => { void window.coach.studyProgress.completeTopic({ workspaceId: selected.id, topicId: studyProgress.topicId }).then(({ state, nextTarget }) => { setStudyProgress(state); if (nextTarget) setStudyLesson(null); return Promise.all([window.coach.studyWorkspace.recalculatePlan({ workspaceId: selected.id }).then(setStudyState), window.coach.roadmap.get(selected.id).then((roadmap) => { if (roadmap) { setStudyRoadmap(roadmap); const module = nextTarget ? roadmap.modules.find((item) => item.id === nextTarget.moduleId) : null; if (module) setStudyModule(module) } }), nextTarget ? window.coach.studyLesson.getOrCreate({ workspaceId: selected.id, roadmapId: studyProgress.roadmapId, moduleId: nextTarget.moduleId, topicId: nextTarget.topicId }).then((result) => { if (result.status === 'ready') setStudyLesson(result.lesson); else setWorkspaceError(result.status === 'waiting_for_provider' ? 'A próxima aula aguarda um provedor de IA.' : 'Não foi possível preparar a próxima aula agora.') }) : Promise.resolve()]) }).catch((error) => setWorkspaceError(error instanceof Error ? error.message : 'Ainda existem critérios obrigatórios pendentes.')) }} onPractice={() => setWorkspacePage('practice')} /></div><LearningPathDrawer open={learningPathOpen} roadmap={studyRoadmap} progress={studyProgress} onClose={() => setLearningPathOpen(false)} onSelect={(module, topicIndex) => selectStudyTopic(studyRoadmap, module, topicIndex).catch((error) => { setWorkspaceError('Não foi possível abrir este tópico agora.'); throw error })} /></> : <div className="grid min-h-0 flex-1 place-items-center p-8 text-center"><div><p className="font-display text-xl font-black text-coach-ink">{studyLessonLoad?.status === 'waiting_for_provider' ? 'Esta aula será preparada quando a IA estiver disponível.' : studiesPreparationMessage(studyLessonLoad, learningPathState)}</p><p className="mt-2 text-xs text-coach-muted">Você pode continuar usando o Coach enquanto isso.</p>{studyLessonLoad && studyLessonLoad.status !== 'ready' && <button onClick={() => { setStudyLessonLoad(null); setStudyLessonRetryNonce((value) => value + 1) }} className="mt-4 rounded-lg bg-coach-orange px-4 py-2 text-xs font-black text-white">Tentar novamente</button>}{learningPathState?.status === 'failed_retryable' && <button onClick={() => { void window.coach.roadmap.generate(selected.id).then(() => openStudies()).catch(() => setWorkspaceError('Não foi possível tentar preparar a Trilha agora.')) }} className="mt-4 rounded-lg bg-coach-orange px-4 py-2 text-xs font-black text-white">Tentar novamente</button>}{studyRoadmap && <><button onClick={() => setLearningPathOpen(true)} className="ml-2 mt-4 rounded-lg border border-coach-line px-4 py-2 text-xs font-black text-coach-green">Ver Trilha</button><LearningPathDrawer open={learningPathOpen} roadmap={studyRoadmap} progress={studyProgress} onClose={() => setLearningPathOpen(false)} onSelect={(module, topicIndex) => selectStudyTopic(studyRoadmap, module, topicIndex).catch(() => setWorkspaceError('Não foi possível abrir este tópico agora.'))} /></>}</div></div>}</div>}
         {workspacePage === 'exercises' && exerciseRoadmap && exerciseTopicId && <ExercisesWorkspace workspaceId={selected.id} roadmap={exerciseRoadmap} initialTopicId={exerciseTopicId} onBack={() => { void leaveExercises().then(() => openStudies()) }} onContext={setActiveExerciseContext} />}
@@ -747,7 +782,7 @@ export function App() {
         {workspacePage === 'overview' && <div className="coach-scroll-pane h-full p-5 lg:p-8"><div className="mx-auto max-w-5xl"><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Visão geral</p><h2 className="mt-2 font-display text-3xl font-black">Continue de onde parou.</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-coach-muted">Objetivo, progresso, foco e próximo passo reunidos em um único lugar.</p><div className="mt-7 grid gap-4 md:grid-cols-3"><article className="rounded-lg border border-coach-line bg-[#111217] p-5"><span className="text-xs font-black text-coach-muted">Módulo atual</span><strong className="mt-2 block font-display text-xl">{planActionLabel(activePlan)}</strong><p className="mt-2 text-xs text-coach-muted">{activePlan?.durationMinutes ?? 0} minutos sugeridos</p></article><article className="rounded-lg border border-coach-line bg-[#111217] p-5"><span className="text-xs font-black text-coach-muted">Progresso de hoje</span><strong className="mt-2 block font-display text-3xl">{studyState?.plan.length ? Math.round(completedItems / studyState.plan.length * 100) : 0}%</strong><div className="mt-3 h-2 overflow-hidden rounded-full bg-coach-line"><div className="h-full bg-coach-green" style={{ width: `${studyState?.plan.length ? completedItems / studyState.plan.length * 100 : 0}%` }} /></div></article><article className="rounded-lg bg-[#12372f] p-5 text-white"><span className="text-xs font-black text-white/55">Observer</span><strong className="mt-2 block font-display text-xl">{observerState?.interventionSuggested ? 'Atenção necessária' : 'Progresso estável'}</strong><p className="mt-2 text-xs text-white/55">{observerState?.focusExitCount ?? 0} saídas de foco</p></article></div><div className="mt-5 rounded-xl bg-[#181622] p-6"><p className="text-xs font-black uppercase text-coach-orange">Próximo passo</p><div className="mt-2 flex flex-wrap items-center justify-between gap-4"><div><strong className="font-display text-2xl">{activePlan?.title ?? 'Revisar aprendizados'}</strong><p className="mt-1 text-sm text-coach-muted">Abra a prática para trabalhar com arquivos reais.</p></div><button onClick={() => setWorkspacePage('practice')} className="rounded-xl bg-coach-orange px-5 py-3 text-sm font-black text-white">Começar prática</button></div></div></div></div>}
         {workspacePage === 'plan' && <div className="coach-scroll-pane h-full p-5 lg:p-8"><div className="mx-auto max-w-5xl"><div className="flex items-end justify-between gap-4"><div><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Plano de hoje</p><h2 className="mt-2 font-display text-3xl font-black">Hoje você vai estudar</h2></div><p className="text-xs text-coach-muted">{studyState?.plan.filter((item) => item.status === 'completed').length ?? 0}/{studyState?.plan.length ?? 0} atividades concluídas</p></div><div className="mt-6 space-y-3">{studyState?.plan.map((item) => <article key={item.id} className={`flex w-full items-center gap-4 rounded-lg border p-4 text-left ${item.status === 'active' ? 'border-coach-yellow bg-[#181622]' : 'border-coach-line bg-[#111217]'}`}><button disabled={planUpdating || item.status === 'completed'} onClick={() => { setPlanUpdating(true); void window.coach.studyWorkspace.activatePlanItem({ workspaceId: selected.id, itemId: item.id }).then(setStudyState).finally(() => setPlanUpdating(false)) }} className="flex min-w-0 flex-1 items-center gap-4 text-left disabled:cursor-default"><span className={`grid size-7 shrink-0 place-items-center rounded-full border ${item.status === 'completed' ? 'border-coach-green bg-coach-green text-white' : 'border-coach-line'}`}>{item.status === 'completed' ? '✓' : item.position}</span><span className="min-w-0 flex-1"><strong className="block truncate">{item.title}</strong><small className="text-coach-muted">{item.scheduledStartMinutes !== undefined ? `${String(Math.floor(item.scheduledStartMinutes / 60)).padStart(2, '0')}:${String(item.scheduledStartMinutes % 60).padStart(2, '0')} · ` : ''}{item.durationMinutes} min · {item.status}</small></span></button><button disabled={planUpdating} onClick={() => { setPlanUpdating(true); void window.coach.studyWorkspace.setPlanItemCompletion({ workspaceId: selected.id, itemId: item.id, completed: item.status !== 'completed' }).then(setStudyState).catch(() => setWorkspaceError('Não foi possível alterar a conclusão da atividade.')).finally(() => setPlanUpdating(false)) }} className={item.status === 'completed' ? 'rounded-lg border border-coach-line px-3 py-2 text-xs font-black text-coach-muted' : 'rounded-lg bg-coach-green px-3 py-2 text-xs font-black text-white'}>{item.status === 'completed' ? 'Reabrir / Desfazer' : 'Concluir'}</button></article>)}</div></div></div>}
         {workspacePage === 'materials' && <div className="coach-scroll-pane h-full p-5 lg:p-8"><div className="mx-auto max-w-5xl"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Biblioteca</p><h2 className="mt-2 font-display text-3xl font-black">Materiais do Workspace</h2></div><button onClick={() => void window.coach.material.importFile(selected.id).then((material) => { if (material) setMaterials((current) => [material, ...current]) }).catch((error: unknown) => setWorkspaceError(error instanceof Error ? error.message : 'Não foi possível importar este material.'))} className="rounded-xl bg-coach-orange px-5 py-3 text-sm font-black text-white">Importar PDF/PPTX</button></div><form className="mt-6 flex gap-2" onSubmit={(event) => { event.preventDefault(); void window.coach.material.search({ workspaceId: selected.id, query: materialQuery }).then(setMaterialResults) }}><input minLength={2} value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} placeholder="Buscar nos materiais" className="min-w-0 flex-1 rounded-xl border border-coach-line bg-[#111217] p-3" /><button className="rounded-xl bg-coach-ink px-5 font-black text-white">Buscar</button></form>{materials.some((item) => item.status === 'ready') && <section className="mt-6 rounded-xl border border-coach-green/30 bg-coach-green/[.06] p-5"><p className="text-[10px] font-black uppercase tracking-[.16em] text-coach-green">Integração curricular</p><h3 className="mt-2 font-display text-xl font-black">Adaptar a Trilha com materiais aprovados</h3><p className="mt-2 text-xs leading-5 text-coach-muted">A importação sozinha não altera o currículo. Gere uma prévia da adaptação da Trilha para conferir o que permanece, o que muda, o que será adicionado e os motivos.</p><button disabled={roadmapRebuildBusy} onClick={() => { setRoadmapRebuildBusy(true); void window.coach.roadmap.previewRebuild({ workspaceId: selected.id, materialIds: materials.filter((item) => item.status === 'ready').map((item) => item.id) }).then(setRoadmapRebuild).catch((error: unknown) => setWorkspaceError(error instanceof Error ? error.message : 'Não foi possível preparar a adaptação. A Trilha atual foi preservada.')).finally(() => setRoadmapRebuildBusy(false)) }} className="mt-4 rounded-lg bg-coach-green px-4 py-2 text-xs font-black text-white disabled:opacity-50">{roadmapRebuildBusy ? 'Analisando impacto...' : 'Pré-visualizar nova Trilha'}</button>{roadmapRebuild && <div className="mt-4 rounded-lg border border-coach-line bg-[#0d0e12] p-4 text-xs"><strong>Prévia da adaptação da Trilha: {roadmapRebuild.title}</strong><p className="mt-2 text-coach-muted">{roadmapRebuild.impact.relevance === 'irrelevant' ? 'Nenhuma adaptação é necessária. A Trilha atual será mantida.' : roadmapRebuild.impact.summary} Permanecem {roadmapRebuild.impact.preservedTopicIds.length} tópicos, mudam {(roadmapRebuild.impact.changedTopicIds ?? []).length}, são adicionados {roadmapRebuild.impact.addedTopics.length} e há proposta de remoção para {roadmapRebuild.impact.removedTopics.length}.</p>{(roadmapRebuild.impact.reasons ?? []).map((reason) => <p key={reason} className="mt-1 text-coach-muted">• {reason}</p>)}{roadmapRebuild.impact.unsafeProgressTopicIds.length > 0 && <p role="alert" className="mt-2 font-bold text-coach-orange">Mudança insegura explícita: há progresso em {roadmapRebuild.impact.unsafeProgressTopicIds.length} tópico(s) removido(s). Esse histórico permanece, mas deixa de integrar a Trilha ativa.</p>}{roadmapRebuild.impact.relevance !== 'irrelevant' && <button onClick={() => { const acknowledgeUnsafeChanges = roadmapRebuild.impact.requiresAcknowledgement ? window.confirm('Esta adaptação propõe remover tópicos. O histórico será preservado. Deseja confirmar a alteração destrutiva?') : true; if (!acknowledgeUnsafeChanges) return; setRoadmapRebuildBusy(true); void window.coach.roadmap.applyRebuild({ workspaceId: selected.id, previewId: roadmapRebuild.id, acknowledgeUnsafeChanges }).then((roadmap) => { setStudyRoadmap(roadmap); setRoadmapRebuild(null); setWorkspaceError(null) }).catch((error: unknown) => setWorkspaceError(error instanceof Error ? error.message : 'Não foi possível aplicar. A Trilha atual foi preservada.')).finally(() => setRoadmapRebuildBusy(false)) }} className="mt-3 rounded-lg bg-coach-orange px-4 py-2 font-black text-white">Aplicar adaptação curricular</button>}</div>}</section>}<div className="mt-6 grid gap-4 md:grid-cols-2">{materialResults.map((item) => <article key={`${item.materialId}-${item.pageNumber}`} className="rounded-lg border border-coach-line bg-[#111217] p-5"><strong>{item.materialName} · pág. {item.pageNumber}</strong><p className="mt-3 text-sm leading-6 text-coach-muted">{item.content}</p><button onClick={() => { setActiveMaterial({ materialId: item.materialId, name: item.materialName, pageOrSlide: item.pageNumber, selectedText: item.content.slice(0, 2000) }); setWorkspaceInput(`Explique o trecho selecionado deste material.`) }} className="mt-3 text-xs font-black text-coach-green">Perguntar ao Coach</button></article>)}{!materialResults.length && materials.map((item) => <article key={item.id} className="rounded-lg border border-coach-line bg-[#111217] p-5"><strong className="block break-words">{item.name}</strong><p className="mt-1 text-xs text-coach-muted">{item.pageCount} páginas · {item.semanticAnalysis?.documentType ?? item.mediaType} · relevância {item.semanticAnalysis?.relevance ?? 'aguardando análise'}</p>{item.semanticAnalysis && <><p className="mt-2 text-sm">{item.semanticAnalysis.summary}</p><p className="mt-2 text-xs text-coach-muted">{item.semanticAnalysis.topics.join(' · ')}</p></>}{item.status === 'staged' && <div className="mt-4 flex flex-wrap gap-2"><select defaultValue="reference" id={`role-${item.id}`} className="rounded-lg border border-coach-line bg-[#0d0e12] p-2 text-xs"><option value="base">Base da disciplina</option><option value="priority">Prioritário</option><option value="reference">Referência</option></select><button onClick={() => { const role = (document.getElementById(`role-${item.id}`) as HTMLSelectElement).value as 'base'|'priority'|'reference'; void window.coach.material.decide({ workspaceId: selected.id, materialId: item.id, decision: 'approve', role }).then((updated) => setMaterials((all) => all.map((value) => value.id === item.id ? updated : value))) }} className="rounded-lg bg-coach-green px-3 py-2 text-xs font-black">{item.semanticAnalysis?.relevance === 'unrelated' ? 'Usar mesmo assim como referência' : 'Usar material'}</button><button onClick={() => void window.coach.material.decide({ workspaceId: selected.id, materialId: item.id, decision: 'discard', role: 'reference' }).then((updated) => setMaterials((all) => all.map((value) => value.id === item.id ? updated : value)))} className="rounded-lg border border-coach-line px-3 py-2 text-xs font-black">Descartar</button></div>}{item.status === 'ready' && <button onClick={() => { setActiveMaterial({ materialId: item.id, name: item.name, pageOrSlide: 1, selectedText: null }); void window.coach.material.readPage({ workspaceId: selected.id, materialId: item.id, pageNumber: 1 }).then((page) => setMaterialResults([{ chunkId: `${item.id}-1`, materialId: item.id, materialName: item.name, pageNumber: 1, topicId: null, retrieval: 'lexical', content: page.content }])) }} className="mt-3 text-xs font-black text-coach-green">Abrir material</button>}</article>)}</div></div></div>}
-        {workspacePage === 'practice' && <div className="h-full min-h-0 overflow-hidden"><ProjectWorkspace workspaceId={selected.id} workspaceName={selected.name} onError={setWorkspaceError} onContextChange={(context) => { setPracticeContext(context); setExecution(context.execution); if (context.execution?.observerState) { setObserverState(context.execution.observerState); const signature = context.execution.errorSignature; if (context.execution.observerState.interventionSuggested && signature && lastInterventionSignature.current !== signature) { lastInterventionSignature.current = signature; setWorkspaceMessages((current) => [...current, { id: `intervention-${crypto.randomUUID()}`, role: 'assistant', content: `Percebi que o mesmo erro se repetiu. Estou vendo o código atual e a última execução (${context.execution?.stderr.split('\n').filter(Boolean).at(-1) ?? signature}). Posso dar uma pista específica sem entregar a solução.`, createdAt: Date.now(), sequence: (current.at(-1)?.sequence ?? 0) + 1, providerId: 'coach-observer', modelId: null }]) } } }} /></div>}
+        {workspacePage === 'practice' && <div className="h-full min-h-0 overflow-hidden"><ProjectWorkspace workspaceId={selected.id} workspaceName={selected.name} onError={setWorkspaceError} onContextChange={(context) => { setPracticeContext(context); setExecution(context.execution); if (context.execution?.observerState) { setObserverState(context.execution.observerState); const signature = context.execution.errorSignature; if (context.execution.observerState.interventionSuggested && signature && lastInterventionSignature.current !== signature) { lastInterventionSignature.current = signature; setWorkspaceMessages((current) => workspaceChat.current.cacheMessages(selected.id, [...current, { id: `intervention-${crypto.randomUUID()}`, role: 'assistant' as const, content: `Percebi que o mesmo erro se repetiu. Estou vendo o código atual e a última execução (${context.execution?.stderr.split('\n').filter(Boolean).at(-1) ?? signature}). Posso dar uma pista específica sem entregar a solução.`, createdAt: Date.now(), sequence: (current.at(-1)?.sequence ?? 0) + 1, providerId: 'coach-observer', modelId: null }])) } } }} /></div>}
         {workspacePage === 'videos' && <div className="coach-scroll-pane h-full p-5 lg:p-8"><div className="mx-auto max-w-5xl"><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Vídeos focados</p><h2 className="mt-2 font-display text-3xl font-black">Aprenda sem sair do contexto</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-coach-muted">Use uma busca direcionada ao objetivo deste Workspace. O Coach mantém a conversa e o plano visíveis sem abrir o feed tradicional.</p><div className="mt-7 rounded-xl border border-coach-line bg-[#111217] p-6"><label className="text-xs font-black uppercase text-coach-muted">Buscar no YouTube</label><div className="mt-3 flex gap-2"><input value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} placeholder={`Ex.: ${activePlan?.title ?? selected.name}`} className="min-w-0 flex-1 rounded-xl border border-coach-line bg-coach-paper p-3" /><button onClick={() => { const query = encodeURIComponent(`${materialQuery || activePlan?.title || selected.name} aula`); window.open(`https://www.youtube.com/results?search_query=${query}`, '_blank', 'noopener,noreferrer') }} className="rounded-xl bg-coach-orange px-5 text-sm font-black text-[#0c0d10]">Pesquisar</button></div><p className="mt-3 text-xs text-coach-muted">Links externos abrem somente após sua ação. Nenhum vídeo é enviado automaticamente ao provedor de IA.</p></div></div></div>}
         {workspacePage === 'reports' && <div className="coach-scroll-pane h-full p-5 lg:p-8"><div className="mx-auto max-w-5xl"><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Evolução</p><h2 className="mt-2 font-display text-3xl font-black">Relatórios de aprendizagem</h2><div className="mt-6 grid gap-4 md:grid-cols-2">{sessionHistory.length === 0 && <p className="rounded-lg bg-[#111217] p-5 text-sm text-coach-muted">Comece a estudar para acumular dados neste relatório.</p>}{sessionHistory.map((session) => <article key={session.date} className="rounded-lg border border-coach-line bg-[#111217] p-5"><div className="flex justify-between"><strong>{new Date(`${session.date}T12:00:00`).toLocaleDateString('pt-BR')} · {session.sessionCount} {session.sessionCount === 1 ? 'sessão' : 'sessões'}</strong><span className="rounded-full bg-coach-green/10 px-3 py-1 text-xs font-black text-coach-green">{Math.floor(session.focusSeconds / 60)} min</span></div><div className="mt-5 grid grid-cols-2 gap-3"><div className="rounded-xl bg-coach-paper p-3"><strong className="text-xl">{session.executions ? `${session.executions - session.errors}/${session.executions}` : "Não avaliado"}</strong><span className="block text-[10px] text-coach-muted">Execuções sem erro</span></div><div className="rounded-xl bg-coach-paper p-3"><strong className="text-sm">Ainda não avaliada</strong><span className="block text-[10px] text-coach-muted">Retenção após revisão futura</span></div></div><p className="mt-4 text-xs leading-5 text-coach-muted">{session.recommendation}</p></article>)}</div></div></div>}
         {notesOpen && <div ref={notesDialogRef} className="fixed inset-0 z-20 flex justify-end bg-black/30" role="dialog" aria-modal="true" aria-labelledby="quick-notes-title" onMouseDown={() => setNotesOpen(false)}><section className="flex h-full w-full max-w-md flex-col bg-coach-paper p-6 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}><div className="flex items-center justify-between"><h2 id="quick-notes-title" className="font-display text-2xl font-black">Notas rápidas</h2><button aria-label="Fechar notas" onClick={() => setNotesOpen(false)}><X /></button></div><label htmlFor="quick-notes" className="sr-only">Notas rápidas</label><textarea id="quick-notes" value={studyNotes} onChange={(event) => setStudyNotes(event.target.value)} className="mt-6 min-h-0 flex-1 resize-none rounded-lg border border-coach-line bg-[#111217] p-4" /></section></div>}

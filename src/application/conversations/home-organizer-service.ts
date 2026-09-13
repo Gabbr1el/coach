@@ -91,10 +91,11 @@ export class HomeOrganizerService {
   onPlannerActionResolved(action: PlannerAction): void {
     if (action.status !== 'applied') return
     const item = this.resultItem(action.result)
-    const academicPayload = action.payload as { kind?: string; timezone?: string; workspaceId?: string | null }
+    const academicPayload = action.payload as { kind?: string; timezone?: string; workspaceId?: string | null; status?: string }
     const savedLinkedEvent = action.type === 'academic-life.save' && (academicPayload.kind === 'event' || academicPayload.kind === 'commitment') && (item?.workspaceId ?? academicPayload.workspaceId) != null
     const linkedEvent = action.type === 'academic.event.linkWorkspace' && item?.workspaceId != null
-    if (savedLinkedEvent || linkedEvent) this.actions.propose({ type: 'plan.recalculate', payload: { timezone: item?.timezone ?? academicPayload.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone }, label: 'Recalcular o plano após vincular o evento', originMessageId: `followup:${action.id}`, contextVersion: action.resolvedAt ?? this.now(), idempotencyScope: `organizer:event-replan:${action.id}` })
+    const transitionedLinkedEvent = action.type === 'academic-life.transition' && academicPayload.status === 'archived' && item?.workspaceId != null && ['event', 'commitment'].includes(item.kind)
+    if (savedLinkedEvent || linkedEvent || transitionedLinkedEvent) this.actions.propose({ type: 'plan.recalculate', payload: { timezone: item?.timezone ?? academicPayload.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone }, label: transitionedLinkedEvent ? 'Recalcular o plano após cancelar o evento' : savedLinkedEvent ? 'Recalcular o plano após atualizar o evento' : 'Recalcular o plano após vincular o evento', originMessageId: `followup:${action.id}`, contextVersion: action.resolvedAt ?? this.now(), idempotencyScope: `organizer:event-replan:${action.id}` })
     if (!this.states) return
     const current = this.states.load(this.conversation.threadId); const payload = action.payload as { id?: string; eventId?: string; workspaceId?: string; replacesId?: string }
     const eventId = item?.id ?? payload.eventId ?? (action.type === 'academic-life.transition' ? payload.id : null)

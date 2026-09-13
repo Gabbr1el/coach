@@ -63,7 +63,7 @@ describe('SqliteWorkspaceContentRepository', () => {
     const sourceDirectory = mkdtempSync(join(tmpdir(), 'coach-profile-source-')); directories.push(sourceDirectory)
     const sourcePath = join(sourceDirectory, 'coach.sqlite'); const source = openCoachDatabase({ databasePath: sourcePath, migrationsFolder: migrationsThrough0045() }); workspace(source); source.close()
     const before = readFileSync(sourcePath); const copyDirectory = mkdtempSync(join(tmpdir(), 'coach-profile-copy-')); directories.push(copyDirectory); const copyPath = join(copyDirectory, 'coach.sqlite'); cpSync(sourcePath, copyPath)
-    const copy = openCoachDatabase({ databasePath: copyPath, migrationsFolder }); expect((copy.sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get() as { count: number }).count).toBe(53); expect(copy.sqlite.pragma('integrity_check', { simple: true })).toBe('ok'); copy.close()
+    const copy = openCoachDatabase({ databasePath: copyPath, migrationsFolder }); const journal = JSON.parse(readFileSync(join(migrationsFolder, 'meta/_journal.json'), 'utf8')) as { entries: unknown[] }; expect((copy.sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get() as { count: number }).count).toBe(journal.entries.length); expect(copy.sqlite.pragma('integrity_check', { simple: true })).toBe('ok'); copy.close()
     expect(readFileSync(sourcePath)).toEqual(before)
   }, 15_000)
 
@@ -201,6 +201,7 @@ describe('SqliteWorkspaceContentRepository', () => {
     const db = database(); const id = workspace(db); const repository = new SqliteWorkspaceContentRepository(db); const now = Date.now()
     db.sqlite.prepare("INSERT INTO workspace_provisioning (workspace_id,status,stage,material_ids_json,attempt_count,created_at,started_at,stage_updated_at) VALUES (?,'running','materials','[]',0,?,?,?)").run(id, now, now, now)
     db.sqlite.prepare("INSERT INTO workspace_learning_overrides (workspace_id,subject,canonical_focus,canonical_context,declared_knowledge_json,declared_difficulties_json,goals_json,created_at,updated_at) VALUES (?,'C','Ponteiros','Prova','[]','[]','[]',?,?)").run(id, now, now)
+    db.sqlite.prepare("INSERT INTO planning_settings (id,timezone,updated_at) VALUES ('current','UTC',?)").run(now)
     const materialId = crypto.randomUUID(); db.sqlite.prepare("INSERT INTO materials (id,workspace_id,name,media_type,content_hash,status,page_count,created_at,role,relevance,extraction_fingerprint,analysis_fingerprint) VALUES (?,?,'Apostila','application/pdf',?,'ready',1,?,'priority',100,?,?)").run(materialId, id, hash('a'), now, hash('b'), hash('c'))
     const order: string[] = []; const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)); let coordinator!: InitialProvisioningCoordinator
     const handlers: Partial<Record<import('../../src/shared/contracts/workspace-content-contract').ContentUnitKind, ContentJobHandler>> = {

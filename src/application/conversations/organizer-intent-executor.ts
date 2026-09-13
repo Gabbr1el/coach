@@ -161,7 +161,7 @@ export class OrganizerIntentExecutor {
     if (matches.length > 1) return { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: 'Encontrei mais de um evento acadêmico correspondente. Informe a data atual para eu identificar o evento exato.' }
     const match = matches[0]!
     if (operation === 'cancel') return { type: 'academic-life.transition', payload: { id: match.id, status: 'archived' }, label: `Cancelar ${match.title}` }
-    return { type: 'academic-life.save', payload: { kind: match.kind, title: match.title, details: eventDetails(eventKind, entities.subject, context.content), workspaceId: null, startsAt: match.startsAt, endsAt: nextDate, expiresAt: nextDate, timezone: context.timezone, weekday: null, minutes: null, shareWithAi: match.shareWithAi, provenance: { source: 'conversation', reference: null }, replacesId: match.id }, label: `Reagendar ${match.title} para ${formattedNextDate}` }
+    return { type: 'academic-life.save', payload: { kind: match.kind, title: match.title, details: eventDetails(eventKind, entities.subject, context.content), workspaceId: match.workspaceId, startsAt: match.startsAt, endsAt: nextDate, expiresAt: nextDate, timezone: context.timezone, weekday: null, minutes: null, shareWithAi: match.shareWithAi, provenance: { source: 'conversation', reference: null }, replacesId: match.id }, label: `Reagendar ${match.title} para ${formattedNextDate}` }
   }
 
   private eventWorkspaceMutation(capability: string, entities: OrganizerEntities, context: OrganizerExecutionContext): { type: PlannerActionType; payload: unknown; label: string } | HomeOrganizerResult {

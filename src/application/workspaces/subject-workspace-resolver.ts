@@ -23,6 +23,7 @@ export interface SubjectWorkspaceResolverDependencies {
 export interface SubjectWorkspaceResolutionPolicy {
   readonly allowSemantic: boolean
   readonly semanticWorkspaceIds?: readonly string[]
+  readonly semanticContext?: 'full' | 'titles-only'
 }
 
 function key(value: string): string { return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR').replace(/[^a-z0-9+#]+/g, ' ').trim() }
@@ -49,7 +50,7 @@ export class SubjectWorkspaceResolver {
     const allowed = policy.semanticWorkspaceIds ? new Set(policy.semanticWorkspaceIds) : null
     const semanticWorkspaces = workspaces.filter((workspace) => !allowed || allowed.has(workspace.id))
     if (!semanticWorkspaces.length) return { status: 'none', candidates: [] }
-    const suggestions = await this.dependencies.suggestSemantic({ subject: subject.trim(), workspaces: semanticWorkspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, contextSubjects: contextByWorkspace.get(workspace.id) ?? [] })) })
+    const suggestions = await this.dependencies.suggestSemantic({ subject: subject.trim(), workspaces: semanticWorkspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, contextSubjects: policy.semanticContext === 'titles-only' ? [] : contextByWorkspace.get(workspace.id) ?? [] })) })
     const candidates = suggestions.filter((suggestion) => suggestion.confidence >= 0.65).flatMap((suggestion) => { const workspace = workspaces.find((item) => item.id === suggestion.workspaceId); return workspace ? [this.candidate(workspace, Math.min(0.99, suggestion.confidence), suggestion.reason, 'semantic')] : [] }).sort((a, b) => b.confidence - a.confidence)
     if (candidates.length === 0) return { status: 'none', candidates: [] }
     if (candidates.length > 1) return { status: 'ambiguous', candidates }

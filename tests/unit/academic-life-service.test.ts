@@ -32,6 +32,17 @@ describe('AcademicLifeService', () => {
     } finally { rmSync(directory, { recursive: true, force: true }) }
   })
 
+  it('keeps elapsed calendar items in the local projection but excludes them from AI context', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'academic-elapsed-')); const path = join(directory, 'coach.sqlite'); const migrationsFolder = resolve('drizzle/migrations')
+    try {
+      const database = openCoachDatabase({ databasePath: path, migrationsFolder }); const service = new AcademicLifeService(new SqliteAcademicLifeRepository(database), () => 10_000)
+      const elapsed = service.save(input({ kind: 'event', title: 'Aula importante', endsAt: 9_000, shareWithAi: true }))
+      expect(service.getProjection().current).toEqual([expect.objectContaining({ id: elapsed.id })])
+      expect(service.activeForContext()).toEqual([])
+      database.close()
+    } finally { rmSync(directory, { recursive: true, force: true }) }
+  })
+
   it('persists a workspace-independent event, replacement and cancellation across reopen', () => {
     const directory = mkdtempSync(join(tmpdir(), 'academic-events-')); const path = join(directory, 'coach.sqlite'); const migrationsFolder = resolve('drizzle/migrations')
     try {

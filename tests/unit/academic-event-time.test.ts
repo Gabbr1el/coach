@@ -26,6 +26,14 @@ describe('academic event temporal resolver', () => {
     const result = resolveAcademicDate('amanhã', { currentDate: '2026-09-12', timezone: 'Pacific/Kiritimati' })
     expect(new Intl.DateTimeFormat('en-CA', { timeZone: 'Pacific/Kiritimati', year: 'numeric', month: '2-digit', day: '2-digit' }).format(result.timestamp)).toBe('2026-09-13')
   })
+  it('honors explicit times, relative days, end of day and DST in an IANA zone', () => {
+    const ny = { currentDate: '2026-03-07', timezone: 'America/New_York' }
+    const localTime = (timestamp: number) => new Intl.DateTimeFormat('en-GB', { timeZone: ny.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(timestamp)
+    expect(localTime(resolveAcademicDate('dia 18 às 19h', ny).timestamp)).toBe('19:00')
+    expect(resolveAcademicDate('hoje às 08:15h', ny).timestamp).toBe(Date.parse('2026-03-07T13:15:00Z'))
+    expect(resolveAcademicDate('amanhã às 08:15h', ny).timestamp).toBe(Date.parse('2026-03-08T12:15:00Z'))
+    expect(resolveAcademicDate('18/03/2026', ny).timestamp).toBe(Date.parse('2026-03-19T03:59:00Z'))
+  })
   it('extracts authoritative create and update expressions from the original text', () => { expect(extractAcademicDate('prova de C dia 14', context).dateKey).toBe('2026-09-14'); expect(extractAcademicDateChange('a prova de C mudou de dia 14 para dia 21', context)).toMatchObject({ from: { dateKey: '2026-09-14' }, to: { dateKey: '2026-09-21' } }) })
   it('rejects update text without both sides of the change', () => expect(() => extractAcademicDateChange('a prova foi remarcada para dia 21', context)).toThrow(/anterior e nova/i))
 })

@@ -20,16 +20,17 @@ function localParts(timestamp: number, timezone: string): Record<string, number>
   return result
 }
 
-function localEndOfDay(key: string, timezone: string): number {
+function localTimestamp(key: string, timezone: string, hour = 23, minute = 59): number {
   const [year, month, day] = parts(key)
-  let candidate = Date.UTC(year, month - 1, day, 23, 59)
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) throw new Error('Horário impossível')
+  let candidate = Date.UTC(year, month - 1, day, hour, minute)
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const local = localParts(candidate, timezone)
     const represented = Date.UTC(local.year!, local.month! - 1, local.day!, local.hour!, local.minute!, local.second!)
-    candidate += Date.UTC(year, month - 1, day, 23, 59) - represented
+    candidate += Date.UTC(year, month - 1, day, hour, minute) - represented
   }
   const local = localParts(candidate, timezone)
-  if (local.year !== year || local.month !== month || local.day !== day || local.hour !== 23 || local.minute !== 59) throw new Error('A data não existe no fuso horário informado')
+  if (local.year !== year || local.month !== month || local.day !== day || local.hour !== hour || local.minute !== minute) throw new Error('A data não existe no fuso horário informado')
   return candidate
 }
 
@@ -78,7 +79,10 @@ export function resolveAcademicDate(expression: string, context: { currentDate: 
     }
   }
   if (!resolved) throw new Error('Data ausente, ambígua ou impossível')
-  return { dateKey: resolved, timestamp: localEndOfDay(resolved, context.timezone) }
+  const explicitTime = /\bas\s+(\d{1,2})(?::(\d{2}))?\s*(?:h(?:oras?)?)?\b|\b(\d{1,2})(?::(\d{2}))\s*h\b/.exec(value)
+  const hour = explicitTime ? Number(explicitTime[1] ?? explicitTime[3]) : 23
+  const minute = explicitTime ? Number(explicitTime[2] ?? explicitTime[4] ?? 0) : 59
+  return { dateKey: resolved, timestamp: localTimestamp(resolved, context.timezone, hour, minute) }
 }
 
 const DATE_EXPRESSION = /\b(?:depois\s+de\s+amanha|amanha|hoje|daqui\s+a\s+\d+\s+dias?|\d{1,2}\s*[\/.]\s*\d{1,2}(?:\s*[\/.]\s*\d{4})?|\d{1,2}\s+de\s+(?:janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?:\s+de\s+\d{4})?|dia\s+\d{1,2}|(?:proxima\s+)?(?:domingo|segunda|terca|quarta|quinta|sexta|sabado)(?:-feira)?)\b/g

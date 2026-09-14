@@ -34,8 +34,8 @@ export class SqliteAcademicLifeRepository implements AcademicLifeRepository {
     return this.find(id)!
   }
   projection(now: number, historyLimit: number): AcademicLifeProjection {
-    const current = (this.database.sqlite.prepare(`SELECT ${columns} FROM academic_life_items WHERE status='active' AND replaced_by_id IS NULL AND (expires_at IS NULL OR expires_at>?) AND (ends_at IS NULL OR ends_at>=?) ORDER BY CASE kind WHEN 'event' THEN 0 WHEN 'commitment' THEN 1 WHEN 'availability' THEN 2 ELSE 3 END,COALESCE(ends_at,expires_at,9223372036854775807),created_at DESC`).all(now, now) as Row[]).map((row) => this.map(row))
-    const history = (this.database.sqlite.prepare(`SELECT ${columns} FROM academic_life_items WHERE status<>'active' OR replaced_by_id IS NOT NULL OR (expires_at IS NOT NULL AND expires_at<=?) OR (ends_at IS NOT NULL AND ends_at<?) ORDER BY updated_at DESC LIMIT ?`).all(now, now, historyLimit) as Row[]).map((row) => this.map(row))
+    const current = (this.database.sqlite.prepare(`SELECT ${columns} FROM academic_life_items WHERE status='active' AND replaced_by_id IS NULL ORDER BY CASE kind WHEN 'event' THEN 0 WHEN 'commitment' THEN 1 WHEN 'availability' THEN 2 ELSE 3 END,COALESCE(ends_at,expires_at,9223372036854775807),created_at DESC`).all() as Row[]).map((row) => this.map(row))
+    const history = (this.database.sqlite.prepare(`SELECT ${columns} FROM academic_life_items WHERE status<>'active' OR replaced_by_id IS NOT NULL ORDER BY CASE status WHEN 'resolved' THEN 0 ELSE 1 END,updated_at DESC LIMIT ?`).all(historyLimit) as Row[]).map((row) => this.map(row))
     return { current, history, generatedAt: now }
   }
   activeForContext(now: number, limit: number, workspaceId?: string): AcademicLifeItem[] {

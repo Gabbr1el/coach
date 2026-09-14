@@ -136,6 +136,27 @@ describe('renderer UI safeguards', () => {
     expect(home).not.toContain('priorities.slice(0, 4)')
   })
 
+  it('renders Visão Acadêmica as calendar, board and list without internal decision labels', () => {
+    const panel = read('src/renderer/app/AcademicLifePanel.tsx')
+    const home = read('src/renderer/app/HomeScreen.tsx')
+    expect(panel).toContain('Visão Acadêmica')
+    expect(home).toContain("label: 'Visão Acadêmica'")
+    expect(panel).toContain("useReducer(academicViewReducer, 'calendar')")
+    expect(panel).toContain("label: 'Calendário'")
+    expect(panel).toContain("label: 'Quadro'")
+    expect(panel).toContain("label: 'Lista'")
+    expect(panel).toContain("label: 'Próximos'")
+    expect(panel).toContain("label: 'Em preparação'")
+    expect(panel).toContain("label: 'Concluídos'")
+    expect(panel).toContain('inferAcademicMutation')
+    expect(panel).toContain('Atividade e versões')
+    expect(read('src/renderer/app/App.tsx')).toContain('refreshAfterAcademicMutation(affectsPlanning')
+    expect(read('src/renderer/app/App.tsx')).toContain('replan: () => window.coach.planning.replanWeek()')
+    expect(read('src/renderer/app/App.tsx')).toContain('setPriorities(nextPriorities); setSchedule(nextSchedule); setAcademicOverview(overview); setWeeklyPlan(nextWeek)')
+    expect(panel).not.toMatch(/Vida acadêmica|Fato|Evento|Histórico|Ver histórico/)
+    expect(panel).not.toMatch(/mastery|domínio|evidência/i)
+  })
+
   it('returns from a workspace to HOME without fabricating an assistant message', () => { const app = read('src/renderer/app/App.tsx'); expect(app).toContain("setSelected(null); setHomeSection('home')"); const start = app.indexOf('onHome={() =>'); const onHome = app.slice(start, app.indexOf('onSettings={() =>', start)); expect(onHome).not.toContain("role: 'assistant'") })
 
   it('documents non-obvious fields and protects editable keyboard targets', () => {

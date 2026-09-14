@@ -43,7 +43,7 @@ export class HomeOrganizerService {
     if (mentionsProposal(content)) return this.persist(content, { outcome: 'informational', operations: [], actions: pendingActions, affectedWorkspaceIds: [], message: pendingActions.length ? 'As decisões pendentes continuam disponíveis nos botões da mensagem que as originou.' : 'Não há nenhuma proposta pendente no estado real do Coach.' }, undefined, userMessageId)
 
     try {
-      const workspaces = await this.listWorkspaces(); const academicLife = this.listAcademicLife(); const recentUserMessages = await this.conversation.listRecentUserMessages(4)
+      const workspaces = await this.listWorkspaces(); const academicLife = this.listAcademicLife().filter((item) => item.status === 'active' && item.replacedById === null && item.shareWithAi); const recentUserMessages = await this.conversation.listRecentUserMessages(4)
       let state = this.revalidate(this.states?.load(this.conversation.threadId) ?? emptyOrganizerConversationState(), workspaces, academicLife, clock.currentTime)
       const fragmentWithoutPending = !state.pending && this.isStandaloneSlotFragment(content)
       if (fragmentWithoutPending) return this.persist(content, { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: 'Entendi o fragmento, mas não há um pedido pendente válido para completá-lo. Diga também qual evento ou matéria você quer organizar.' }, undefined, userMessageId)
@@ -111,7 +111,7 @@ export class HomeOrganizerService {
     const focusedEvent = state.focusedAcademicEventId ? activeEvents.get(state.focusedAcademicEventId) : null
     const pendingAge = state.pending ? now - state.pending.originalCreatedAt : 0
     const pending = state.pending && pendingAge >= 0 && pendingAge <= PENDING_TTL_MS ? state.pending : null
-    const semantic = { focusedAcademicEventId: focusedEvent?.id ?? null, focusedWorkspaceId: state.focusedWorkspaceId && activeWorkspaces.has(state.focusedWorkspaceId) ? state.focusedWorkspaceId : null, focusedSubject: focusedEvent ? eventMetadata(focusedEvent)?.subject ?? state.focusedSubject : state.focusedSubject, pending, recentResolvedAcademicEventIds: state.recentResolvedAcademicEventIds.filter((id) => activeEvents.has(id)).slice(0, 4), recentResolvedWorkspaceIds: state.recentResolvedWorkspaceIds.filter((id) => activeWorkspaces.has(id)).slice(0, 4) }
+    const semantic = { focusedAcademicEventId: focusedEvent?.id ?? null, focusedWorkspaceId: state.focusedWorkspaceId && activeWorkspaces.has(state.focusedWorkspaceId) ? state.focusedWorkspaceId : null, focusedSubject: focusedEvent ? eventMetadata(focusedEvent)?.subject ?? state.focusedSubject : state.focusedAcademicEventId ? null : state.focusedSubject, pending, recentResolvedAcademicEventIds: state.recentResolvedAcademicEventIds.filter((id) => activeEvents.has(id)).slice(0, 4), recentResolvedWorkspaceIds: state.recentResolvedWorkspaceIds.filter((id) => activeWorkspaces.has(id)).slice(0, 4) }
     const unchanged = JSON.stringify(semantic) === JSON.stringify({ focusedAcademicEventId: state.focusedAcademicEventId, focusedWorkspaceId: state.focusedWorkspaceId, focusedSubject: state.focusedSubject, pending: state.pending, recentResolvedAcademicEventIds: state.recentResolvedAcademicEventIds, recentResolvedWorkspaceIds: state.recentResolvedWorkspaceIds })
     if (unchanged) return state
     // Revalidation writes only when it removes stale references or an expired pending intent.

@@ -216,7 +216,7 @@ void app.whenReady().then(async () => {
     workspaceService.setOrphanEventDiscovery(async () => { for (const item of academicLife.getProjection().current.filter((event) => event.workspaceId === null && ['event', 'commitment'].includes(event.kind))) await suggestEventLinks(item, false) })
     registerPlannerActionHandlers(plannerActionService)
     registerAcademicLifeHandlers(academicLife)
-    homeOrganizerService = new HomeOrganizerService(homePlannerService, planningService, plannerActionService, () => workspaceRepository.listActive(), Date.now, () => academicLife.getProjection(100).current, new ProviderOrganizerIntentInterpreter(providerManager), undefined, new SqliteOrganizerConversationStateRepository(database))
+    homeOrganizerService = new HomeOrganizerService(homePlannerService, planningService, plannerActionService, () => workspaceRepository.listActive(), Date.now, () => academicLife.activeForContext(100), new ProviderOrganizerIntentInterpreter(providerManager), undefined, new SqliteOrganizerConversationStateRepository(database))
     registerConversationHandlers(homePlannerService, workspaceCoachService, homeOrganizerService, workspaceActions, database, performanceTimelines)
     registerReportHandlers(new ReportService(new DrizzleReportRepository(database)))
     const workspaceOnboarding = new WorkspaceOnboardingService({ repository: new DrizzleConversationRepository(database), providerManager, academicContext: academicSubjectContext, listContextCandidates: () => {

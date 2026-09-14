@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { studyLessonContentSchema } from '../../shared/contracts/study-lesson-contract'
 import { contentJobSchema, requiredContentUnitSchema, workspaceContentRevisionSchema, type ContentJob, type RequiredContentUnit, type WorkspaceContentRevision } from '../../shared/contracts/workspace-content-contract'
-import { CONTENT_GENERATOR_VERSIONS, CONTENT_JOB_DEFAULTS, type EnqueueContentJobInput, type WorkspaceContentRepository } from '../../application/workspaces/workspace-content-repository'
+import { CONTENT_GENERATOR_VERSIONS, CONTENT_JOB_DEFAULTS, contentJobDependenciesForContract, usesCanonicalContentJobDependencies, type EnqueueContentJobInput, type WorkspaceContentRepository } from '../../application/workspaces/workspace-content-repository'
 import type { CoachDatabase } from '../database/connection'
 import { validExerciseData } from '../database/exercise-data-repair'
 
@@ -25,8 +25,14 @@ function idempotencyKey(input: EnqueueContentJobInput): string {
   return createHash('sha256').update([input.workspaceId, input.revision, input.kind, input.unitKey, input.inputHash, input.generatorContractVersion].join('|')).digest('hex')
 }
 
-function safeErrorMessage(value: string | undefined): string | null {
-  return value ? value.replace(/[\r\n\t]+/g, ' ').slice(0, 500) : null
+export function sanitizedContentJobDiagnostic(value: string | undefined): string | null {
+  if (!value) return null
+  return value
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\b(?:sk|pk|api)[-_][a-z0-9_-]{8,}\b/gi, '[credential redacted]')
+    .replace(/\b(?:authorization|api[-_ ]?key|token|secret)\s*[:=]\s*\S+/gi, '$1=[redacted]')
+    .replace(/https?:\/\/\S+/gi, '[url redacted]')
+    .slice(0, 500)
 }
 
 export class SqliteWorkspaceContentRepository implements WorkspaceContentRepository {
@@ -82,7 +88,10 @@ export class SqliteWorkspaceContentRepository implements WorkspaceContentReposit
   }
 
   enqueue(input: EnqueueContentJobInput, now: number): ContentJob {
-    const dependencies = [...new Set(input.dependencyKeys ?? [])].sort()
+    const canonicalDependencies = contentJobDependenciesForContract(input)
+    const suppliedDependencies = [...new Set(input.dependencyKeys ?? canonicalDependencies)].sort()
+    const dependencies = canonicalDependencies.length ? canonicalDependencies : suppliedDependencies
+    if (usesCanonicalContentJobDependencies(input) && JSON.stringify(suppliedDependencies) !== JSON.stringify(canonicalDependencies)) throw new Error('Content job dependencies do not match the deterministic unit contract')
     const key = idempotencyKey(input)
     this.immediate(() => {
       this.requireCurrent(input.workspaceId, input.revision, input.inputHash)
@@ -118,18 +127,18 @@ export class SqliteWorkspaceContentRepository implements WorkspaceContentReposit
   }
 
   releaseLease(input: { jobId: string; leaseToken: string; now: number; retryAt?: number; restoreAttempt?: boolean; errorCode?: string; errorMessage?: string }): boolean {
-    return this.database.sqlite.prepare("UPDATE content_jobs SET status='queued',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,claimed_cancellation_generation=NULL,attempt_count=MAX(0,attempt_count-?),available_at=?,updated_at=?,last_error_code=?,last_error_message=? WHERE id=? AND status='generating' AND lease_token=?").run(Number(input.restoreAttempt ?? false), input.retryAt ?? input.now, input.now, input.errorCode ?? null, safeErrorMessage(input.errorMessage), input.jobId, input.leaseToken).changes === 1
+    return this.database.sqlite.prepare("UPDATE content_jobs SET status='queued',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,claimed_cancellation_generation=NULL,attempt_count=MAX(0,attempt_count-?),available_at=?,updated_at=?,last_error_code=?,last_error_message=? WHERE id=? AND status='generating' AND lease_token=?").run(Number(input.restoreAttempt ?? false), input.retryAt ?? input.now, input.now, input.errorCode ?? null, sanitizedContentJobDiagnostic(input.errorMessage), input.jobId, input.leaseToken).changes === 1
   }
 
-  failLease(input: { jobId: string; leaseToken: string; now: number; retryAt?: number; errorCode: string; errorMessage?: string }): boolean {
+  failLease(input: { jobId: string; leaseToken: string; now: number; retryAt?: number; errorCode: string; errorMessage?: string; retryable?: boolean }): boolean {
     return this.immediate(() => {
       const job = this.getJob(input.jobId)
       if (!job || job.status !== 'generating' || job.leaseToken !== input.leaseToken) return false
-      const terminal = job.attemptCount >= job.maxAttempts
+      const terminal = input.retryable === false || job.attemptCount >= job.maxAttempts
       const status = terminal ? 'failed' : 'queued'
       const exponent = Math.max(0, job.attemptCount - 1)
       const retryAt = input.retryAt ?? input.now + Math.min(CONTENT_JOB_DEFAULTS.retryBaseMs * 2 ** exponent, CONTENT_JOB_DEFAULTS.retryCapMs)
-      this.database.sqlite.prepare('UPDATE content_jobs SET status=?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,claimed_cancellation_generation=NULL,available_at=?,completed_at=?,updated_at=?,last_error_code=?,last_error_message=? WHERE id=? AND status=\'generating\' AND lease_token=?').run(status, retryAt, terminal ? input.now : null, input.now, input.errorCode, safeErrorMessage(input.errorMessage), input.jobId, input.leaseToken)
+      this.database.sqlite.prepare('UPDATE content_jobs SET status=?,lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,claimed_cancellation_generation=NULL,available_at=?,completed_at=?,updated_at=?,last_error_code=?,last_error_message=? WHERE id=? AND status=\'generating\' AND lease_token=?').run(status, retryAt, terminal ? input.now : null, input.now, input.errorCode, sanitizedContentJobDiagnostic(input.errorMessage), input.jobId, input.leaseToken)
       return true
     })
   }
@@ -159,6 +168,14 @@ export class SqliteWorkspaceContentRepository implements WorkspaceContentReposit
     return this.immediate(() => this.reconcileWithinTransaction(now))
   }
 
+  invalidateArchivedWorkspace(workspaceId: string, now: number): number {
+    return this.immediate(() => {
+      const result = this.database.sqlite.prepare("UPDATE content_jobs SET status='obsolete',lease_owner=NULL,lease_token=NULL,lease_expires_at=NULL,claimed_cancellation_generation=NULL,obsolete_at=?,updated_at=?,last_error_code='WORKSPACE_ARCHIVED' WHERE workspace_id=? AND status<>'obsolete'").run(now, now, workspaceId)
+      this.database.sqlite.prepare('UPDATE workspace_content_revisions SET cancellation_generation=cancellation_generation+1,updated_at=? WHERE workspace_id=?').run(now, workspaceId)
+      return result.changes
+    })
+  }
+
   retryProviderUnavailable(now: number): number {
     return this.database.sqlite.prepare("UPDATE content_jobs SET available_at=?,updated_at=?,last_error_code=NULL,last_error_message=NULL WHERE status='queued' AND last_error_code='PROVIDER_UNAVAILABLE'").run(now, now).changes
   }
@@ -171,7 +188,7 @@ export class SqliteWorkspaceContentRepository implements WorkspaceContentReposit
       const lesson = first ? this.database.sqlite.prepare("SELECT id,content_json AS contentJson FROM study_lessons WHERE workspace_id=? AND roadmap_id=? AND module_id=? AND topic_id=? AND generation_kind='ai_generated' AND content_revision=? AND input_hash=? ORDER BY updated_at DESC LIMIT 1").get(input.workspaceId, roadmap!.id, first.moduleId, first.topicId, input.expectedRevision, revision.inputHash) as { id: string; contentJson: string } | undefined : undefined
       const lessonValid = lesson ? this.validActionableLesson(lesson.contentJson) : false
       const exerciseValid = lesson && first ? this.validExerciseSet(input.workspaceId, roadmap!.id, first.moduleId, first.topicId, lesson.id, input.expectedRevision, revision.inputHash) : false
-      const planValid = first ? Boolean(this.database.sqlite.prepare("SELECT 1 FROM weekly_plan_items WHERE workspace_id=? AND date_key=? AND topic_id=? AND status<>'completed' LIMIT 1").get(input.workspaceId, input.todayDateKey, first.topicId) ?? this.database.sqlite.prepare("SELECT 1 FROM study_plan_items WHERE workspace_id=? AND topic_id=? AND status<>'completed' LIMIT 1").get(input.workspaceId, first.topicId)) : false
+      const planValid = Boolean(roadmap && (this.database.sqlite.prepare("SELECT 1 FROM weekly_plan_items WHERE workspace_id=? AND date_key=? AND topic_id IN (SELECT m.id || ':' || j.value FROM roadmap_modules m,json_each(m.topics_json) j WHERE m.roadmap_id=?) AND status<>'completed' LIMIT 1").get(input.workspaceId, input.todayDateKey, roadmap.id) ?? this.database.sqlite.prepare("SELECT 1 FROM study_plan_items WHERE workspace_id=? AND topic_id IN (SELECT m.id || ':' || j.value FROM roadmap_modules m,json_each(m.topics_json) j WHERE m.roadmap_id=?) AND status<>'completed' LIMIT 1").get(input.workspaceId, roadmap.id)))
       const readinessJobs = first ? this.database.sqlite.prepare("SELECT kind,unit_key AS unitKey FROM content_jobs WHERE workspace_id=? AND revision=? AND input_hash=? AND status='ready' AND ((kind='roadmap_generate' AND unit_key='roadmap') OR (kind IN ('lesson_generate','exercise_generate') AND unit_key=?))").all(input.workspaceId, input.expectedRevision, revision.inputHash, first.topicId) as Array<{ kind: string; unitKey: string }> : []
       const readyKinds = new Set(readinessJobs.map((job) => job.kind))
       const usable = Boolean(roadmap && first && lesson && lessonValid && exerciseValid && planValid && readyKinds.has('roadmap_generate') && readyKinds.has('lesson_generate') && readyKinds.has('exercise_generate'))

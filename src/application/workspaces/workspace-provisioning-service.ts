@@ -37,6 +37,7 @@ export class WorkspaceProvisioningService {
   start(workspaceId: string): WorkspaceProvisioningState {
     const current = this.require(workspaceId)
     if (current.status === 'ready') return current
+    if (current.status === 'failed_retryable' && current.retryAfter === null && current.errorCode?.startsWith('TERMINAL_')) throw new Error('Terminal provisioning failure cannot be retried without changing its inputs')
     const now = this.now(); const materialIds = this.dependencies.listReadyMaterialIds(workspaceId)
     const queued = this.dependencies.repository.save({ ...current, status: 'queued', stage: materialIds.length ? 'materials' : 'workspace', materialIds, startedAt: current.startedAt ?? now, stageUpdatedAt: now, retryAfter: null, errorCode: null, errorMessage: null })
     if (this.dependencies.initializeContent) {

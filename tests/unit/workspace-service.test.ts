@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { WorkspaceService } from '../../src/application/workspaces/workspace-service'
 import type { CreateWorkspaceRecord, WorkspaceRepository } from '../../src/application/workspaces/workspace-repository'
 import type { Workspace, WorkspaceSummary } from '../../src/shared/contracts/workspace-contract'
@@ -42,6 +42,17 @@ class MemoryWorkspaceRepository implements WorkspaceRepository {
 }
 
 describe('WorkspaceService', () => {
+  it('invalidates dependent backend projections only after archive succeeds', async () => {
+    const repository = new MemoryWorkspaceRepository()
+    const archivedAt = 42
+    const onArchived = vi.fn()
+    const service = new WorkspaceService({ repository, now: () => archivedAt, onArchived })
+    const workspace = await service.create({ name: 'J/Q', objective: 'Reproduzir projeções antigas' })
+    await service.archive(workspace.id)
+    expect(onArchived).toHaveBeenCalledWith(workspace.id, archivedAt)
+    await expect(service.archive(workspace.id)).rejects.toThrow('Workspace not found')
+    expect(onArchived).toHaveBeenCalledTimes(1)
+  })
   const analyzed = (name: string, focus = name, context = '') => ({ analysisRevision: 10, analysisToken: 'server-issued-analysis-token', canonicalFocus: focus, canonicalContext: context })
   it('stores workspace overrides without overwriting global academic context', async () => { const repository = new MemoryWorkspaceRepository(); let globalWrites = 0; let override: unknown; const service = new WorkspaceService({ repository, createId: () => '00000000-0000-4000-8000-000000000099', now: () => 10, academicContext: { record: () => { globalWrites += 1 } } as never, saveLearningOverrides: (_id, _subject, input) => { override = input } }); await service.create({ name: 'Python', objective: 'Automação', declaredLevel: 'advanced', declaredKnowledge: ['Decorators'] }); expect(globalWrites).toBe(0); expect(override).toMatchObject({ declaredLevel: 'advanced', declaredKnowledge: ['Decorators'] }) })
   it('stores declared context separately without converting it to observed mastery', async () => { const repository = new MemoryWorkspaceRepository(); const recorded: any[] = []; const service = new WorkspaceService({ repository, academicContext: { record: (input: unknown) => { recorded.push(input); return {} } } as any }); await service.create({ name: 'Python', objective: 'Automação', declaredLevel: 'advanced', declaredKnowledge: ['Uso pandas'], declaredDifficulties: [], goals: ['Faculdade'] }); expect(recorded[0]).toMatchObject({ subject: 'Python', declaredLevel: 'advanced', declaredKnowledge: ['Uso pandas'] }); expect(JSON.stringify(recorded[0])).not.toContain('mastery') })

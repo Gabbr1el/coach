@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import { PedagogicalPrefetchScheduler } from '../../src/application/workspaces/pedagogical-prefetch-scheduler'
 
 describe('PedagogicalPrefetchScheduler', () => {
+  it('never enqueues new active-plan content for an archived workspace id', () => {
+    const enqueue = vi.fn()
+    const scheduler = new PedagogicalPrefetchScheduler({ repository: { getRevision: () => ({}) as never, enqueue } as never, getRoadmap: () => ({ modules: [] }) as never, isWorkspaceActive: () => false })
+    expect(scheduler.schedule({ type: 'reconcile', workspaceId: 'old-id', topicId: 'module:topic' })).toEqual([])
+    expect(enqueue).not.toHaveBeenCalled()
+  })
   it('coalesces current complete unit and N+1 from pedagogical events only', () => {
     const jobs = new Map<string, any>(); const revision = { workspaceId: '00000000-0000-4000-8000-000000000001', revision: 2, inputHash: 'a'.repeat(64), roadmapId: null, firstTopicId: null, firstLessonId: null, state: 'PROVISIONING', cancellationGeneration: 1, createdAt: 1, updatedAt: 1, usableAt: null, fullyProvisionedAt: null }
     const repository = { getRevision: () => revision, enqueue: vi.fn((input) => { const key = `${input.kind}:${input.unitKey}`; const current = jobs.get(key); const value = { ...input, id: current?.id ?? key, priority: Math.max(current?.priority ?? 0, input.priority) }; jobs.set(key, value); return value }) }

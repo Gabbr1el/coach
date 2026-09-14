@@ -2,6 +2,7 @@ import type { ConversationMessage, SendHomeMessageInput } from '../../shared/con
 import type { ConversationRepository } from './conversation-repository'
 import type { AIProviderManager } from '../ai/ai-provider-manager'
 import { COACH_POLICY } from '../ai/coach-policy'
+import { AUTHORITATIVE_TIMEZONE } from './academic-event-time'
 
 export const HOME_THREAD_ID = '00000000-0000-4000-8000-000000000000'
 
@@ -47,7 +48,7 @@ export class HomePlannerService {
     return (await this.repository.listMessages(HOME_THREAD_ID, Math.min(8, Math.max(2, limit * 2)))).filter((message) => message.role === 'user').slice(-Math.min(4, Math.max(2, limit))).map(({ content, createdAt }) => ({ content: content.slice(0, 300), createdAt }))
   }
 
-  async sendMessage(input: SendHomeMessageInput): Promise<ConversationMessage[]> { return this.sendMessageWithAuthority(input, { currentTime: this.now(), currentDate: new Date(this.now()).toISOString().slice(0, 10), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, state: {}, operationResult: null, constraints: [] }) }
+  async sendMessage(input: SendHomeMessageInput): Promise<ConversationMessage[]> { return this.sendMessageWithAuthority(input, { currentTime: this.now(), currentDate: new Intl.DateTimeFormat('en-CA', { timeZone: AUTHORITATIVE_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(this.now()), timezone: AUTHORITATIVE_TIMEZONE, state: {}, operationResult: null, constraints: [] }) }
   async sendMessageWithAuthority(input: SendHomeMessageInput, authority: { currentTime: number; currentDate: string; timezone: string; state: unknown; operationResult: unknown; constraints: string[] }): Promise<ConversationMessage[]> {
     const now = this.now()
     await this.repository.ensureHomeThread(HOME_THREAD_ID, now)
@@ -117,7 +118,7 @@ export class HomePlannerService {
     try {
       for await (const event of provider.streamMessage({
         messages: [
-          { role: 'system', content: `Você é Organizador, não Tutor. Nunca ministre conteúdo acadêmico, explique conceitos ou crie exercícios. Você responde somente conversa informativa no Home. Este caminho não executa nem propõe operações. CURRENT_DATE=${new Date(this.now()).toISOString().slice(0, 10)} CURRENT_TIME=${new Date(this.now()).toISOString()} TIMEZONE=${Intl.DateTimeFormat().resolvedOptions().timeZone}. Nunca afirme ter criado, alterado, confirmado ou preparado proposta. Não invente datas, conteúdos, duração ou cronograma. Regras: ${COACH_POLICY.principles.join(' ')}` },
+          { role: 'system', content: `Você é Organizador, não Tutor. Nunca ministre conteúdo acadêmico, explique conceitos ou crie exercícios. Você responde somente conversa informativa no Home. Este caminho não executa nem propõe operações. CURRENT_DATE=${new Intl.DateTimeFormat('en-CA', { timeZone: AUTHORITATIVE_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(this.now())} CURRENT_TIME=${new Date(this.now()).toISOString()} TIMEZONE=${AUTHORITATIVE_TIMEZONE}. Nunca afirme ter criado, alterado, confirmado ou preparado proposta. Não invente datas, conteúdos, duração ou cronograma. Regras: ${COACH_POLICY.principles.join(' ')}` },
           ...recentMessages.map((message) => ({ role: message.role, content: message.content })),
           { role: 'user', content: input.content.trim() },
         ],

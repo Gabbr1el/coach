@@ -59,6 +59,7 @@ const api: CoachDesktopApi = {
     getProjection: () => ipcRenderer.invoke(ACADEMIC_LIFE_CHANNELS.getProjection),
     save: (input) => ipcRenderer.invoke(ACADEMIC_LIFE_CHANNELS.save, input),
     transition: (input) => ipcRenderer.invoke(ACADEMIC_LIFE_CHANNELS.transition, input),
+    delete: (input) => ipcRenderer.invoke(ACADEMIC_LIFE_CHANNELS.delete, input),
   },
   review: {
     getActive: (workspaceId) => ipcRenderer.invoke(REVIEW_CHANNELS.getActive, { workspaceId }),

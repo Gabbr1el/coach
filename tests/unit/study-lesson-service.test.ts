@@ -15,11 +15,14 @@ class MemoryLessons implements StudyLessonRepository {
   creates = 0
   replaces = 0
   adaptations: StudyLessonAdaptation[] = []
+  revisions = new Map<string, { revision: number; inputHash: string }>()
   preferences: StudyPresentationPreferences = { detail: 'standard', explanation: 'balanced', examples: 'balanced', composition: 'balanced', presentation: 'reading', explicitIntents: [], recurringEvidence: { SIMPLIFY: 0, ANALOGY: 0, CODE_FIRST: 0, REORDER: 0, PRESENTATION: 0, MORE_EXAMPLES: 0, STEP_BY_STEP: 0, MORE_DEPTH: 0, MORE_CONCISE: 0 }, evidence: [] }
   findOriginal(roadmapId: string, topicId: string) { return this.values.get(`${roadmapId}:${topicId}`) ?? null }
   find(roadmapId: string, topicId: string) { const base = this.findOriginal(roadmapId, topicId); if (!base) return null; const active = new Map(this.adaptations.filter((item) => item.lessonId === base.id && item.isActive).map((item) => [item.blockId, item.adaptedBlock])); return { ...base, blocks: base.blocks.map((block) => active.get(block.id) ?? block) } }
   create(value: PersistedStudyLesson) { this.creates++; this.values.set(`${value.roadmapId}:${value.topicId}`, value); return value }
   replace(value: PersistedStudyLesson) { this.replaces++; this.values.set(`${value.roadmapId}:${value.topicId}`, value); return value }
+  setContentRevision(id: string, revision: number, inputHash: string) { this.revisions.set(id, { revision, inputHash }) }
+  findForContentRevision(roadmapId: string, topicId: string, revision: number, inputHash: string) { return [...this.values.values()].find((item) => item.roadmapId === roadmapId && item.topicId === topicId && this.revisions.get(item.id)?.revision === revision && this.revisions.get(item.id)?.inputHash === inputHash) ?? null }
   createAdaptation(value: NewStudyLessonAdaptation) { const lesson = [...this.values.values()].find((item) => item.id === value.lessonId)!; const revision = this.listAdaptations(value.lessonId, value.blockId).length + 1; this.adaptations = this.adaptations.map((item) => item.lessonId === value.lessonId && item.blockId === value.blockId ? { ...item, isActive: false } : item); const adaptation = { ...value, revision, originalBlock: lesson.blocks.find((block) => block.id === value.blockId)!, isActive: true }; this.adaptations.push(adaptation); return adaptation }
   listAdaptations(lessonId: string, blockId: string) { return this.adaptations.filter((value) => value.lessonId === lessonId && value.blockId === blockId) }
   restoreOriginal(lessonId: string, blockId: string) { this.adaptations = this.adaptations.map((value) => value.lessonId === lessonId && value.blockId === blockId ? { ...value, isActive: false } : value); const lesson = [...this.values.values()].find((value) => value.id === lessonId)!; return this.find(lesson.roadmapId, lesson.topicId)! }
@@ -244,7 +247,19 @@ describe('StudyLessonService', () => {
     expect(repairPrompt).not.toContain('requiresJustification')
   })
 
-  it('uses strict generation schema instead of silently normalizing provider fields', async () => { const item = module(['decorators']); const ws = workspace('Python Avançado'); const path = roadmap(ws.id, item); const topicId = `${item.id}:decorators`; const malformed = JSON.parse(generated(topicId, 'decorators')); delete malformed.blocks[3].expectedOutput; const send = vi.fn<AIProvider['sendMessage']>(async () => ({ content: JSON.stringify(malformed), providerId: 'test', modelId: 'model' })); const result = await new StudyLessonService(new MemoryLessons(), providerManager(send), async () => ws, () => path).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId }); expect(result).toEqual({ status: 'failed_retryable', errorCode: 'LESSON_SCHEMA_INVALID' }); expect(send).toHaveBeenCalledTimes(2) })
+  it('publishes a repaired lesson with revision identifiers readable before readiness', async () => {
+    const item = module(['decorators']); const ws = workspace('Python Avançado'); const path = roadmap(ws.id, item); const topicId = `${item.id}:decorators`; const repository = new MemoryLessons(); let calls = 0
+    const send = vi.fn<AIProvider['sendMessage']>(async () => ({ content: ++calls === 1 ? '{"title":"incomplete"}' : generated(topicId, 'decorators'), providerId: 'test', modelId: 'model' }))
+    const prepared = await new StudyLessonService(repository, providerManager(send), async () => ws, () => path).prepareGeneration({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId, revision: 3, inputHash: 'revision-hash' }, new AbortController().signal)
+    expect(prepared.verifyPublished()).toBe(false)
+    const lesson = prepared.publish()
+    expect(prepared.verifyPublished()).toBe(true)
+    expect(repository.findForContentRevision(path.id, topicId, 3, 'revision-hash')).toMatchObject({ id: lesson.id })
+    expect(repository.revisions.get(lesson.id)).toEqual({ revision: 3, inputHash: 'revision-hash' })
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+
+  it('normalizes safe OmniRoute omissions before strict semantic validation', async () => { const item = module(['decorators']); const ws = workspace('Python Avançado'); const path = roadmap(ws.id, item); const topicId = `${item.id}:decorators`; const malformed = JSON.parse(generated(topicId, 'decorators')); delete malformed.blocks[3].expectedOutput; const send = vi.fn<AIProvider['sendMessage']>(async () => ({ content: JSON.stringify(malformed), providerId: 'test', modelId: 'model' })); const result = await new StudyLessonService(new MemoryLessons(), providerManager(send), async () => ws, () => path).getOrCreate({ workspaceId: ws.id, roadmapId: path.id, moduleId: item.id, topicId }); expect(result.status).toBe('ready'); expect(send).toHaveBeenCalledOnce() })
 
   it('classifies a lesson timeout as provider request failure', async () => {
     const item = module(['ponteiros'])

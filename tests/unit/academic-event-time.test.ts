@@ -34,6 +34,19 @@ describe('academic event temporal resolver', () => {
     expect(resolveAcademicDate('amanhã às 08:15h', ny).timestamp).toBe(Date.parse('2026-03-08T12:15:00Z'))
     expect(resolveAcademicDate('18/03/2026', ny).timestamp).toBe(Date.parse('2026-03-19T03:59:00Z'))
   })
+  it.each([
+    ['hoje às 17h', '2026-09-12T20:00:00.000Z'],
+    ['hoje as 17h', '2026-09-12T20:00:00.000Z'],
+    ['hoje 17:00', '2026-09-12T20:00:00.000Z'],
+    ['hoje as 5 da tarde', '2026-09-12T20:00:00.000Z'],
+    ['hoje 5 da tarde', '2026-09-12T20:00:00.000Z'],
+    ['amanhã 8 da manhã', '2026-09-13T11:00:00.000Z'],
+    ['hoje meio-dia', '2026-09-12T15:00:00.000Z'],
+    ['amanhã meia-noite', '2026-09-13T03:00:00.000Z'],
+  ])('resolves date and natural time together in America/Bahia: %s', (expression, expected) => {
+    const bahia = { currentDate: '2026-09-12', timezone: 'America/Bahia' }
+    expect(new Date(extractAcademicDate(`prova de C ${expression}`, bahia).timestamp).toISOString()).toBe(expected)
+  })
   it('extracts authoritative create and update expressions from the original text', () => { expect(extractAcademicDate('prova de C dia 14', context).dateKey).toBe('2026-09-14'); expect(extractAcademicDateChange('a prova de C mudou de dia 14 para dia 21', context)).toMatchObject({ from: { dateKey: '2026-09-14' }, to: { dateKey: '2026-09-21' } }) })
   it('rejects update text without both sides of the change', () => expect(() => extractAcademicDateChange('a prova foi remarcada para dia 21', context)).toThrow(/anterior e nova/i))
 })

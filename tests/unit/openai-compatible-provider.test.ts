@@ -24,12 +24,15 @@ describe('OpenAICompatibleProvider', () => {
   })
 
   it('maps chat completions into the canonical response', async () => {
-    const fetcher: typeof fetch = async (input) => {
+    let requestBody: Record<string, unknown> | null = null
+    const fetcher: typeof fetch = async (input, init) => {
       if (String(input).endsWith('/models')) return new Response(JSON.stringify({ data: [] }), { status: 200 })
+      requestBody = JSON.parse(String(init?.body))
       return new Response(JSON.stringify({ model: 'route/model', choices: [{ message: { content: 'OK' } }] }), { status: 200 })
     }
     const provider = new OpenAICompatibleProvider('Route', 'https://route.example/v1', 'token', 'route/model', fetcher)
-    expect(await provider.sendMessage({ messages: [{ role: 'user', content: 'Oi' }], maxOutputTokens: 20 })).toMatchObject({ content: 'OK', providerId: 'openai-compatible', modelId: 'route/model' })
+    expect(await provider.sendMessage({ messages: [{ role: 'user', content: 'Oi' }], maxOutputTokens: 20, responseFormat: 'json_object' })).toMatchObject({ content: 'OK', providerId: 'openai-compatible', modelId: 'route/model' })
+    expect(requestBody).toMatchObject({ max_tokens: 20, response_format: { type: 'json_object' }, stream: false })
   })
 
   it('keeps caller cancellation active while consuming the response body', async () => {

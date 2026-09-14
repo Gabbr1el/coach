@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { HeavyGenerationQueue } from '../../src/application/ai/heavy-generation-queue'
-import { ContentGenerationWorker, type WorkerClock } from '../../src/application/workspaces/content-generation-worker'
+import { ContentGenerationWorker, classifyContentGenerationFailure, type WorkerClock } from '../../src/application/workspaces/content-generation-worker'
 import type { ContentJob } from '../../src/shared/contracts/workspace-content-contract'
 
 const job = (overrides: Partial<ContentJob> = {}): ContentJob => ({ id: 'job', workspaceId: '00000000-0000-4000-8000-000000000001', revision: 1, kind: 'lesson_generate', unitKey: 'module:topic', priority: 500, status: 'generating', idempotencyKey: 'a'.repeat(64), inputHash: 'b'.repeat(64), generatorContractVersion: 'v1', dependencyKeys: [], attemptCount: 1, maxAttempts: 3, availableAt: 0, leaseOwner: 'worker', leaseToken: 'lease', leaseExpiresAt: 120000, claimedCancellationGeneration: 1, startedAt: 0, completedAt: null, obsoleteAt: null, lastErrorCode: null, lastErrorMessage: null, createdAt: 0, updatedAt: 0, ...overrides })
@@ -12,12 +12,17 @@ function clock(): WorkerClock & { advance(ms: number): void } {
 }
 
 describe('ContentGenerationWorker', () => {
+  it('classifies contract failures as terminal and provider/timeouts as retryable', () => {
+    expect(classifyContentGenerationFailure(Object.assign(new Error('bad schema'), { code: 'LESSON_SCHEMA_INVALID' })).retryable).toBe(false)
+    expect(classifyContentGenerationFailure(new Error('network offline'))).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: true, providerUnavailable: true })
+    expect(classifyContentGenerationFailure(new Error('generation timed out'))).toMatchObject({ code: 'GENERATION_TIMEOUT', retryable: true })
+  })
   it('claims, renews, and publishes through the global admission queue', async () => {
     const fake = clock(); let available = true; const leased = job(); let release!: () => void
     const repository = { reconcile: vi.fn(() => ({ requeued: 1, obsoleted: 0 })), retryProviderUnavailable: vi.fn(() => 0), claimNext: vi.fn(() => available ? (available = false, leased) : null), renewLease: vi.fn(() => true), publishLease: vi.fn((input: { publish: () => unknown }) => input.publish()), getJob: vi.fn(() => leased), releaseLease: vi.fn(), failLease: vi.fn() }
     const handler = vi.fn(async () => { await new Promise<void>((resolve) => { release = resolve }); return { publish: vi.fn(() => 'saved') } })
     const worker = new ContentGenerationWorker({ repository: repository as never, admission: new HeavyGenerationQueue(), handlers: { lesson_generate: handler }, clock: fake, renewAfterMs: 10, leaseMs: 30 })
-    worker.start(); fake.advance(0); await Promise.resolve(); fake.advance(10); expect(repository.renewLease).toHaveBeenCalledTimes(1); release(); await vi.waitFor(() => expect(repository.publishLease).toHaveBeenCalledTimes(1)); await worker.stop()
+    worker.start(); fake.advance(0); await Promise.resolve(); fake.advance(10); expect(repository.renewLease).toHaveBeenCalledTimes(1); release(); await vi.waitFor(() => expect(repository.publishLease).toHaveBeenCalledTimes(1)); expect(repository.renewLease).toHaveBeenCalledTimes(2); await worker.stop()
   })
 
   it('aborts and releases an owned lease on shutdown', async () => {
@@ -56,5 +61,20 @@ describe('ContentGenerationWorker', () => {
     const worker = new ContentGenerationWorker({ repository: repository as never, admission: new HeavyGenerationQueue(), handlers: { lesson_generate: () => new Promise((resolve) => { finish = resolve }) }, clock: fake })
     worker.start(); fake.advance(0); await vi.waitFor(() => expect(repository.claimNext).toHaveBeenCalled()); repository.cancelRevision(leased.workspaceId, 0); worker.cancelWorkspace(leased.workspaceId); expect(repository.cancelRevision).toHaveBeenCalledWith(leased.workspaceId, 0)
     finish({ publish: vi.fn() }); await worker.stop(); expect(repository.publishLease).not.toHaveBeenCalled()
+  })
+
+  it('keeps renewing a provider-active lease beyond its original expiry and publishes once', async () => {
+    const fake = clock(); let available = true; let finish!: (value: { publish(): unknown; verifyPublished(): boolean }) => void; const leased = job({ leaseExpiresAt: 30 }); const publish = vi.fn(() => 'lesson'); const onPublished = vi.fn()
+    const repository = { reconcile: vi.fn(() => ({ requeued: 0, obsoleted: 0 })), retryProviderUnavailable: vi.fn(() => 0), claimNext: vi.fn(() => available ? (available = false, leased) : null), renewLease: vi.fn(() => true), publishLease: vi.fn((input: { publish: () => unknown }) => input.publish()), getJob: vi.fn(() => leased), releaseLease: vi.fn(), failLease: vi.fn() }
+    const worker = new ContentGenerationWorker({ repository: repository as never, admission: new HeavyGenerationQueue(), handlers: { lesson_generate: () => new Promise((resolve) => { finish = resolve }) }, clock: fake, renewAfterMs: 10, leaseMs: 30, timeoutMs: 100, onPublished })
+    worker.start(); fake.advance(0); await vi.waitFor(() => expect(repository.claimNext).toHaveBeenCalled()); fake.advance(70); expect(repository.renewLease).toHaveBeenCalledTimes(7)
+    finish({ publish, verifyPublished: () => true }); await vi.waitFor(() => expect(onPublished).toHaveBeenCalledWith(leased)); expect(publish).toHaveBeenCalledTimes(1); expect(repository.failLease).not.toHaveBeenCalled(); await worker.stop()
+  })
+
+  it('rolls back readiness and never calls onPublished when published output cannot be read back', async () => {
+    const fake = clock(); let available = true; const leased = job(); const onPublished = vi.fn()
+    const repository = { reconcile: vi.fn(() => ({ requeued: 0, obsoleted: 0 })), retryProviderUnavailable: vi.fn(() => 0), claimNext: vi.fn(() => available ? (available = false, leased) : null), renewLease: vi.fn(() => true), publishLease: vi.fn((input: { publish: () => unknown }) => input.publish()), getJob: vi.fn(() => leased), releaseLease: vi.fn(), failLease: vi.fn(() => true) }
+    const worker = new ContentGenerationWorker({ repository: repository as never, admission: new HeavyGenerationQueue(), handlers: { lesson_generate: async () => ({ publish: () => 'lesson', verifyPublished: () => false }) }, clock: fake, onPublished })
+    worker.start(); fake.advance(0); await vi.waitFor(() => expect(repository.failLease).toHaveBeenCalledWith(expect.objectContaining({ errorCode: 'PUBLISHED_CONTENT_MISSING' }))); expect(onPublished).not.toHaveBeenCalled(); await worker.stop()
   })
 })

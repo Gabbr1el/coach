@@ -74,7 +74,11 @@ export class PlannerActionService {
     }
     if (current.status === 'applying') this.dependencies.repository.release(actionId)
     const action = this.dependencies.repository.claim(actionId, this.now())
-    if (decision === 'reject') return this.dependencies.repository.complete(actionId, 'rejected', null, this.now())
+    if (decision === 'reject') {
+      const completed = this.dependencies.repository.complete(actionId, 'rejected', null, this.now())
+      await this.dependencies.onResolved?.(completed)
+      return completed
+    }
     try {
       let result: unknown
       if (action.type === 'workspace.prepare') {

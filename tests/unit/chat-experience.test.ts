@@ -77,6 +77,12 @@ describe('chat experience state', () => {
     expect(reconcileConversationMessages([message(3)], [message(2), message(1)])).toEqual([message(1), message(2), message(3)])
   })
 
+  it('reconciles a partial action-result turn into a retained 20+ message history', () => {
+    const history = Array.from({ length: 24 }, (_, index) => message(index + 1))
+    const returnedTurn = [message(25), message(26)]
+    expect(reconcileConversationMessages(history, returnedTurn)).toEqual([...history, ...returnedTurn])
+  })
+
   it('accepts repeated streaming updates without touching prior history', () => {
     const history = [message(1), message(2)]
     let streamed = ''

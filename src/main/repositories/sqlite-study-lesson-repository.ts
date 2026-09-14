@@ -90,6 +90,11 @@ export class SqliteStudyLessonRepository implements StudyLessonRepository {
     return { ...base, blocks: composeAdaptedLessonBlocks(base.blocks, active) }
   }
 
+  findForContentRevision(roadmapId: string, topicId: string, revision: number, inputHash: string): PersistedStudyLesson | null {
+    const row = this.database.sqlite.prepare(`SELECT ${lessonColumns} FROM study_lessons WHERE roadmap_id=? AND topic_id=? AND content_revision=? AND input_hash=?`).get(roadmapId, topicId, revision, inputHash) as LessonRow | undefined
+    return row ? mapLesson(row) : null
+  }
+
   create(lesson: PersistedStudyLesson): PersistedStudyLesson {
     this.database.sqlite.prepare('INSERT OR IGNORE INTO study_lessons (id, workspace_id, roadmap_id, module_id, topic_id, generation_kind, content_json, provider_id, model_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(lesson.id, lesson.workspaceId, lesson.roadmapId, lesson.moduleId, lesson.topicId, lesson.generationKind, JSON.stringify({ title: lesson.title, level: lesson.level, objective: lesson.objective, blocks: lesson.blocks, sources: lesson.sources }), lesson.providerId, lesson.modelId, lesson.createdAt, lesson.createdAt)
     const persisted = this.findBase(lesson.roadmapId, lesson.topicId)

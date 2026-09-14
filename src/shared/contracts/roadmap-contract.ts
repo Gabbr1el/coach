@@ -61,6 +61,26 @@ export function validateCurriculum(modules: readonly CurriculumModule[]): void {
     }
   }
 }
+
+export function repairCurriculumPrerequisites(modules: readonly CurriculumModule[]): CurriculumModule[] {
+  const introductions = new Map<string, number>()
+  const orderedTopics = modules
+    .map((module, index) => ({ module, index }))
+    .sort((left, right) => (left.module.position ?? left.index) - (right.module.position ?? right.index) || left.index - right.index)
+    .flatMap(({ module }) => module.curricularTopics ?? [])
+  for (const [topicIndex, topic] of orderedTopics.entries()) for (const concept of topic.concepts) if (!introductions.has(concept.key)) introductions.set(concept.key, topicIndex)
+  let topicIndex = 0
+  return modules.map((module) => ({
+    ...module,
+    ...(module.curricularTopics ? { curricularTopics: module.curricularTopics.map((topic) => {
+      const currentIndex = topicIndex++
+      return { ...topic, assessmentIntents: topic.assessmentIntents.map((intent) => ({
+        ...intent,
+        prerequisiteConceptKeys: [...new Set(intent.prerequisiteConceptKeys)].filter((key) => key !== intent.conceptKey && (introductions.get(key) === undefined || introductions.get(key)! <= currentIndex)),
+      })) }
+    }) } : {}),
+  }))
+}
 export const roadmapRebuildImpactSchema = z.object({
   relevance: z.enum(['compatible', 'partial', 'irrelevant']).default('compatible'),
   summary: z.string().trim().min(1).max(2000).default('A adaptação preserva a estrutura curricular equivalente.'),

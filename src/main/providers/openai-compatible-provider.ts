@@ -23,7 +23,7 @@ interface ChatCompletionBody {
 }
 
 export class OpenAICompatibleProviderError extends Error {
-  constructor(readonly code: 'INVALID_CREDENTIAL' | 'INSUFFICIENT_QUOTA' | 'MODEL_UNAVAILABLE' | 'ACCESS_RESTRICTED' | 'RATE_LIMITED' | 'NETWORK_UNAVAILABLE' | 'UNKNOWN', message?: string) {
+  constructor(readonly code: 'INVALID_CREDENTIAL' | 'INSUFFICIENT_QUOTA' | 'MODEL_UNAVAILABLE' | 'ACCESS_RESTRICTED' | 'RATE_LIMITED' | 'NETWORK_UNAVAILABLE' | 'REQUEST_TIMEOUT' | 'UNKNOWN', message?: string) {
     super(message ?? code)
     this.name = 'OpenAICompatibleProviderError'
   }
@@ -58,7 +58,7 @@ export class OpenAICompatibleProvider implements AIProvider {
     const timeout = Math.min(300_000, Math.max(120_000, request.maxOutputTokens * 40))
     const { response, cleanup } = await this.fetchWithTimeout(`${this.baseUrl}/chat/completions`, {
       method: 'POST', headers: this.headers(), signal: request.signal,
-      body: JSON.stringify({ model: request.model ?? this.defaultModel, messages: request.messages, max_tokens: request.maxOutputTokens, stream: false }),
+      body: JSON.stringify({ model: request.model ?? this.defaultModel, messages: request.messages, max_tokens: request.maxOutputTokens, ...(request.responseFormat === 'json_object' ? { response_format: { type: 'json_object' } } : {}), stream: false }),
     }, timeout)
     try {
       const body = await this.jsonWithLimit(response) as ChatCompletionBody
@@ -122,12 +122,13 @@ export class OpenAICompatibleProvider implements AIProvider {
   private async fetchWithTimeout(url: string, init: RequestInit, milliseconds: number): Promise<{ response: Response; cleanup: () => void }> {
     if (init.signal?.aborted) throw new DOMException('Request cancelled', 'AbortError')
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), milliseconds)
+    let timedOut = false
+    const timeout = setTimeout(() => { timedOut = true; controller.abort() }, milliseconds)
     const abort = () => controller.abort()
     init.signal?.addEventListener('abort', abort, { once: true })
     const cleanup = () => { clearTimeout(timeout); init.signal?.removeEventListener('abort', abort) }
     try { return { response: await this.fetcher(url, { ...init, redirect: 'error', signal: controller.signal }), cleanup } }
-    catch (error) { cleanup(); throw error }
+    catch (error) { cleanup(); if (timedOut) throw new OpenAICompatibleProviderError('REQUEST_TIMEOUT', 'Compatible provider request timed out'); throw error }
   }
 
   private async jsonWithLimit(response: Response): Promise<unknown> {

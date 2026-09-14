@@ -76,10 +76,10 @@ describe('Visão Acadêmica view model', () => {
     expect(() => inferAcademicMutation({ ...draft('Aula especial', 20_000), startsAt: 30_000, existingItem: interval })).toThrow('INVALID_INTERVAL')
   })
 
-  it('uses identical authority identity sets in all views including archived roots', () => {
+  it('uses identical authority identity sets without exposing archived roots or revisions', () => {
     const active = item(); const completed = item({ status: 'resolved' }); const archived = item({ status: 'archived' }); const previous = item({ status: 'archived', replacedById: active.id })
     const ids = academicHumanItems({ current: [active], history: [completed, archived, previous], generatedAt: now }, now).map((value) => value.item.id)
-    expect([...ids]).toEqual([...ids]); expect(ids).toEqual(expect.arrayContaining([active.id, completed.id, archived.id])); expect(ids).not.toContain(previous.id)
+    expect([...ids]).toEqual([...ids]); expect(ids).toEqual(expect.arrayContaining([active.id, completed.id])); expect(ids).not.toContain(archived.id); expect(ids).not.toContain(previous.id)
   })
 
   it('flags only planning-relevant mutations and leaves read projections pure', () => {

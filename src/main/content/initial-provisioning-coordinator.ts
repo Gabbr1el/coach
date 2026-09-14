@@ -12,6 +12,11 @@ export class InitialProvisioningCoordinator {
 
   initialize(workspaceId: string): void {
     const now = this.now()
+    const workspace = this.database.sqlite.prepare("SELECT status FROM workspaces WHERE id=?").get(workspaceId) as { status: string } | undefined
+    if (workspace?.status !== 'active') {
+      this.repository.invalidateArchivedWorkspace?.(workspaceId, now)
+      return
+    }
     const provisioning = this.database.sqlite.prepare('SELECT status FROM workspace_provisioning WHERE workspace_id=?').get(workspaceId) as { status: string } | undefined
     if (provisioning?.status === 'draft') return
     this.ensureProjection(workspaceId, now)
@@ -35,7 +40,7 @@ export class InitialProvisioningCoordinator {
       return
     }
     const revision = this.repository.ensureRevision({ workspaceId, inputHash, now })
-    this.enqueue(workspaceId, revision.revision, inputHash, 'roadmap_generate', 'roadmap', 900, [])
+    this.enqueue(workspaceId, revision.revision, inputHash, 'roadmap_generate', 'roadmap', 900)
     this.timelines?.markProvisioning(workspaceId, 'roadmap', { outcome: 'queued' })
     this.stage(workspaceId, 'roadmap')
     this.wake()
@@ -79,11 +84,9 @@ export class InitialProvisioningCoordinator {
     const topics = (this.database.sqlite.prepare('SELECT id,topics_json AS topics FROM roadmap_modules WHERE roadmap_id=? ORDER BY position').all(roadmap.id) as Array<{ id: string; topics: string }>).flatMap((module) => (JSON.parse(module.topics) as string[]).map((topic) => `${module.id}:${topic}`))
     if (!topics.length) throw new Error('Persisted roadmap has no actionable topic')
     const first = topics[0]!
-    const roadmapKey = this.key(workspaceId, revision.revision, revision.inputHash, 'roadmap_generate', 'roadmap')
     if (!this.jobReady(workspaceId, revision.revision, 'roadmap_generate', 'roadmap')) { this.stage(workspaceId, 'roadmap'); return }
-    this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', first, 900, [roadmapKey])
-    const lessonKey = this.key(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', first)
-    this.enqueue(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', first, 900, [lessonKey])
+    this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', first, 900)
+    this.enqueue(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', first, 900)
     const exerciseKey = this.key(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', first)
     this.enqueue(workspaceId, revision.revision, revision.inputHash, 'plan_recalculate', 'current-week', 850, [exerciseKey])
     const progress = this.database.sqlite.prepare('SELECT current_topic_id AS topicId FROM study_progress WHERE workspace_id=? AND roadmap_id=?').get(workspaceId, roadmap.id) as { topicId: string } | undefined
@@ -91,13 +94,11 @@ export class InitialProvisioningCoordinator {
     const currentIndex = foundIndex >= 0 ? foundIndex : 0
     const current = topics[currentIndex] ?? first
     const next = topics[currentIndex + 1]
-    const currentLessonKey = this.key(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', current)
-    this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', current, 700, [roadmapKey])
-    this.enqueue(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', current, 700, [currentLessonKey])
+    this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', current, 700)
+    this.enqueue(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', current, 700)
     if (next) {
-      const nextLessonKey = this.key(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', next)
-      this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', next, 500, [roadmapKey])
-      this.enqueue(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', next, 500, [nextLessonKey])
+      this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', next, 500)
+      this.enqueue(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', next, 500)
     }
     const units = [
       { kind: 'roadmap_generate' as const, unitKey: 'roadmap', inputHash: revision.inputHash },
@@ -113,7 +114,10 @@ export class InitialProvisioningCoordinator {
     this.stage(workspaceId, this.jobReady(workspaceId, revision.revision, 'lesson_generate', first) ? this.jobReady(workspaceId, revision.revision, 'exercise_generate', first) ? 'plan' : 'exercises' : 'lesson')
     this.reconcileReadiness(workspaceId)
     const usable = this.repository.getRevision(workspaceId)?.state !== 'PROVISIONING'
-    if (usable) for (const topic of topics.slice(2)) this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', topic, 300, [roadmapKey])
+    if (usable) for (const topic of topics.slice(2)) {
+      this.enqueue(workspaceId, revision.revision, revision.inputHash, 'lesson_generate', topic, 300)
+      this.enqueue(workspaceId, revision.revision, revision.inputHash, 'exercise_generate', topic, 250)
+    }
     this.wake()
   }
 
@@ -121,12 +125,15 @@ export class InitialProvisioningCoordinator {
     const revision = this.repository.getRevision(workspaceId)
     if (!revision || revision.inputHash === 'legacy-unavailable') return
     const timezone = (this.database.sqlite.prepare("SELECT timezone FROM planning_settings WHERE id='current'").get() as { timezone: string } | undefined)?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(this.now())
+    const todayParts = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(this.now())
+    const part = (type: Intl.DateTimeFormatPartTypes) => todayParts.find((item) => item.type === type)?.value ?? ''
+    const today = `${part('year')}-${part('month')}-${part('day')}`
     const state = this.repository.evaluateReadiness({ workspaceId, expectedRevision: revision.revision, todayDateKey: today, now: this.now() })
     if (state.state === 'PROVISIONING') return
     const pending = this.database.sqlite.prepare("SELECT COUNT(*) AS count FROM content_jobs WHERE workspace_id=? AND revision=? AND status IN ('pending','queued','generating')").get(workspaceId, revision.revision) as { count: number }
     this.database.sqlite.prepare("UPDATE workspace_provisioning SET status='ready',stage=?,completed_at=COALESCE(completed_at,?),stage_updated_at=?,retry_after=NULL,error_code=NULL,error_message=NULL WHERE workspace_id=?").run(state.state === 'FULLY_PROVISIONED' ? 'ready' : pending.count ? 'background' : 'ready', this.now(), this.now(), workspaceId)
-    this.timelines?.markProvisioning(workspaceId, 'persistence', { outcome: state.state === 'FULLY_PROVISIONED' ? 'fully_provisioned' : 'usable' })
+    const materialCount = (this.database.sqlite.prepare("SELECT COUNT(*) AS count FROM materials WHERE workspace_id=? AND status='ready'").get(workspaceId) as { count: number }).count
+    this.timelines?.markProvisioning(workspaceId, 'persistence', { outcome: state.state === 'FULLY_PROVISIONED' ? 'fully_provisioned' : 'usable', materialClass: materialCount ? 'with_materials' : 'none' })
   }
 
   onPublished(job: ContentJob): void {
@@ -146,7 +153,11 @@ export class InitialProvisioningCoordinator {
     for (const workspaceId of batch) { try { this.initialize(workspaceId) } catch (error) { console.error(`Workspace content reconciliation failed for ${workspaceId}:`, error) } }
     if (this.startupQueue.length) this.startupTimer = setTimeout(() => this.reconcileStartupBatch(), 25)
   }
-  onJobSettled(job: ContentJob): void { this.syncFailure(job.workspaceId) }
+  onJobSettled(job: ContentJob): void {
+    this.syncFailure(job.workspaceId)
+    const workspace = this.database.sqlite.prepare('SELECT status FROM workspaces WHERE id=?').get(job.workspaceId) as { status: string } | undefined
+    if (workspace?.status === 'active') this.reconcileReadiness(job.workspaceId)
+  }
   private syncFailure(workspaceId: string): void {
     const revision = this.repository.getRevision(workspaceId)
     if (!revision) return
@@ -162,5 +173,5 @@ export class InitialProvisioningCoordinator {
   private stage(workspaceId: string, stage: string): void { this.database.sqlite.prepare("UPDATE workspace_provisioning SET status='running',stage=?,stage_updated_at=?,retry_after=NULL,error_code=NULL,error_message=NULL WHERE workspace_id=? AND status<>'draft'").run(stage, this.now(), workspaceId) }
   private jobReady(workspaceId: string, revision: number, kind: string, unitKey: string): boolean { return Boolean(this.database.sqlite.prepare("SELECT 1 FROM content_jobs WHERE workspace_id=? AND revision=? AND kind=? AND unit_key=? AND status='ready'").get(workspaceId, revision, kind, unitKey)) }
   private key(workspaceId: string, revision: number, inputHash: string, kind: keyof typeof CONTENT_GENERATOR_VERSIONS, unitKey: string): string { return contentJobKey({ workspaceId, revision, inputHash, kind, unitKey, generatorContractVersion: CONTENT_GENERATOR_VERSIONS[kind] }) }
-  private enqueue(workspaceId: string, revision: number, inputHash: string, kind: keyof typeof CONTENT_GENERATOR_VERSIONS, unitKey: string, priority: number, dependencyKeys: string[]): void { this.repository.enqueue({ workspaceId, revision, kind, unitKey, priority, inputHash, generatorContractVersion: CONTENT_GENERATOR_VERSIONS[kind], dependencyKeys }, this.now()) }
+  private enqueue(workspaceId: string, revision: number, inputHash: string, kind: keyof typeof CONTENT_GENERATOR_VERSIONS, unitKey: string, priority: number, dependencyKeys?: string[]): void { this.repository.enqueue({ workspaceId, revision, kind, unitKey, priority, inputHash, generatorContractVersion: CONTENT_GENERATOR_VERSIONS[kind], dependencyKeys }, this.now()) }
 }

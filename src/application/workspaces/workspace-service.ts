@@ -15,6 +15,7 @@ export interface WorkspaceServiceDependencies {
   readonly findSemanticDuplicate?: (canonicalKey: string, excludedId?: string) => Workspace | null
   readonly validateAnalysis?: (token: string, revision: number, subject: string, focus?: string, context?: string) => boolean
   readonly discoverOrphanEvents?: (workspace: Workspace) => Promise<unknown> | unknown
+  readonly onArchived?: (workspaceId: string, archivedAt: number) => Promise<void> | void
 }
 
 export class WorkspaceService {
@@ -29,13 +30,15 @@ export class WorkspaceService {
   private readonly findSemanticDuplicate?: WorkspaceServiceDependencies['findSemanticDuplicate']
   private readonly validateAnalysis?: WorkspaceServiceDependencies['validateAnalysis']
   private discoverOrphanEvents?: WorkspaceServiceDependencies['discoverOrphanEvents']
+  private readonly onArchived?: WorkspaceServiceDependencies['onArchived']
 
-  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), ensureLearningPath, academicContext, createAcademicContexts, saveLearningOverrides, provisioning, findSemanticDuplicate, validateAnalysis, discoverOrphanEvents }: WorkspaceServiceDependencies) {
+  constructor({ repository, now = Date.now, createId = () => crypto.randomUUID(), ensureLearningPath, academicContext, createAcademicContexts, saveLearningOverrides, provisioning, findSemanticDuplicate, validateAnalysis, discoverOrphanEvents, onArchived }: WorkspaceServiceDependencies) {
     this.repository = repository
     this.now = now
     this.createId = createId
     this.ensureLearningPath = ensureLearningPath ?? null
     this.academicContext = academicContext ?? null
+    this.onArchived = onArchived
     this.createAcademicContexts = createAcademicContexts
     this.saveLearningOverrides = saveLearningOverrides
     this.provisioning = provisioning
@@ -129,9 +132,11 @@ export class WorkspaceService {
   }
 
   async archive(id: string): Promise<void> {
-    const archived = await this.repository.archive(id, this.now())
+    const archivedAt = this.now()
+    const archived = await this.repository.archive(id, archivedAt)
     if (!archived) {
       throw new Error('Workspace not found')
     }
+    await this.onArchived?.(id, archivedAt)
   }
 }

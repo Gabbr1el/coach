@@ -67,7 +67,7 @@ export function visibleAcademicDetails(item: Pick<AcademicLifeItem, 'details'>):
 export function authoritativeAcademicItems(projection: AcademicLifeProjection | null): AcademicLifeItem[] {
   if (!projection) return []
   const current = new Map(projection.current.map((item) => [item.id, item]))
-  for (const item of projection.history) if (item.replacedById === null && !current.has(item.id)) current.set(item.id, item)
+  for (const item of projection.history) if (item.status === 'resolved' && item.replacedById === null && !current.has(item.id)) current.set(item.id, item)
   return [...current.values()]
 }
 
@@ -95,18 +95,26 @@ export async function refreshAfterAcademicMutation<T>(affectsPlanning: boolean, 
 
 export function academicViewReducer(_view: AcademicView, action: AcademicViewAction): AcademicView { return action.view }
 
-export interface AcademicViewCommands {
+export interface AcademicViewMutationCommands {
   save(input: AcademicLifeMutationInput): Promise<AcademicLifeItem>
   transition(input: { id: string; status: 'resolved' | 'archived' }): Promise<AcademicLifeItem>
 }
+export interface AcademicViewCommands extends AcademicViewMutationCommands {
+  delete(input: { id: string; confirmCompleted: boolean }): Promise<{ id: string; deletedRootId: string; affectedPlanning: boolean }>
+}
 
-export async function saveAcademicViewItem(commands: AcademicViewCommands, input: AcademicLifeMutationInput, previous: AcademicLifeItem | null, refresh: (affectsPlanning: boolean) => void | Promise<void>): Promise<AcademicLifeItem> {
+export async function deleteAcademicViewItem(commands: AcademicViewCommands, item: AcademicLifeItem, confirmCompleted: boolean, refresh: (affectsPlanning: boolean) => void | Promise<void>): Promise<void> {
+  const result = await commands.delete({ id: item.id, confirmCompleted })
+  await refresh(result.affectedPlanning)
+}
+
+export async function saveAcademicViewItem(commands: AcademicViewMutationCommands, input: AcademicLifeMutationInput, previous: AcademicLifeItem | null, refresh: (affectsPlanning: boolean) => void | Promise<void>): Promise<AcademicLifeItem> {
   const saved = await commands.save(input)
   await refresh(academicMutationAffectsPlanning(previous, saved))
   return saved
 }
 
-export async function transitionAcademicViewItem(commands: AcademicViewCommands, item: AcademicLifeItem, status: 'resolved' | 'archived', refresh: (affectsPlanning: boolean) => void | Promise<void>): Promise<AcademicLifeItem> {
+export async function transitionAcademicViewItem(commands: AcademicViewMutationCommands, item: AcademicLifeItem, status: 'resolved' | 'archived', refresh: (affectsPlanning: boolean) => void | Promise<void>): Promise<AcademicLifeItem> {
   const saved = await commands.transition({ id: item.id, status })
   await refresh(academicMutationAffectsPlanning(item, saved))
   return saved

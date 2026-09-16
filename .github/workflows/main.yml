@@ -1,0 +1,54 @@
+name: Build Coach for Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.24.0
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build Coach
+        run: pnpm build
+
+      - name: Rebuild native Electron dependencies
+        run: pnpm exec electron-builder install-app-deps
+
+      - name: Package Windows installer
+        run: pnpm exec electron-builder --win nsis --x64
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Coach-Windows
+          path: |
+            release/*.exe
+            release/*.blockmap
+          if-no-files-found: error

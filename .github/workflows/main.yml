@@ -30,6 +30,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install Linux runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bubblewrap \
+            python3 \
+            gcc \
+            default-jdk \
+            util-linux
+
       - name: Typecheck
         run: pnpm typecheck
 

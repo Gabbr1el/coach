@@ -18,4 +18,15 @@ describe('exercise IPC read path', () => {
     expect(service.getSet).toHaveBeenCalledOnce()
     expect(service.ensureSet).not.toHaveBeenCalled()
   })
+
+  it('forwards the exact simplify payload including its idempotency key', async () => {
+    const wording = { title: 'Exercício', statement: 'Mais simples.', inputDescription: 'Entrada.', outputDescription: 'Saída.', predictionPrompt: null }
+    const adaptation = { id: 'adaptation-1', requestId: 'simplify-1', exerciseId: 'exercise-1', revision: 1, original: wording, adapted: wording, createdAt: 1, isActive: true, providerId: null, modelId: null }
+    const service = { simplify: vi.fn(async (input) => ({ ...adaptation, workspaceId: input.workspaceId })) }
+    registerExerciseHandlers(service as never)
+    const handler = mocks.handle.mock.calls.find(([channel]) => channel === EXERCISE_CHANNELS.simplify)?.[1]
+    const input = { workspaceId: '00000000-0000-4000-8000-000000000001', exerciseId: 'exercise-1', requestId: 'simplify-1' }
+    await handler({}, input)
+    expect(service.simplify).toHaveBeenCalledWith(input)
+  })
 })

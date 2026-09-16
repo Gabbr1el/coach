@@ -24,7 +24,7 @@ export function createContentJobHandlers(input: { database: CoachDatabase; roadm
     lesson_generate: (job, signal) => input.lessons.prepareGeneration({ ...topicContext(input.database, job), revision: job.revision, inputHash: job.inputHash }, signal),
     exercise_generate: async (job, signal) => {
       const context = topicContext(input.database, job)
-      const lesson = input.database.sqlite.prepare('SELECT id FROM study_lessons WHERE workspace_id=? AND roadmap_id=? AND module_id=? AND topic_id=? AND content_revision=?').get(job.workspaceId, context.roadmapId, context.moduleId, context.topicId, job.revision) as { id: string } | undefined
+      const lesson = input.database.sqlite.prepare('SELECT id FROM study_lessons WHERE workspace_id=? AND roadmap_id=? AND module_id=? AND topic_id=? AND content_revision=? AND input_hash=?').get(job.workspaceId, context.roadmapId, context.moduleId, context.topicId, job.revision, job.inputHash) as { id: string } | undefined
       if (!lesson) throw new Error('Current revision lesson unavailable')
       return input.exercises.prepareGeneration({ ...context, lessonId: lesson.id, revision: job.revision, inputHash: job.inputHash }, signal)
     },

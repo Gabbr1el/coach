@@ -77,8 +77,11 @@ export class LocalOrganizerIntentInterpreter implements OrganizerIntentInterpret
 export class ProviderOrganizerIntentInterpreter implements OrganizerIntentInterpreter {
   constructor(private readonly providers: AIProviderManager, private readonly fallback: OrganizerIntentInterpreter = new LocalOrganizerIntentInterpreter()) {}
   async interpret(content: string, context: OrganizerInterpretationContext): Promise<OrganizerIntent> {
+    const deterministic = await this.fallback.interpret(content, context)
+    const clearTimedEvent = deterministic.capability === 'academic.event.create' && deterministic.mode === 'mutation' && deterministic.missingFields.length === 0 && /\b(?:hoje|amanh[ãa]|depois\s+de\s+amanh[ãa])\b/i.test(content) && /\b(?:[àa]s?\s+)?\d{1,2}(?::\d{2})?\s*(?:h(?:oras?)?|da\s+(?:manh[ãa]|tarde|noite))\b/i.test(content)
+    if (clearTimedEvent) return deterministic
     const provider = this.providers.route('planner')
-    if (!provider) return this.fallback.interpret(content, context)
+    if (!provider) return deterministic
     try {
       const response = await provider.sendMessage({
         messages: [
@@ -90,7 +93,7 @@ export class ProviderOrganizerIntentInterpreter implements OrganizerIntentInterp
       return organizerIntentSchema.parse(extractJsonDocument(response.content))
     } catch (error) {
       if (error instanceof Error && (error.name === 'ZodError' || /JSON|capability|intent/i.test(error.message))) throw new Error('Organizer provider returned an invalid structured intent', { cause: error })
-      return this.fallback.interpret(content, context)
+      return deterministic
     }
   }
 }

@@ -41,6 +41,11 @@ export class DrizzleWorkspaceRepository implements WorkspaceRepository {
     return toWorkspace(row)
   }
 
+  async removeJustCreated(id: string, createdAt: number): Promise<boolean> {
+    const result = this.database.sqlite.prepare('DELETE FROM workspaces WHERE id = ? AND created_at = ? AND NOT EXISTS (SELECT 1 FROM workspace_provisioning p WHERE p.workspace_id = workspaces.id)').run(id, createdAt)
+    return result.changes === 1
+  }
+
   async findById(id: string): Promise<Workspace | null> {
     const row = this.database.orm.select().from(workspaces).where(eq(workspaces.id, id)).get()
     return row ? toWorkspace(row) : null

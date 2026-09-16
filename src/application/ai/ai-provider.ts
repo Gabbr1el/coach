@@ -14,6 +14,7 @@ export interface AIRequest {
   readonly model?: string
   readonly maxOutputTokens: number
   readonly signal?: AbortSignal
+  readonly responseFormat?: 'json_object'
 }
 
 export interface AIResponse {

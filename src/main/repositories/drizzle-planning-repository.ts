@@ -20,6 +20,45 @@ export class DrizzlePlanningRepository implements PlanningRepository {
   listTodayBudgets(weekStart: string, timezone: string): Array<{ dateKey: string; minutes: number }> { return this.database.sqlite.prepare("SELECT date_key AS dateKey,minutes FROM daily_planning_budgets WHERE timezone=? AND date_key>=? AND date_key<=date(?, '+6 days')").all(timezone, weekStart, weekStart) as Array<{ dateKey: string; minutes: number }> }
   transaction<T>(operation: () => T): T { return this.database.sqlite.transaction(operation)() }
   setWeeklyPlanItemCompletion(workspaceId: string, itemId: string, completed: boolean, now: number): boolean { return this.database.sqlite.transaction(() => { const row = this.database.sqlite.prepare('SELECT status,duration_minutes AS durationMinutes FROM weekly_plan_items WHERE id=? AND workspace_id=?').get(itemId, workspaceId) as { status: string; durationMinutes: number } | undefined; if (!row || (row.status === 'completed') === completed) return false; this.database.sqlite.prepare('UPDATE weekly_plan_items SET status=?,updated_at=? WHERE id=? AND workspace_id=?').run(completed ? 'completed' : 'pending', now, itemId, workspaceId); this.database.sqlite.prepare('UPDATE study_plan_items SET status=?,updated_at=? WHERE id=? AND workspace_id=?').run(completed ? 'completed' : 'pending', now, itemId, workspaceId); this.database.sqlite.prepare('INSERT INTO plan_item_completion_history (id,item_id,workspace_id,completed,duration_minutes,created_at) VALUES (?,?,?,?,?,?)').run(crypto.randomUUID(), itemId, workspaceId, Number(completed), row.durationMinutes, now); return true })() }
+  adjustWorkspaceDayLoad(planId: string, workspaceId: string, dateKey: string, deltaMinutes: number, now: number): boolean {
+    if (!Number.isInteger(deltaMinutes) || deltaMinutes === 0) return false
+    return this.database.sqlite.transaction(() => {
+      const items = this.database.sqlite.prepare("SELECT id,duration_minutes AS durationMinutes FROM weekly_plan_items WHERE plan_id=? AND workspace_id=? AND date_key=? AND status<>'completed' ORDER BY CASE status WHEN 'in_progress' THEN 0 ELSE 1 END,position").all(planId, workspaceId, dateKey) as Array<{ id: string; durationMinutes: number }>
+      if (!items.length) return false
+      const current = items.reduce((sum, item) => sum + item.durationMinutes, 0)
+      if (current + deltaMinutes < 1 || current + deltaMinutes > 1440) throw new Error('Workspace daily load must remain between 1 and 1440 minutes')
+      const updateMirrors = (item: { id: string; durationMinutes: number }, change: number) => {
+        const weekly = this.database.sqlite.prepare('UPDATE weekly_plan_items SET duration_minutes=duration_minutes+?,updated_at=? WHERE id=? AND workspace_id=? AND duration_minutes=?').run(change, now, item.id, workspaceId, item.durationMinutes)
+        if (weekly.changes !== 1) throw new Error('Concurrent weekly plan update detected')
+        const study = this.database.sqlite.prepare('UPDATE study_plan_items SET duration_minutes=duration_minutes+?,updated_at=? WHERE id=? AND workspace_id=? AND duration_minutes=?').run(change, now, item.id, workspaceId, item.durationMinutes)
+        if (study.changes !== 1) throw new Error('Authoritative study plan mirror is missing or stale')
+      }
+      if (deltaMinutes > 0) {
+        let remaining = deltaMinutes
+        for (const item of items) {
+          if (!remaining) break
+          const addition = Math.min(remaining, 480 - item.durationMinutes)
+          if (addition <= 0) continue
+          updateMirrors(item, addition)
+          remaining -= addition
+        }
+        if (remaining) throw new Error('Workspace daily items cannot accept that load')
+      } else {
+        let remaining = -deltaMinutes
+        for (const item of [...items].reverse()) {
+          if (!remaining) break
+          const removable = Math.min(remaining, item.durationMinutes - 1)
+          if (removable <= 0) continue
+          updateMirrors(item, -removable)
+          remaining -= removable
+        }
+        if (remaining) throw new Error('Workspace daily load cannot be reduced by that amount')
+      }
+      const revision = this.database.sqlite.prepare('UPDATE weekly_plans SET revision=revision+1,updated_at=? WHERE id=?').run(now, planId)
+      if (revision.changes !== 1) throw new Error('Authoritative weekly plan is missing')
+      return true
+    })()
+  }
   getAcademicOverview(now: number): AcademicOverview { const events = (this.database.sqlite.prepare(`SELECT source.id,source.workspaceId,w.name AS workspaceName,source.type,source.title,source.dueAt FROM (SELECT e.id,e.workspace_id AS workspaceId,e.type,e.title,e.due_at AS dueAt FROM academic_events e UNION ALL SELECT d.id,d.workspace_id,'deadline',d.title,d.due_at FROM study_deadlines d WHERE d.completed=0 AND NOT EXISTS (SELECT 1 FROM academic_events e WHERE e.workspace_id=d.workspace_id AND e.title=d.title AND e.due_at=d.due_at)) source JOIN workspaces w ON w.id=source.workspaceId AND w.status='active' ORDER BY source.dueAt,source.title`).all() as Array<Omit<AcademicOverview['events'][number], 'phase'>>).map((event) => ({ ...event, phase: academicEventPhase(event.dueAt, now) })); const availability = this.listWeeklyAvailability(now).sort((a, b) => a.weekday - b.weekday); const workspaces = this.database.sqlite.prepare(`SELECT w.id AS workspaceId, w.name AS workspaceName, (SELECT topic_id FROM study_progress_events e WHERE e.workspace_id=w.id AND e.type='CHECKPOINT_ANSWERED' AND e.correct=0 ORDER BY e.created_at DESC LIMIT 1) AS difficulty, COALESCE((SELECT COUNT(*) FROM study_progress_events e WHERE e.workspace_id=w.id AND e.type='TOPIC_COMPLETED'),0) AS completedTopics, COALESCE((SELECT SUM(json_array_length(m.topics_json)) FROM roadmap_modules m JOIN roadmaps r ON r.id=m.roadmap_id WHERE r.workspace_id=w.id AND r.status='accepted'),0) AS totalTopics FROM workspaces w WHERE w.status='active' ORDER BY w.name`).all() as AcademicOverview['workspaces']; return { events, availability, workspaces, routine: this.listRoutineNotes() } }
   listPriorityInputs(): Array<{ workspaceId: string; title: string; dueAt: number; estimatedMinutes: number; masteryPercent: number | null; recentFocusSeconds: number }> { return this.database.sqlite.prepare(`SELECT source.workspaceId,source.title,source.dueAt,source.estimatedMinutes,source.masteryPercent,COALESCE(SUM(CASE WHEN s.ended_at>=? THEN s.focus_seconds ELSE 0 END),0) AS recentFocusSeconds FROM (SELECT d.id,d.workspace_id AS workspaceId,d.title,d.due_at AS dueAt,d.estimated_minutes AS estimatedMinutes,d.mastery_percent AS masteryPercent FROM study_deadlines d WHERE d.completed=0 UNION ALL SELECT a.id,a.workspace_id,a.title,a.ends_at,CASE WHEN json_valid(a.details) AND json_extract(a.details,'$.schema')='academic-event/v1' AND json_type(a.details,'$.estimatedMinutes')='integer' AND json_extract(a.details,'$.estimatedMinutes') BETWEEN 1 AND 100000 THEN json_extract(a.details,'$.estimatedMinutes') WHEN a.kind='event' THEN 240 ELSE 180 END,NULL FROM academic_life_items a WHERE a.status='active' AND a.replaced_by_id IS NULL AND a.workspace_id IS NOT NULL AND a.kind IN ('event','commitment') AND a.ends_at>=? AND (a.expires_at IS NULL OR a.expires_at>?) AND NOT EXISTS (SELECT 1 FROM study_deadlines d WHERE d.workspace_id=a.workspace_id AND d.title=a.title AND d.due_at=a.ends_at)) source JOIN workspaces w ON w.id=source.workspaceId LEFT JOIN study_sessions s ON s.workspace_id=source.workspaceId WHERE w.status='active' GROUP BY source.id`).all(this.nowMinusWeek(), Date.now(), Date.now()) as Array<{ workspaceId: string; title: string; dueAt: number; estimatedMinutes: number; masteryPercent: number | null; recentFocusSeconds: number }> }
   findWeeklyPlan(weekStart: string, timezone: string): { id: string; revision: number; generatedAt: number; items: ExistingWeeklyItem[] } | null { const plan = this.database.sqlite.prepare('SELECT id,revision,generated_at AS generatedAt FROM weekly_plans WHERE week_start=? AND timezone=?').get(weekStart, timezone) as { id: string; revision: number; generatedAt: number } | undefined; if (!plan) return null; const items = this.database.sqlite.prepare("SELECT i.id,i.workspace_id AS workspaceId,i.source_key AS sourceKey,i.date_key AS dateKey,i.title,i.duration_minutes AS durationMinutes,i.position,i.status,i.module_id AS moduleId,i.topic_id AS topicId,i.activity_type AS activityType,i.scheduled_start_minutes AS scheduledStartMinutes,i.reason,w.name AS workspaceName FROM weekly_plan_items i JOIN workspaces w ON w.id=i.workspace_id AND w.status='active' WHERE i.plan_id=? ORDER BY i.date_key,i.position").all(plan.id) as ExistingWeeklyItem[]; return { ...plan, items } }

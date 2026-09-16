@@ -5,13 +5,16 @@ export type ChatTimelineStage = 'message_received' | 'context_started' | 'contex
 export type ProvisioningTimelineStage = 'analyze' | 'context' | 'material_extraction' | 'material_analysis' | 'roadmap' | 'lesson' | 'exercises' | 'planning' | 'persistence'
 export type PerformanceTimelineStage = ChatTimelineStage | ProvisioningTimelineStage
 
-const SAFE_METADATA_KEYS = new Set(['intent', 'contextResources', 'historyCount', 'snippetCount', 'cache', 'jobKind', 'outcome', 'ttftMs', 'totalMs'])
+const SAFE_METADATA_KEYS = new Set(['intent', 'contextResources', 'historyCount', 'snippetCount', 'cache', 'jobKind', 'outcome', 'ttftMs', 'totalMs', 'materialClass', 'retryBucket', 'providerClass'])
 const SAFE_VALUES: Record<string, ReadonlySet<string>> = {
   intent: new Set(['current_topic', 'planning', 'materials', 'action']),
   contextResources: new Set(['materials', 'plan', 'academic', 'roadmap', 'lesson', 'progress', 'notes', 'workspace']),
   cache: new Set(['hit', 'miss', 'unavailable']),
   jobKind: new Set(['material_extract', 'material_analyze', 'roadmap_generate', 'lesson_generate', 'exercise_generate', 'plan_recalculate']),
   outcome: new Set(['queued', 'published', 'completed', 'unavailable', 'validated', 'usable', 'fully_provisioned']),
+  materialClass: new Set(['none', 'with_materials']),
+  retryBucket: new Set(['first', 'retry']),
+  providerClass: new Set(['configured', 'unavailable']),
 }
 
 function safeMetadata(input: Record<string, unknown>): Record<string, string | number | boolean | null | string[]> {

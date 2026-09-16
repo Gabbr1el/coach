@@ -23,30 +23,55 @@ export class DrizzleRoadmapRepository implements RoadmapRepository {
     if (preview.status !== 'pending') throw new Error('Roadmap rebuild preview is no longer applicable')
     const current = this.findCurrent(preview.workspaceId)
     if (!current || current.id !== preview.currentRoadmapId) { this.database.sqlite.prepare("UPDATE roadmap_rebuild_previews SET status = 'stale', resolved_at = ? WHERE id = ? AND status = 'pending'").run(now, preview.id); throw new Error('Roadmap changed after preview; create a new preview') }
-    const reusedModuleIds = new Set(current.modules.map((module) => module.id))
-    const remappedModules = preview.modules.map((module) => ({ ...module, id: reusedModuleIds.has(module.id) ? crypto.randomUUID() : module.id }))
-    const moduleIds = new Map(preview.modules.map((module, index) => [module.id, remappedModules[index]!.id]))
-    const roadmap: Roadmap = { id: crypto.randomUUID(), workspaceId: preview.workspaceId, title: preview.title, status: 'accepted', generationKind: 'ai_generated', version: this.nextVersion(preview.workspaceId), providerId: current.providerId, modelId: current.modelId, modules: remappedModules, createdAt: now, updatedAt: now }
+    if (preview.impact.relevance === 'irrelevant') throw new Error('Irrelevant material cannot alter the curriculum')
+    if (preview.impact.removedTopics.length > 0 && !preview.impact.requiresAcknowledgement) throw new Error('Roadmap removals require explicit acknowledgement')
+    const currentIds = new Set(current.modules.map((module) => module.id))
+    const preservedIds = new Set(preview.impact.preservedModuleIds)
+    const modules = preview.modules.map((module, position) => {
+      if (currentIds.has(module.id) !== preservedIds.has(module.id)) throw new Error('Preview module identity does not match its preservation impact')
+      return { ...module, position: position + 1 }
+    })
+    if (new Set(modules.map((module) => module.id)).size !== modules.length) throw new Error('Roadmap adaptation contains duplicate module identities')
+    const roadmap: Roadmap = { id: crypto.randomUUID(), workspaceId: preview.workspaceId, title: preview.title, status: 'accepted', generationKind: 'ai_generated', version: this.nextVersion(preview.workspaceId), providerId: current.providerId, modelId: current.modelId, modules, createdAt: now, updatedAt: now }
     this.database.sqlite.transaction(() => {
-      this.activate(roadmap)
-      const progress = this.database.sqlite.prepare('SELECT current_module_id AS moduleId, current_topic_id AS topicId, topic_statuses_json AS statuses, lesson_positions_json AS positions, checkpoint_states_json AS checkpoints FROM study_progress WHERE workspace_id = ?').get(preview.workspaceId) as { moduleId: string; topicId: string; statuses: string; positions: string; checkpoints: string } | undefined
-      if (progress) {
-        const remapTopicId = (id: string) => { const separator = id.indexOf(':'); const moduleId = separator < 0 ? id : id.slice(0, separator); const mapped = moduleIds.get(moduleId); return mapped && separator >= 0 ? `${mapped}:${id.slice(separator + 1)}` : id }
-        const valid = new Set(roadmap.modules.flatMap((module) => module.topics.map((topic) => `${module.id}:${topic}`)))
-        const statuses = Object.fromEntries(Object.entries(JSON.parse(progress.statuses) as Record<string, string>).map(([id, status]) => [remapTopicId(id), status] as const).filter(([id]) => valid.has(id)))
-        const mappedCurrentTopic = remapTopicId(progress.topicId)
-        const keepCurrent = valid.has(mappedCurrentTopic)
-        const first = roadmap.modules.find((module) => module.status !== 'locked') ?? roadmap.modules[0]!
-        const topicId = keepCurrent ? mappedCurrentTopic : `${first.id}:${first.topics[0]}`
-        const moduleId = keepCurrent ? moduleIds.get(progress.moduleId)! : first.id
-        const positions = Object.fromEntries(Object.entries(JSON.parse(progress.positions) as Record<string, unknown>).map(([id, value]) => [remapTopicId(id), value] as const).filter(([id]) => valid.has(id)))
-        const checkpoints = {}
-        this.database.sqlite.prepare('UPDATE study_progress SET roadmap_id = ?, current_module_id = ?, current_topic_id = ?, current_lesson_id = ?, current_checkpoint_id = NULL, topic_statuses_json = ?, lesson_positions_json = ?, checkpoint_states_json = ?, updated_at = ? WHERE workspace_id = ?').run(roadmap.id, moduleId, topicId, `${topicId}:lesson`, JSON.stringify(statuses), JSON.stringify(positions), JSON.stringify(checkpoints), now, preview.workspaceId)
+      validateCurriculum(roadmap.modules)
+      this.insert({ ...roadmap, modules: roadmap.modules.filter((module) => !preservedIds.has(module.id)) })
+      const updateModule = this.database.sqlite.prepare('UPDATE roadmap_modules SET roadmap_id=?,title=?,objective=?,estimated_minutes=?,position=?,status=?,topics_json=?,curricular_topics_json=?,outcomes_json=?,practice=?,completion_criteria_json=?,resources_json=? WHERE id=? AND roadmap_id=?')
+      for (const module of roadmap.modules.filter((item) => preservedIds.has(item.id))) {
+        const result = updateModule.run(roadmap.id, module.title, module.objective, module.estimatedMinutes, module.position, module.status, JSON.stringify(module.topics), JSON.stringify(module.curricularTopics ?? []), JSON.stringify(module.outcomes), module.practice, JSON.stringify(module.completionCriteria), JSON.stringify(module.resources), module.id, current.id)
+        if (result.changes !== 1) throw new Error('Preserved roadmap module is no longer available')
       }
-      const resolved = this.database.sqlite.prepare("UPDATE roadmap_rebuild_previews SET status = 'applied', applied_roadmap_id = ?, resolved_at = ? WHERE id = ? AND workspace_id = ? AND status = 'pending'").run(roadmap.id, now, preview.id, preview.workspaceId)
-      if (resolved.changes !== 1) throw new Error('Roadmap rebuild preview application conflict')
+      this.publishCurriculum(roadmap)
+      this.database.sqlite.prepare("UPDATE roadmaps SET status='archived',updated_at=? WHERE workspace_id=? AND status='accepted' AND id<>?").run(now, preview.workspaceId, roadmap.id)
+      this.database.sqlite.prepare("INSERT INTO workspace_learning_path_state (workspace_id,status,active_roadmap_id,last_attempt_at,retry_after,last_error_code,updated_at) VALUES (?,'ready',?,?,NULL,NULL,?) ON CONFLICT(workspace_id) DO UPDATE SET status='ready',active_roadmap_id=excluded.active_roadmap_id,last_attempt_at=excluded.last_attempt_at,retry_after=NULL,last_error_code=NULL,updated_at=excluded.updated_at").run(preview.workspaceId, roadmap.id, now, now)
+      const changedTopics = new Set(preview.impact.changedTopicIds ?? [])
+      for (const topicId of preview.impact.preservedTopicIds) {
+        if (changedTopics.has(topicId)) continue
+        const separator = topicId.indexOf(':')
+        if (separator > 0) this.database.sqlite.prepare('UPDATE study_lessons SET roadmap_id=?,module_id=?,updated_at=? WHERE workspace_id=? AND roadmap_id=? AND topic_id=?').run(roadmap.id, topicId.slice(0, separator), now, preview.workspaceId, current.id, topicId)
+      }
+      const progress = this.database.sqlite.prepare('SELECT current_module_id AS moduleId,current_topic_id AS topicId,current_lesson_id AS lessonId,current_checkpoint_id AS checkpointId,topic_statuses_json AS statuses,lesson_positions_json AS positions,checkpoint_states_json AS checkpoints FROM study_progress WHERE workspace_id=?').get(preview.workspaceId) as { moduleId: string; topicId: string; lessonId: string | null; checkpointId: string | null; statuses: string; positions: string; checkpoints: string } | undefined
+      if (progress) {
+        const valid = new Set(roadmap.modules.flatMap((module) => module.topics.map((topic) => `${module.id}:${topic}`)))
+        const statuses = Object.fromEntries(Object.entries(JSON.parse(progress.statuses) as Record<string, string>).filter(([id]) => valid.has(id)))
+        const keepTopic = valid.has(progress.topicId)
+        const first = roadmap.modules.find((module) => module.status !== 'locked') ?? roadmap.modules[0]!
+        const topicId = keepTopic ? progress.topicId : `${first.id}:${first.topics[0]}`
+        const moduleId = keepTopic ? progress.moduleId : first.id
+        const lesson = progress.lessonId ? this.database.sqlite.prepare('SELECT content_json AS content FROM study_lessons WHERE id=? AND workspace_id=? AND topic_id=?').get(progress.lessonId, preview.workspaceId, progress.topicId) as { content: string } | undefined : undefined
+        const keepLesson = keepTopic && Boolean(lesson) && !changedTopics.has(topicId)
+        const fallback = keepLesson ? null : this.database.sqlite.prepare('SELECT id FROM study_lessons WHERE workspace_id=? AND roadmap_id=? AND topic_id=? ORDER BY created_at DESC LIMIT 1').get(preview.workspaceId, roadmap.id, topicId) as { id: string } | undefined
+        const realLessonId = keepLesson ? progress.lessonId : fallback?.id ?? null
+        const positions = JSON.parse(progress.positions) as Record<string, unknown>
+        const checkpoints = JSON.parse(progress.checkpoints) as Record<string, unknown>
+        const validCheckpoint = realLessonId !== null && keepLesson && progress.checkpointId !== null && (JSON.parse(lesson!.content) as { blocks?: Array<{ id: string }> }).blocks?.some((block) => block.id === progress.checkpointId)
+        this.database.sqlite.prepare('UPDATE study_progress SET roadmap_id=?,current_module_id=?,current_topic_id=?,current_lesson_id=?,current_checkpoint_id=?,topic_statuses_json=?,lesson_positions_json=?,checkpoint_states_json=?,updated_at=? WHERE workspace_id=?').run(roadmap.id, moduleId, topicId, realLessonId, validCheckpoint ? progress.checkpointId : null, JSON.stringify(statuses), JSON.stringify(positions), JSON.stringify(checkpoints), now, preview.workspaceId)
+      }
+      const resolved = this.database.sqlite.prepare("UPDATE roadmap_rebuild_previews SET status='applied',applied_roadmap_id=?,resolved_at=? WHERE id=? AND workspace_id=? AND status='pending'").run(roadmap.id, now, preview.id, preview.workspaceId)
+      if (resolved.changes !== 1) throw new Error('Roadmap rebuild preview was already applied')
       this.database.sqlite.prepare("INSERT INTO workspace_content_authority (workspace_id,mutation_fingerprint,updated_at) VALUES (?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET mutation_fingerprint=excluded.mutation_fingerprint,updated_at=excluded.updated_at").run(preview.workspaceId, mutationFingerprint, now)
       this.adoptRevision?.(roadmap)
+      this.database.sqlite.prepare("UPDATE roadmap_rebuild_previews SET status='stale',resolved_at=? WHERE workspace_id=? AND status='pending' AND id<>?").run(now, preview.workspaceId, preview.id)
     })()
     return this.require(roadmap.id)
   }

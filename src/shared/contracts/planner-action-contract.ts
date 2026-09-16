@@ -15,6 +15,7 @@ export const plannerActionProposalSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('plan.weekday-availability.set'), payload: z.object({ weekday: z.number().int().min(0).max(6), minutes: z.number().int().min(0).max(1440), timezone: z.string().trim().min(1).max(100) }).strict() }).strict(),
   z.object({ type: z.literal('plan.recalculate'), payload: z.object({ timezone: z.string().trim().min(1).max(100) }).strict() }).strict(),
   z.object({ type: z.literal('plan.item-completion.set'), payload: z.object({ workspaceId: workspaceIdSchema, itemId: z.uuid(), completed: z.boolean() }).strict() }).strict(),
+  z.object({ type: z.literal('plan.workspace-day-load.adjust'), payload: z.object({ workspaceId: workspaceIdSchema, dateKey: z.iso.date(), timezone: z.string().trim().min(1).max(100), deltaMinutes: z.number().int().min(-1440).max(1440).refine((value) => value !== 0) }).strict() }).strict(),
 ])
 export const resolvePlannerActionInputSchema = z.object({ actionId: z.uuid(), decision: z.enum(['apply', 'reject']) }).strict()
 export type PlannerActionType = z.infer<typeof plannerActionProposalSchema>['type']

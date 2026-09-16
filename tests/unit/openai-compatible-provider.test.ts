@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeCompatibleBaseUrl, OpenAICompatibleProvider } from '../../src/main/providers/openai-compatible-provider'
+import { compatibleRequestTimeoutMs, normalizeCompatibleBaseUrl, OpenAICompatibleProvider } from '../../src/main/providers/openai-compatible-provider'
+import { ROADMAP_GENERATION_MAX_OUTPUT_TOKENS, ROADMAP_REPAIR_MAX_OUTPUT_TOKENS } from '../../src/application/roadmaps/roadmap-service'
+import { CONTENT_GENERATION_TIMEOUT_MS } from '../../src/application/workspaces/content-generation-worker'
 
 describe('OpenAICompatibleProvider', () => {
   it('allows local HTTP and requires HTTPS remotely', () => {
@@ -9,8 +11,19 @@ describe('OpenAICompatibleProvider', () => {
     expect(() => normalizeCompatibleBaseUrl('https://user:pass@example.com/v1')).toThrow(/Credentials/)
   })
 
+  it('keeps initial generation plus one repair inside the bounded worker budget', () => {
+    const initial = compatibleRequestTimeoutMs(ROADMAP_GENERATION_MAX_OUTPUT_TOKENS)
+    const repair = compatibleRequestTimeoutMs(ROADMAP_REPAIR_MAX_OUTPUT_TOKENS)
+    expect(initial).toBe(120_000)
+    expect(repair).toBe(120_000)
+    expect(initial + repair).toBeLessThan(CONTENT_GENERATION_TIMEOUT_MS)
+    expect(compatibleRequestTimeoutMs(4_000)).toBe(220_000)
+    expect(compatibleRequestTimeoutMs(20_000)).toBe(240_000)
+    expect(compatibleRequestTimeoutMs(20_000)).toBeLessThan(CONTENT_GENERATION_TIMEOUT_MS)
+  })
+
   it('validates that the configured model is listed', async () => {
-    const fetcher: typeof fetch = async (input) => new Response(JSON.stringify(String(input).endsWith('/models') ? { data: [{ id: 'codex/gpt-5.6-sol' }] } : { choices: [{ message: { content: 'OK' } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    const fetcher: typeof fetch = async (input) => new Response(JSON.stringify(String(input).endsWith('/models') ? { data: [{ id: 'codex/gpt-5.6-sol' }] } : String(input).endsWith('/responses') ? { output_text: 'OK' } : { choices: [{ message: { content: 'OK' } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
     const provider = new OpenAICompatibleProvider('OmniRoute', 'http://127.0.0.1:20128/v1', 'omniroute', 'codex/gpt-5.6-sol', fetcher)
     await expect(provider.testConnection()).resolves.toBeUndefined()
   })
@@ -24,12 +37,54 @@ describe('OpenAICompatibleProvider', () => {
   })
 
   it('maps chat completions into the canonical response', async () => {
-    const fetcher: typeof fetch = async (input) => {
+    let requestBody: Record<string, unknown> | null = null
+    const fetcher: typeof fetch = async (input, init) => {
       if (String(input).endsWith('/models')) return new Response(JSON.stringify({ data: [] }), { status: 200 })
+      if (String(input).endsWith('/responses')) return new Response(JSON.stringify({ error: { message: 'Endpoint not found' } }), { status: 404, headers: { 'Content-Type': 'application/json' } })
+      requestBody = JSON.parse(String(init?.body))
       return new Response(JSON.stringify({ model: 'route/model', choices: [{ message: { content: 'OK' } }] }), { status: 200 })
     }
     const provider = new OpenAICompatibleProvider('Route', 'https://route.example/v1', 'token', 'route/model', fetcher)
-    expect(await provider.sendMessage({ messages: [{ role: 'user', content: 'Oi' }], maxOutputTokens: 20 })).toMatchObject({ content: 'OK', providerId: 'openai-compatible', modelId: 'route/model' })
+    expect(await provider.sendMessage({ messages: [{ role: 'user', content: 'Oi' }], maxOutputTokens: 20, responseFormat: 'json_object' })).toMatchObject({ content: 'OK', providerId: 'openai-compatible', modelId: 'route/model' })
+    expect(requestBody).toMatchObject({ max_tokens: 20, response_format: { type: 'json_object' }, stream: false })
+  })
+
+  it('uses Responses with canonical output, usage, and disabled storage', async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = []
+    const provider = new OpenAICompatibleProvider('OmniRoute', 'http://127.0.0.1:20128/v1', 'token', 'codex/gpt-5.6-sol', async (input, init) => {
+      calls.push({ url: String(input), body: JSON.parse(String(init?.body)) })
+      return new Response(JSON.stringify({ model: 'codex/gpt-5.6-sol', output: [{ content: [{ type: 'output_text', text: '{"ok":true}' }] }], usage: { input_tokens: 12, output_tokens: 7 } }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+
+    await expect(provider.sendMessage({ messages: [{ role: 'user', content: 'JSON' }], maxOutputTokens: 2600, responseFormat: 'json_object' })).resolves.toEqual({ content: '{"ok":true}', providerId: 'openai-compatible', modelId: 'codex/gpt-5.6-sol', usage: { inputTokens: 12, outputTokens: 7 } })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.url).toBe('http://127.0.0.1:20128/v1/responses')
+    expect(calls[0]?.body).toMatchObject({ max_output_tokens: 2600, store: false, text: { format: { type: 'json_object' } } })
+    expect(calls[0]?.body).not.toHaveProperty('max_tokens')
+  })
+
+  it('falls back to chat only when Responses is explicitly unsupported', async () => {
+    const urls: string[] = []
+    const provider = new OpenAICompatibleProvider('Generic', 'https://route.example/v1', 'token', 'route/model', async (input) => {
+      urls.push(String(input))
+      return String(input).endsWith('/responses')
+        ? new Response(JSON.stringify({ error: { message: 'Unknown endpoint responses' } }), { status: 404, headers: { 'Content-Type': 'application/json' } })
+        : new Response(JSON.stringify({ choices: [{ message: { content: 'chat ok' } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    })
+
+    await expect(provider.sendMessage({ messages: [{ role: 'user', content: 'Oi' }], maxOutputTokens: 20 })).resolves.toMatchObject({ content: 'chat ok' })
+    expect(urls).toEqual(['https://route.example/v1/responses', 'https://route.example/v1/chat/completions'])
+  })
+
+  it('does not retry through chat after a Responses service failure', async () => {
+    const urls: string[] = []
+    const provider = new OpenAICompatibleProvider('Route', 'https://route.example/v1', 'token', 'route/model', async (input) => {
+      urls.push(String(input))
+      return new Response(JSON.stringify({ error: { message: 'Service unavailable' } }), { status: 503, headers: { 'Content-Type': 'application/json' } })
+    })
+
+    await expect(provider.sendMessage({ messages: [{ role: 'user', content: 'Oi' }], maxOutputTokens: 20 })).rejects.toMatchObject({ code: 'NETWORK_UNAVAILABLE' })
+    expect(urls).toEqual(['https://route.example/v1/responses'])
   })
 
   it('keeps caller cancellation active while consuming the response body', async () => {

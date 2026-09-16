@@ -76,4 +76,13 @@ describe('HomePlannerService', () => {
     expect(deltas.join('')).toBe('Plano pronto')
     expect(repository.messages.map((message) => message.content)).toEqual(['Planeje', 'Plano pronto'])
   })
+
+  it('returns at least twenty retained Home messages after saving an action result', async () => {
+    const repository = new MemoryConversationRepository()
+    for (let index = 1; index <= 24; index += 1) repository.messages.push({ id: `history-${index}`, role: index % 2 ? 'user' : 'assistant', content: `history ${index}`, createdAt: index, sequence: index, providerId: null, modelId: null })
+    const service = new HomePlannerService({ repository, now: () => 500, createId: () => crypto.randomUUID() })
+    const returnedTurn = await service.saveSystemResult('Ação concluída.')
+    expect(returnedTurn).toHaveLength(2)
+    expect(await service.listMessages()).toHaveLength(26)
+  })
 })

@@ -12,9 +12,14 @@ export interface WorkerClock {
 
 export interface ContentJobExecution {
   publish(): unknown
+  verifyPublished?(): boolean
 }
 
 export type ContentJobHandler = (job: ContentJob, signal: AbortSignal) => Promise<ContentJobExecution>
+export const CONTENT_GENERATION_TIMEOUT_MS = 300_000
+export function contentJobAdmissionPriority(job: Pick<ContentJob, 'kind' | 'priority'>): 'foreground' | 'background' {
+  return job.kind === 'roadmap_generate' || ((job.kind === 'lesson_generate' || job.kind === 'exercise_generate') && job.priority >= 900) ? 'foreground' : 'background'
+}
 
 export interface ContentGenerationWorkerOptions {
   readonly repository: WorkspaceContentRepository
@@ -27,6 +32,7 @@ export interface ContentGenerationWorkerOptions {
   readonly renewAfterMs?: number
   readonly timeoutMs?: number
   readonly onPublished?: (job: ContentJob) => void
+  readonly onSettled?: (job: ContentJob) => void
 }
 
 const systemClock: WorkerClock = {
@@ -37,10 +43,15 @@ const systemClock: WorkerClock = {
   clearInterval: (handle) => clearInterval(handle as ReturnType<typeof setInterval>),
 }
 
-function errorCode(error: unknown): string {
-  if (error instanceof DOMException && error.name === 'AbortError') return 'GENERATION_ABORTED'
-  if (error instanceof Error && /provider.*unavailable|network|offline|connect/i.test(error.message)) return 'PROVIDER_UNAVAILABLE'
-  return 'GENERATION_FAILED'
+export interface ContentGenerationFailure { readonly code: string; readonly retryable: boolean; readonly providerUnavailable: boolean; readonly diagnostic?: string }
+
+const NON_RETRYABLE_CODES = new Set(['UNSUPPORTED_JOB_KIND', 'ROADMAP_SCHEMA_INVALID', 'ROADMAP_GENERIC_REJECTED', 'LESSON_SCHEMA_INVALID', 'LESSON_GENERIC_REJECTED', 'CURRENT_CONTENT_INVALID'])
+
+export function classifyContentGenerationFailure(error: unknown): ContentGenerationFailure {
+  if (error instanceof DOMException && error.name === 'AbortError') return { code: 'GENERATION_ABORTED', retryable: true, providerUnavailable: false }
+  const declared = error instanceof Error && 'code' in error && typeof (error as Error & { code?: unknown }).code === 'string' ? (error as Error & { code: string }).code : null
+  const code = declared ?? (error instanceof Error && /provider.*unavailable|network|offline|connect/i.test(error.message) ? 'PROVIDER_UNAVAILABLE' : error instanceof Error && /timeout|timed out/i.test(error.message) ? 'GENERATION_TIMEOUT' : 'GENERATION_FAILED')
+  return { code, retryable: !NON_RETRYABLE_CODES.has(code), providerUnavailable: code === 'PROVIDER_UNAVAILABLE', diagnostic: error instanceof Error ? error.message : undefined }
 }
 
 export class ContentGenerationWorker {
@@ -54,11 +65,12 @@ export class ContentGenerationWorker {
   private readonly renewAfterMs: number
   private readonly timeoutMs: number
   private readonly onPublished?: (job: ContentJob) => void
+  private readonly onSettled?: (job: ContentJob) => void
   private pollHandle: unknown = null
   private running = false
   private stopping: Promise<void> | null = null
   private activeTask: Promise<void> | null = null
-  private active: { job: ContentJob; controller: AbortController; renewal: unknown; timeout: unknown } | null = null
+  private active: { job: ContentJob; controller: AbortController; renewal: unknown; timeout: unknown | null } | null = null
 
   constructor(options: ContentGenerationWorkerOptions) {
     this.repository = options.repository
@@ -69,8 +81,9 @@ export class ContentGenerationWorker {
     this.pollMs = options.pollMs ?? 1_000
     this.leaseMs = options.leaseMs ?? CONTENT_JOB_DEFAULTS.leaseMs
     this.renewAfterMs = options.renewAfterMs ?? CONTENT_JOB_DEFAULTS.renewAfterMs
-    this.timeoutMs = options.timeoutMs ?? this.leaseMs * 3
+    this.timeoutMs = options.timeoutMs ?? CONTENT_GENERATION_TIMEOUT_MS
     this.onPublished = options.onPublished
+    this.onSettled = options.onSettled
   }
 
   start(): void {
@@ -117,6 +130,7 @@ export class ContentGenerationWorker {
     const handler = this.handlers[job.kind]
     if (!handler) {
       this.repository.failLease({ jobId: job.id, leaseToken: job.leaseToken, now: this.clock.now(), errorCode: 'UNSUPPORTED_JOB_KIND' })
+      try { this.onSettled?.(job) } catch (error) { console.error('Content job settlement projection failed:', error) }
       this.schedule(0)
       return
     }
@@ -125,25 +139,37 @@ export class ContentGenerationWorker {
       if (!this.repository.renewLease({ jobId: job.id, leaseToken, now: this.clock.now(), leaseMs: this.leaseMs })) controller.abort()
     }, this.renewAfterMs)
     let timedOut = false
-    const timeout = this.clock.setTimeout(() => { timedOut = true; controller.abort() }, this.timeoutMs)
-    const active = { job, controller, renewal, timeout }
+    const active = { job, controller, renewal, timeout: null as unknown | null }
     this.active = active
     const task = (async () => { try {
-      const output = await this.admission.run(() => handler(job, controller.signal), { priority: 'background', signal: controller.signal })
+      const output = await this.admission.run(() => {
+        if (!this.running) throw new DOMException('Request cancelled', 'AbortError')
+        active.timeout = this.clock.setTimeout(() => { timedOut = true; controller.abort() }, this.timeoutMs)
+        return handler(job, controller.signal)
+      }, { priority: contentJobAdmissionPriority(job), signal: controller.signal })
       if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
-      const published = this.repository.publishLease({ jobId: job.id, leaseToken, now: this.clock.now(), publish: output.publish })
+      if (!this.repository.renewLease({ jobId: job.id, leaseToken, now: this.clock.now(), leaseMs: this.leaseMs })) throw new DOMException('Content job lease expired before publication', 'AbortError')
+      const published = this.repository.publishLease({ jobId: job.id, leaseToken, now: this.clock.now(), publish: () => {
+        const result = output.publish()
+        if (output.verifyPublished && !output.verifyPublished()) throw Object.assign(new Error(`Published content for job ${job.id} does not exist`), { code: 'PUBLISHED_CONTENT_MISSING' })
+        return result
+      } })
       if (published !== null) this.onPublished?.(job)
     } catch (error) {
       const current = this.repository.getJob(job.id)
       if (current?.status === 'generating' && current.leaseToken === leaseToken) {
         if (!this.running) this.repository.releaseLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: 'WORKER_SHUTDOWN' })
         else if (timedOut) this.repository.failLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: 'GENERATION_TIMEOUT' })
-        else if (errorCode(error) === 'PROVIDER_UNAVAILABLE') this.repository.releaseLease({ jobId: job.id, leaseToken, now: this.clock.now(), retryAt: this.clock.now() + 300_000, restoreAttempt: true, errorCode: 'PROVIDER_UNAVAILABLE' })
-        else this.repository.failLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: errorCode(error), errorMessage: error instanceof Error ? error.message : undefined })
+        else {
+          const failure = classifyContentGenerationFailure(error)
+          if (failure.providerUnavailable) this.repository.releaseLease({ jobId: job.id, leaseToken, now: this.clock.now(), retryAt: this.clock.now() + 300_000, restoreAttempt: true, errorCode: failure.code, errorMessage: failure.diagnostic })
+          else this.repository.failLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: failure.code, errorMessage: failure.diagnostic, retryable: failure.retryable })
+        }
       }
     } finally {
+      try { this.onSettled?.(job) } catch (error) { console.error('Content job settlement projection failed:', error) }
       this.clock.clearInterval(renewal)
-      this.clock.clearTimeout(timeout)
+      if (active.timeout !== null) this.clock.clearTimeout(active.timeout)
       if (this.active === active) this.active = null
       this.schedule(0)
     } })()

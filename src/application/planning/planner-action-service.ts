@@ -13,6 +13,7 @@ export interface PlannerActionRepository {
   release(id: string): void
   invalidateSiblings(originMessageId: string, exceptId: string, now: number): void
   invalidatePending(contextVersion: number, now: number): void
+  resolveAtomically?(id: string, decision: 'apply' | 'reject', now: number, execute: (action: PlannerAction) => unknown): PlannerAction
 }
 
 const workspaceAcademicEventIntentSchema = z.object({ type: z.enum(['exam', 'assignment', 'deadline']), title: z.string().trim().min(1).max(160), dueAt: z.number().int().positive(), estimatedMinutes: z.number().int().min(1).max(100000), masteryPercent: z.number().int().min(0).max(100).nullable() }).strict()
@@ -33,11 +34,14 @@ export interface PlannerActionDependencies {
   readonly setTodayBudget?: (input: { dateKey: string; timezone: string; minutes: number }) => unknown
   readonly setWeekdayAvailability?: (input: { weekday: number; minutes: number; timezone: string }) => unknown
   readonly recalculatePlan?: (timezone: string) => unknown
-  readonly setPlanItemCompletion?: (workspaceId: string, itemId: string, completed: boolean) => Promise<unknown>
+  readonly setPlanItemCompletion?: (workspaceId: string, itemId: string, completed: boolean) => unknown
+  readonly adjustWorkspaceDayLoad?: (input: { workspaceId: string; dateKey: string; timezone: string; deltaMinutes: number }) => unknown
   readonly onResolved?: (action: PlannerAction) => Promise<void> | void
   readonly now?: () => number
   readonly createId?: () => string
 }
+
+export const ATOMIC_PLANNING_ACTION_TYPES = ['plan.workspace-day-load.adjust', 'plan.recalculate', 'plan.item-completion.set', 'plan.weekday-availability.set', 'plan.today-budget.set'] as const satisfies readonly PlannerActionType[]
 
 export class PlannerActionService {
   private readonly now: () => number
@@ -52,8 +56,29 @@ export class PlannerActionService {
   }
   invalidateBefore(contextVersion: number): void { this.dependencies.repository.invalidatePending(contextVersion, this.now()) }
   async resolve(actionId: string, decision: 'apply' | 'reject'): Promise<PlannerAction> {
+    const current = this.dependencies.repository.find(actionId)
+    if (!current) throw new Error('Planner action was not found')
+    if (current.status === 'applied' || current.status === 'rejected' || current.status === 'obsolete') return current
+    if ((ATOMIC_PLANNING_ACTION_TYPES as readonly PlannerActionType[]).includes(current.type) && this.dependencies.repository.resolveAtomically) {
+      const completed = this.dependencies.repository.resolveAtomically(actionId, decision, this.now(), (action) => {
+        if (decision === 'reject') return null
+        if (action.type === 'plan.workspace-day-load.adjust') { if (!this.dependencies.adjustWorkspaceDayLoad) throw new Error('Scoped planning service unavailable'); return this.dependencies.adjustWorkspaceDayLoad(action.payload as { workspaceId: string; dateKey: string; timezone: string; deltaMinutes: number }) }
+        if (action.type === 'plan.recalculate') { if (!this.dependencies.recalculatePlan) throw new Error('Planning service unavailable'); return this.dependencies.recalculatePlan((action.payload as { timezone: string }).timezone) }
+        if (action.type === 'plan.item-completion.set') { if (!this.dependencies.setPlanItemCompletion) throw new Error('Planning service unavailable'); const payload = action.payload as { workspaceId: string; itemId: string; completed: boolean }; return this.dependencies.setPlanItemCompletion(payload.workspaceId, payload.itemId, payload.completed) }
+        if (action.type === 'plan.today-budget.set') { if (!this.dependencies.setTodayBudget) throw new Error('Planning service unavailable'); return this.dependencies.setTodayBudget(action.payload as { dateKey: string; timezone: string; minutes: number }) }
+        if (!this.dependencies.setWeekdayAvailability) throw new Error('Planning service unavailable')
+        return this.dependencies.setWeekdayAvailability(action.payload as { weekday: number; minutes: number; timezone: string })
+      })
+      await this.dependencies.onResolved?.(completed)
+      return completed
+    }
+    if (current.status === 'applying') this.dependencies.repository.release(actionId)
     const action = this.dependencies.repository.claim(actionId, this.now())
-    if (decision === 'reject') return this.dependencies.repository.complete(actionId, 'rejected', null, this.now())
+    if (decision === 'reject') {
+      const completed = this.dependencies.repository.complete(actionId, 'rejected', null, this.now())
+      await this.dependencies.onResolved?.(completed)
+      return completed
+    }
     try {
       let result: unknown
       if (action.type === 'workspace.prepare') {
@@ -95,6 +120,9 @@ export class PlannerActionService {
       } else if (action.type === 'plan.recalculate') {
         if (!this.dependencies.recalculatePlan) throw new Error('Planning service unavailable')
         result = this.dependencies.recalculatePlan((action.payload as { timezone: string }).timezone)
+      } else if (action.type === 'plan.workspace-day-load.adjust') {
+        if (!this.dependencies.adjustWorkspaceDayLoad) throw new Error('Scoped planning service unavailable')
+        result = this.dependencies.adjustWorkspaceDayLoad(action.payload as { workspaceId: string; dateKey: string; timezone: string; deltaMinutes: number })
       } else {
         if (!this.dependencies.setPlanItemCompletion) throw new Error('Study plan service unavailable')
         const payload = action.payload as { workspaceId: string; itemId: string; completed: boolean }

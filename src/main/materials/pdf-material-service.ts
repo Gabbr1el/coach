@@ -98,7 +98,10 @@ function mapMaterial(row: MaterialRow): MaterialSummary {
 
 function safeErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : 'Falha desconhecida durante a importação'
-  return message.replace(/[\r\n\t]+/g, ' ').slice(0, 500)
+  if (message.includes('sem texto extraível')) return 'O material não contém texto que possa ser extraído.'
+  if (message.includes('valid PDF')) return 'O arquivo selecionado não é um PDF válido.'
+  if (message.includes('Somente arquivos PDF e PPTX')) return 'Somente arquivos PDF e PPTX são suportados.'
+  return 'Não foi possível processar o material. Verifique o arquivo e tente novamente.'
 }
 
 export class PdfMaterialService {
@@ -127,6 +130,7 @@ export class PdfMaterialService {
       data.fill(0)
       return duplicate
     }
+    this.database.sqlite.prepare("DELETE FROM materials WHERE workspace_id=? AND content_hash=? AND status='failed'").run(workspaceId, hash)
     const materialId = this.createId()
     const createdAt = this.now()
     const name = basename(path).slice(0, 240)
@@ -159,6 +163,7 @@ export class PdfMaterialService {
       if (semantic?.relevance === 'unrelated' && semantic.confidence >= 0.8) return this.rejectMaterial(materialId, 'Este documento não parece relacionado ao estudo.')
       return this.getMaterial(materialId)
     } catch (error) {
+      console.error('Material processing failed:', error)
       this.database.sqlite.prepare("UPDATE materials SET status = 'failed', error_message = ? WHERE id = ?").run(safeErrorMessage(error), materialId)
       throw error
     } finally {
@@ -219,7 +224,7 @@ export class PdfMaterialService {
   }
 
   private findDuplicate(workspaceId: string, hash: string): MaterialSummary | null {
-    const row = this.database.sqlite.prepare("SELECT id, name, media_type AS mediaType, page_count AS pageCount, status, relevance, role, semantic_analysis_json AS semanticAnalysisJson, source_url AS sourceUrl, error_message AS errorMessage, created_at AS createdAt FROM materials WHERE workspace_id = ? AND content_hash = ? AND status != 'archived' ORDER BY created_at DESC LIMIT 1").get(workspaceId, hash) as MaterialRow | undefined
+    const row = this.database.sqlite.prepare("SELECT id, name, media_type AS mediaType, page_count AS pageCount, status, relevance, role, semantic_analysis_json AS semanticAnalysisJson, source_url AS sourceUrl, error_message AS errorMessage, created_at AS createdAt FROM materials WHERE workspace_id = ? AND content_hash = ? AND status NOT IN ('archived','failed') ORDER BY created_at DESC LIMIT 1").get(workspaceId, hash) as MaterialRow | undefined
     return row ? mapMaterial(row) : null
   }
 
@@ -325,7 +330,7 @@ async function readPptx(path: string): Promise<Uint8Array> {
 
 async function extractPptxSlides(data: Uint8Array): Promise<string[]> {
   const directory = await mkdtemp(join(tmpdir(), 'coach-pptx-')); const privatePptx = join(directory, 'material.pptx')
-  try { await writeFile(privatePptx, data, { mode: 0o400 }); const script = "import sys,zipfile,re,html; z=zipfile.ZipFile('/material.pptx'); i=z.infolist(); assert len(i)<=2000 and all(x.flag_bits&1==0 and x.file_size<=5000000 and x.compress_size>0 and x.file_size/max(x.compress_size,1)<=100 for x in i) and sum(x.file_size for x in i)<=20000000 and '[Content_Types].xml' in z.namelist() and 'ppt/presentation.xml' in z.namelist(); n=sorted([x for x in z.namelist() if re.fullmatch(r'ppt/slides/slide[0-9]+.xml',x)],key=lambda x:int(re.search(r'[0-9]+',x).group())); assert 0<len(n)<=500; print('\\f'.join(' '.join(html.unescape(v) for v in re.findall(r'<a:t>(.*?)</a:t>',z.read(x).decode('utf-8','replace'))) for x in n))"; const { stdout } = await promisify(execFile)('/usr/bin/bwrap', ['--die-with-parent','--unshare-all','--clearenv','--setenv','PATH','/usr/bin','--ro-bind','/usr','/usr','--ro-bind','/lib','/lib','--ro-bind-try','/lib64','/lib64','--ro-bind',privatePptx,'/material.pptx','--tmpfs','/tmp','--proc','/proc','--dev','/dev','/usr/bin/prlimit','--cpu=15:15','--as=536870912:536870912','--fsize=8388608:8388608','--nofile=32:32','--nproc=8:8','/usr/bin/python3','-c',script], { timeout: 20_000, killSignal: 'SIGKILL', maxBuffer: MAX_EXTRACTED_CHARACTERS + 1024, windowsHide: true }); const slides = stdout.split('\f'); if (!slides.length || slides.every((slide: string) => !slide.trim())) throw new Error('PPTX sem texto extraível'); return slides } finally { await rm(directory, { recursive: true, force: true }) }
+  try { await writeFile(privatePptx, data, { mode: 0o400 }); const script = "import sys,zipfile,re,html; z=zipfile.ZipFile('/material.pptx'); i=z.infolist(); assert len(i)<=2000 and all(x.flag_bits&1==0 and x.file_size<=5000000 and (x.file_size==0 or (x.compress_size>0 and x.file_size/x.compress_size<=100)) for x in i) and sum(x.file_size for x in i)<=20000000 and '[Content_Types].xml' in z.namelist() and 'ppt/presentation.xml' in z.namelist(); n=sorted([x for x in z.namelist() if re.fullmatch(r'ppt/slides/slide[0-9]+.xml',x)],key=lambda x:int(re.search(r'[0-9]+',x).group())); assert 0<len(n)<=500; print('\\f'.join(' '.join(html.unescape(v) for v in re.findall(r'<a:t>(.*?)</a:t>',z.read(x).decode('utf-8','replace'))) for x in n))"; const { stdout } = await promisify(execFile)('/usr/bin/bwrap', ['--die-with-parent','--unshare-all','--clearenv','--setenv','PATH','/usr/bin','--ro-bind','/usr','/usr','--ro-bind','/lib','/lib','--ro-bind-try','/lib64','/lib64','--ro-bind',privatePptx,'/material.pptx','--tmpfs','/tmp','--proc','/proc','--dev','/dev','/usr/bin/prlimit','--cpu=15:15','--as=536870912:536870912','--fsize=8388608:8388608','--nofile=32:32','--nproc=8:8','/usr/bin/python3','-c',script], { timeout: 20_000, killSignal: 'SIGKILL', maxBuffer: MAX_EXTRACTED_CHARACTERS + 1024, windowsHide: true }); const slides = stdout.split('\f'); if (!slides.length || slides.every((slide: string) => !slide.trim())) throw new Error('PPTX sem texto extraível'); return slides } finally { await rm(directory, { recursive: true, force: true }) }
 }
 
 async function extractPdfPages(data: Uint8Array): Promise<string[]> {

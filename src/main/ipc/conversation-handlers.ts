@@ -10,11 +10,11 @@ import type { CoachDatabase } from '../database/connection'
 import { interactiveCodeStateSchema, parseInteractiveValidation, type InteractiveCodeBlock, type InteractiveCodeState } from '../../shared/contracts/code-execution-contract'
 import { studyLessonContentSchema } from '../../shared/contracts/study-lesson-contract'
 import type { PerformanceTimelineStore } from '../telemetry/performance-timeline'
+import { assertExerciseAccess } from '../curricular-access'
 
 export function registerConversationHandlers(service: HomePlannerService, workspaceService: WorkspaceCoachService, organizer: HomeOrganizerService, workspaceActions?: WorkspaceActionService, database?: CoachDatabase, timelines?: PerformanceTimelineStore): void {
   const activeStreams = new Map<string, { controller: AbortController; senderId: number; threadKey: string }>()
   let homeStreamActive = false
-  if (workspaceActions) ipcMain.handle(CONVERSATION_CHANNELS.executeWorkspaceAction, (event, payload) => { assertTrustedSender(event); return workspaceActions.execute(payload) })
   ipcMain.handle(CONVERSATION_CHANNELS.listHomeMessages, (event) => {
     assertTrustedSender(event)
     return service.listMessages()
@@ -47,8 +47,13 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
     try {
       const turn = await organizer.organize(input)
       if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
-      send({ requestId: input.requestId, type: 'text-delta', content: turn.result.message })
-      send({ requestId: input.requestId, type: 'completed', messages: turn.messages })
+      const chunkSize = 48
+      for (let offset = 0; offset < turn.result.message.length; offset += chunkSize) {
+        if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
+        send({ requestId: input.requestId, type: 'text-delta', content: turn.result.message.slice(offset, offset + chunkSize) })
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+      send({ requestId: input.requestId, type: 'completed', messages: await organizer.listMessages() })
     } catch (error) {
       send(controller.signal.aborted
         ? { requestId: input.requestId, type: 'cancelled' }
@@ -75,6 +80,10 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
   ipcMain.handle(CONVERSATION_CHANNELS.streamWorkspaceMessage, async (event, payload: unknown) => {
     assertTrustedSender(event)
     let input = streamWorkspaceMessageInputSchema.parse(payload)
+    if (input.activeExercise) {
+      if (!database) throw new Error('Exercise access cannot be authorized')
+      assertExerciseAccess(database, input.workspaceId, input.activeExercise.exerciseId)
+    }
     if (input.activeInteractiveCode) {
       const progress = database ? database.sqlite.prepare('SELECT current_lesson_id AS lessonId FROM study_progress WHERE workspace_id = ?').get(input.workspaceId) as { lessonId: string } | undefined : undefined
       if (!database || !input.activeStudy || progress?.lessonId !== input.activeStudy.lessonId || input.activeInteractiveCode.lessonId !== input.activeStudy.lessonId || input.activeInteractiveCode.blockId !== input.activeStudy.currentBlockId) input = { ...input, activeInteractiveCode: undefined }

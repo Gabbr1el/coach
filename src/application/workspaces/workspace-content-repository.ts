@@ -15,11 +15,32 @@ export const CONTENT_UNIT_KEYS = {
 } as const
 
 export const CONTENT_GENERATOR_VERSIONS: Record<ContentUnitKind, string> = {
-  material_extract: 'material-v1', material_analyze: 'material-analysis-v1', roadmap_generate: 'roadmap-material-first-v2', lesson_generate: 'lesson-v1', exercise_generate: 'exercise-v1', plan_recalculate: 'plan-v1',
+  material_extract: 'material-v1', material_analyze: 'material-analysis-v1', roadmap_generate: 'roadmap-complete-curriculum-v4', lesson_generate: 'lesson-curriculum-v2', exercise_generate: 'exercise-v1', plan_recalculate: 'plan-v1',
 }
 
 export function contentJobKey(input: Pick<EnqueueContentJobInput, 'workspaceId' | 'revision' | 'kind' | 'unitKey' | 'inputHash' | 'generatorContractVersion'>): string {
   return createHash('sha256').update([input.workspaceId, input.revision, input.kind, input.unitKey, input.inputHash, input.generatorContractVersion].join('|')).digest('hex')
+}
+
+export function canonicalContentJobDependencies(input: Pick<EnqueueContentJobInput, 'workspaceId' | 'revision' | 'kind' | 'unitKey' | 'inputHash'>): string[] {
+  const dependency = (kind: ContentUnitKind, unitKey: string) => contentJobKey({
+    ...input,
+    kind,
+    unitKey,
+    generatorContractVersion: CONTENT_GENERATOR_VERSIONS[kind],
+  })
+  if (input.kind === 'lesson_generate') return [dependency('roadmap_generate', CONTENT_UNIT_KEYS.roadmap)]
+  if (input.kind === 'exercise_generate') return [dependency('lesson_generate', input.unitKey)]
+  return []
+}
+
+export function usesCanonicalContentJobDependencies(input: Pick<EnqueueContentJobInput, 'kind' | 'generatorContractVersion'>): boolean {
+  return (input.kind === 'lesson_generate' || input.kind === 'exercise_generate') && input.generatorContractVersion === CONTENT_GENERATOR_VERSIONS[input.kind]
+}
+
+export function contentJobDependenciesForContract(input: Pick<EnqueueContentJobInput, 'workspaceId' | 'revision' | 'kind' | 'unitKey' | 'inputHash' | 'generatorContractVersion'>): string[] {
+  if (!usesCanonicalContentJobDependencies(input)) return []
+  return canonicalContentJobDependencies(input)
 }
 
 export interface EnqueueContentJobInput {
@@ -47,9 +68,10 @@ export interface WorkspaceContentRepository {
   claimNext(input: { owner: string; now: number; leaseMs?: number }): ContentJob | null
   renewLease(input: { jobId: string; leaseToken: string; now: number; leaseMs?: number }): boolean
   releaseLease(input: { jobId: string; leaseToken: string; now: number; retryAt?: number; restoreAttempt?: boolean; errorCode?: string; errorMessage?: string }): boolean
-  failLease(input: { jobId: string; leaseToken: string; now: number; retryAt?: number; errorCode: string; errorMessage?: string }): boolean
+  failLease(input: { jobId: string; leaseToken: string; now: number; retryAt?: number; errorCode: string; errorMessage?: string; retryable?: boolean }): boolean
   publishLease<T>(input: { jobId: string; leaseToken: string; now: number; publish: () => T }): T | null
   reconcile(now: number): { requeued: number; obsoleted: number }
+  invalidateArchivedWorkspace?(workspaceId: string, now: number): number
   retryProviderUnavailable(now: number): number
   evaluateReadiness(input: { workspaceId: string; expectedRevision: number; todayDateKey: string; now: number }): WorkspaceContentRevision
 }

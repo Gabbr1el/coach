@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { declaredAcademicLevelSchema } from './academic-subject-context-contract'
-import { fundamentalsAnswerSchema, implementationLanguageSchema } from './workspace-onboarding-contract'
+import { curricularScopeSchema, fundamentalsAnswerSchema, implementationLanguageSchema } from './workspace-onboarding-contract'
 
 export const workspaceIdSchema = z.uuid()
 
@@ -15,6 +15,7 @@ export const createWorkspaceInputSchema = z.object({
   fundamentals: fundamentalsAnswerSchema.optional(),
   implementationLanguage: implementationLanguageSchema.optional(),
   localKnowledgeProjection: z.string().max(4000).optional(),
+  curricularScope: curricularScopeSchema.optional(),
   duplicateOverride: z.object({ confirmed: z.literal(true), meaningfulDifference: z.string().trim().min(8).max(500) }).strict().optional(),
   declaredLevel: declaredAcademicLevelSchema.optional(),
   declaredKnowledge: z.array(z.string().trim().min(1).max(500)).max(50).optional(),
@@ -28,7 +29,8 @@ export const prepareWorkspaceDraftInputSchema = createWorkspaceInputSchema.omit(
 export type WorkspaceProvisioningStatus = 'draft' | 'queued' | 'running' | 'waiting_for_provider' | 'failed_retryable' | 'ready'
 export type WorkspaceProvisioningStage = 'workspace' | 'materials' | 'roadmap' | 'lesson' | 'exercises' | 'plan' | 'background' | 'ready'
 export interface WorkspaceLearningOverrides { readonly subject: string; readonly declaredLevel: CreateWorkspaceInput['declaredLevel'] | null; readonly declaredKnowledge: readonly string[]; readonly declaredDifficulties: readonly string[]; readonly goals: readonly string[] }
-export interface WorkspaceProvisioningState { readonly workspaceId: string; readonly status: WorkspaceProvisioningStatus; readonly stage: WorkspaceProvisioningStage; readonly materialIds: readonly string[]; readonly readinessState: 'PROVISIONING' | 'USABLE' | 'FULLY_PROVISIONED'; readonly backgroundPending: number; readonly legacyState: 'legacy_accessible' | null; readonly attemptCount: number; readonly createdAt: number; readonly startedAt: number | null; readonly stageUpdatedAt: number; readonly completedAt: number | null; readonly retryAfter: number | null; readonly errorCode: string | null; readonly errorMessage: string | null }
+export interface ProvisioningEta { readonly label: string; readonly medianMinutes: number | null; readonly lowMinutes: number | null; readonly highMinutes: number | null; readonly sampleSize: number }
+export interface WorkspaceProvisioningState { readonly workspaceId: string; readonly status: WorkspaceProvisioningStatus; readonly stage: WorkspaceProvisioningStage; readonly materialIds: readonly string[]; readonly readinessState: 'PROVISIONING' | 'USABLE' | 'FULLY_PROVISIONED'; readonly backgroundPending: number; readonly legacyState: 'legacy_accessible' | null; readonly attemptCount: number; readonly createdAt: number; readonly startedAt: number | null; readonly stageUpdatedAt: number; readonly completedAt: number | null; readonly retryAfter: number | null; readonly errorCode: string | null; readonly errorMessage: string | null; readonly eta?: ProvisioningEta }
 
 export type CreateWorkspaceInput = z.infer<typeof createWorkspaceInputSchema>
 

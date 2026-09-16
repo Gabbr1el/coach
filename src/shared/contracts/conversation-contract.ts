@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { workspaceIdSchema } from './workspace-contract'
 import type { HomeOrganizerResult } from './planning-contract'
-import type { WorkspaceActionResult } from './workspace-action-contract'
+import type { PlannerAction } from './planner-action-contract'
 
 export const sendHomeMessageInputSchema = z.object({
   content: z.string().trim().min(1).max(4_000),
@@ -28,7 +28,7 @@ export const streamWorkspaceMessageInputSchema = sendHomeMessageInputSchema.exte
 }).strict()
 
 export const cancelWorkspaceStreamInputSchema = z.object({ requestId: z.uuid() }).strict()
-export const workspaceCoachDecisionSchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('final_response') }).strict(), z.object({ kind: z.literal('context_read'), requests: z.array(z.object({ resource: z.enum(['workspace', 'academic', 'roadmap', 'progress', 'lesson', 'materials', 'plan', 'notes']), id: z.string().max(500).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(6000).optional(), pageNumber: z.number().int().min(1).max(500).optional(), query: z.string().max(500).optional() }).strict()).min(1).max(3) }).strict(), z.object({ kind: z.literal('workspace_action'), action: z.object({ type: z.enum(['plan.recalculate', 'plan.complete', 'notes.add', 'roadmap.preview-materials']), arguments: z.record(z.string(), z.unknown()) }).strict() }).strict()])
+export const workspaceCoachDecisionSchema = z.discriminatedUnion('kind', [z.object({ kind: z.literal('final_response') }).strict(), z.object({ kind: z.literal('context_read'), requests: z.array(z.object({ resource: z.enum(['workspace', 'academic', 'roadmap', 'progress', 'lesson', 'materials', 'plan', 'notes']), id: z.string().max(500).optional(), offset: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(6000).optional(), pageNumber: z.number().int().min(1).max(500).optional(), query: z.string().max(500).optional() }).strict()).min(1).max(3) }).strict(), z.object({ kind: z.literal('workspace_action'), action: z.object({ type: z.enum(['plan.recalculate', 'plan.complete', 'plan.load.adjust', 'plan.availability.set', 'notes.add', 'roadmap.preview-materials']), arguments: z.record(z.string(), z.unknown()) }).strict() }).strict()])
 
 export type SendHomeMessageInput = z.infer<typeof sendHomeMessageInputSchema>
 export type StreamHomeMessageInput = z.infer<typeof streamHomeMessageInputSchema>
@@ -56,7 +56,6 @@ export interface ConversationApi {
     dispose(): void
   }
   listWorkspaceMessages(workspaceId: string): Promise<ConversationMessage[]>
-  executeWorkspaceAction(input: unknown): Promise<WorkspaceActionResult>
   streamWorkspaceMessage(input: StreamWorkspaceMessageInput, onEvent: (event: HomeStreamEvent) => void): {
     cancel(): void
     dispose(): void
@@ -67,6 +66,6 @@ export type HomeStreamEvent =
   | { readonly requestId: string; readonly type: 'started'; readonly state: 'sending' }
   | { readonly requestId: string; readonly type: 'state'; readonly state: 'context' | 'generating' | 'executing'; readonly metadata?: { readonly intent?: 'current_topic' | 'planning' | 'materials' | 'action'; readonly contextResources?: readonly string[]; readonly historyCount?: number; readonly snippetCount?: number } }
   | { readonly requestId: string; readonly type: 'text-delta'; readonly content: string }
-  | { readonly requestId: string; readonly type: 'completed'; readonly messages: ConversationMessage[]; readonly metadata?: { readonly lessonAdapted: { readonly lessonId: string; readonly blockId: string } } }
+  | { readonly requestId: string; readonly type: 'completed'; readonly messages: ConversationMessage[]; readonly metadata?: { readonly lessonAdapted?: { readonly lessonId: string; readonly blockId: string }; readonly plannerAction?: PlannerAction } }
   | { readonly requestId: string; readonly type: 'cancelled' }
   | { readonly requestId: string; readonly type: 'error'; readonly code: 'PROVIDER_UNAVAILABLE' | 'REQUEST_FAILED' | 'THREAD_BUSY' }

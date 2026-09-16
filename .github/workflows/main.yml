@@ -2,9 +2,13 @@ name: Build Coach for Windows
 
 on:
   workflow_dispatch:
+
   push:
     tags:
       - "v*"
+
+permissions:
+  contents: write
 
 jobs:
   validate:
@@ -39,6 +43,62 @@ jobs:
             gcc \
             default-jdk \
             util-linux
+
+      - name: Enable Bubblewrap user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+
+          if [ -e /proc/sys/kernel/unprivileged_userns_clone ]; then
+            echo 1 | sudo tee /proc/sys/kernel/unprivileged_userns_clone
+          fi
+
+      - name: Verify Linux sandbox
+        run: |
+          echo "Checking Bubblewrap..."
+          which bwrap
+          bwrap --version
+
+          echo "Checking Python..."
+          which python3
+          python3 --version
+
+          echo "Checking GCC..."
+          which gcc
+          gcc --version | head -n 1
+
+          echo "Checking Java compiler..."
+          which javac
+          javac -version
+
+          echo "Checking Java runtime..."
+          which java
+          java -version
+
+          echo "Checking prlimit..."
+          which prlimit
+          prlimit --version | head -n 1
+
+          echo "Testing Bubblewrap sandbox..."
+          bwrap \
+            --die-with-parent \
+            --new-session \
+            --unshare-all \
+            --ro-bind /usr /usr \
+            --ro-bind /bin /bin \
+            --ro-bind /lib /lib \
+            --ro-bind-try /lib64 /lib64 \
+            --ro-bind-try /etc/alternatives /etc/alternatives \
+            --tmpfs /tmp \
+            --proc /proc \
+            --dev /dev \
+            --setenv HOME /tmp \
+            --setenv LANG C.UTF-8 \
+            --setenv PATH /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+            /usr/bin/python3 \
+            -I \
+            -c 'print("sandbox-ok")'
 
       - name: Typecheck
         run: pnpm typecheck
@@ -83,9 +143,9 @@ jobs:
         run: pnpm exec electron-builder install-app-deps
 
       - name: Package Windows installer
-        run: pnpm exec electron-builder --win nsis --x64
+        run: pnpm exec electron-builder --win nsis --x64 --publish never
 
-      - name: Upload Windows installer
+      - name: Upload Windows installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: Coach-Windows
@@ -93,3 +153,17 @@ jobs:
             release/*.exe
             release/*.blockmap
           if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Coach ${{ github.ref_name }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          files: |
+            release/*.exe
+            release/*.blockmap
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

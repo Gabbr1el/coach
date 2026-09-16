@@ -12,8 +12,9 @@ import type { AIProviderManager } from '../../application/ai/ai-provider-manager
 import { evaluateCheckpointReasoning, pendingAssessment } from '../../application/study-progress/checkpoint-reasoning'
 import type { PedagogicalPrefetchScheduler } from '../../application/workspaces/pedagogical-prefetch-scheduler'
 import type { LearningEvidenceRecorder } from '../../shared/contracts/learning-evidence-contract'
+import { assertAcceptedTopicAccess } from '../curricular-access'
 
-type ProgressRow = { workspaceId: string; roadmapId: string; currentModuleId: string; currentTopicId: string; currentLessonId: string; currentCheckpointId: string | null; topicStatusesJson: string; lessonPositionsJson: string; checkpointStatesJson?: string; updatedAt: number }
+type ProgressRow = { workspaceId: string; roadmapId: string; currentModuleId: string; currentTopicId: string; currentLessonId: string | null; currentCheckpointId: string | null; topicStatusesJson: string; lessonPositionsJson: string; checkpointStatesJson?: string; updatedAt: number }
 type LessonBlockRow = { contentJson: string }
 type LessonCheckpoint = Extract<ReturnType<typeof studyLessonContentSchema.parse>['blocks'][number], { type: 'checkpoint' }>
 const answering = new Map<string, Promise<unknown>>()
@@ -77,7 +78,7 @@ export function mapStudyProgressState(row: ProgressRow): StudyProgressState {
   const rawCheckpointStates = row.checkpointStatesJson ? JSON.parse(row.checkpointStatesJson) as Record<string, unknown> : {}
   const checkpointStates = Object.fromEntries(Object.entries(rawCheckpointStates).map(([id, state]) => [id, studyCheckpointStateSchema.parse(state)]))
   for (const position of Object.values(positions)) studyLessonPositionSchema.parse(position)
-  return { ...row, moduleId: row.currentModuleId, topicId: row.currentTopicId, lessonId: row.currentLessonId, checkpointId: row.currentCheckpointId, topicStatuses: JSON.parse(row.topicStatusesJson) as StudyProgressState['topicStatuses'], lessonPositions: positions, checkpointStates, currentPosition: positions[row.currentLessonId] ?? null }
+  return { ...row, moduleId: row.currentModuleId, topicId: row.currentTopicId, lessonId: row.currentLessonId, checkpointId: row.currentCheckpointId, topicStatuses: JSON.parse(row.topicStatusesJson) as StudyProgressState['topicStatuses'], lessonPositions: positions, checkpointStates, currentPosition: row.currentLessonId ? positions[row.currentLessonId] ?? null : null }
 }
 
 export function registerStudyProgressHandlers(database: CoachDatabase, getToolchains: () => ToolchainStatus[] = () => [], providerManager?: AIProviderManager, prefetch?: PedagogicalPrefetchScheduler, evidenceRecorder?: LearningEvidenceRecorder): void {
@@ -89,10 +90,11 @@ export function registerStudyProgressHandlers(database: CoachDatabase, getToolch
   ipcMain.handle(STUDY_PROGRESS_CHANNELS.select, (event, payload) => {
     assertTrustedSender(event)
     const input = studySelectionSchema.parse(payload)
+    assertAcceptedTopicAccess(database, input)
     const existing = get(input.workspaceId)
     const sameRoadmap = existing?.roadmapId === input.roadmapId
-    const statuses = sameRoadmap ? { ...existing.topicStatuses } : {}
-    const positions = sameRoadmap ? { ...existing.lessonPositions } : {}
+    const statuses = { ...existing?.topicStatuses }
+    const positions = { ...existing?.lessonPositions }
     const topicChanged = !sameRoadmap || existing?.topicId !== input.topicId
     const started = topicChanged && (!statuses[input.topicId] || statuses[input.topicId] === 'NOT_STARTED')
     if (started) statuses[input.topicId] = 'IN_PROGRESS'
@@ -203,8 +205,9 @@ export function registerStudyProgressHandlers(database: CoachDatabase, getToolch
     assertTrustedSender(event)
     const input = completeStudyTopicSchema.parse(payload)
     const active = get(input.workspaceId)
-    if (active?.topicStatuses[input.topicId] === 'COMPLETED') return { state: active, nextTarget: active.topicId === input.topicId ? null : { moduleId: active.moduleId, topicId: active.topicId, lessonId: active.lessonId }, shouldReplan: false }
+    if (active?.topicStatuses[input.topicId] === 'COMPLETED') return { state: active, nextTarget: active.topicId === input.topicId || !active.lessonId ? null : { moduleId: active.moduleId, topicId: active.topicId, lessonId: active.lessonId }, shouldReplan: false }
     if (!active || active.topicId !== input.topicId) throw new Error('Topic is not the active study topic')
+    if (!active.lessonId) throw new Error('Active topic lesson is not ready')
     assertTopicCompletionAllowed(database, active, active.lessonId, getToolchains())
     const now = Date.now()
     const modules = database.sqlite.prepare('SELECT id, position, status, topics_json AS topicsJson FROM roadmap_modules WHERE roadmap_id = ? ORDER BY position').all(active.roadmapId) as Array<{ id: string; position: number; status: string; topicsJson: string }>

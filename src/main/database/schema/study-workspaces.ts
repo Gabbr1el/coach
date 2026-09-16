@@ -56,7 +56,9 @@ export const studyPlanItems = sqliteTable('study_plan_items', {
   status: text('status', { enum: ['pending', 'active', 'completed'] }).notNull().default('pending'),
   moduleId: text('module_id'),
   topicId: text('topic_id'),
-  activityType: text('activity_type', { enum: ['introduction', 'review', 'exercise', 'practice', 'video'] }),
+  activityType: text('activity_type', { enum: ['study', 'lesson', 'introduction', 'exercise', 'assessment', 'review', 'practice', 'coding', 'material', 'video'] }),
+  exerciseSetId: text('exercise_set_id'),
+  materialId: text('material_id'),
   scheduledStartMinutes: integer('scheduled_start_minutes'),
   createdAt: integer('created_at').notNull(),
   updatedAt: integer('updated_at').notNull(),
@@ -68,4 +70,6 @@ export const studyPlanItems = sqliteTable('study_plan_items', {
   uniqueIndex('study_plan_items_session_position_idx').on(table.sessionId, table.position),
   uniqueIndex('study_plan_items_one_active_idx').on(table.sessionId).where(sql`${table.status} = 'active'`),
   index('study_plan_items_workspace_idx').on(table.workspaceId, table.updatedAt),
+  index('study_plan_items_exercise_set_idx').on(table.exerciseSetId),
+  index('study_plan_items_material_idx').on(table.materialId),
 ])

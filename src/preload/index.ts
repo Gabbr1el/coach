@@ -50,15 +50,21 @@ const api: CoachDesktopApi = {
   exercise: {
     ensureSet: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.ensureSet, input),
     getSet: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.getSet, input),
+    projectSets: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.projectSets, input),
     saveDraft: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.saveDraft, input),
     run: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.run, input),
     submit: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.submit, input),
     requestHelp: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.requestHelp, input),
+    simplify: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.simplify, input),
+    listAdaptations: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.listAdaptations, input),
+    restoreOriginal: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.restoreOriginal, input),
+    activateAdaptation: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.activateAdaptation, input),
   },
   academicLife: {
     getProjection: () => ipcRenderer.invoke(ACADEMIC_LIFE_CHANNELS.getProjection),
     save: (input) => ipcRenderer.invoke(ACADEMIC_LIFE_CHANNELS.save, input),
     transition: (input) => ipcRenderer.invoke(ACADEMIC_LIFE_CHANNELS.transition, input),
+    delete: (input) => ipcRenderer.invoke(ACADEMIC_LIFE_CHANNELS.delete, input),
   },
   review: {
     getActive: (workspaceId) => ipcRenderer.invoke(REVIEW_CHANNELS.getActive, { workspaceId }),
@@ -108,7 +114,6 @@ const api: CoachDesktopApi = {
       }
     },
     listWorkspaceMessages: (workspaceId) => ipcRenderer.invoke(CONVERSATION_CHANNELS.listWorkspaceMessages, { workspaceId }),
-    executeWorkspaceAction: (input) => ipcRenderer.invoke(CONVERSATION_CHANNELS.executeWorkspaceAction, input),
     streamWorkspaceMessage: (input, onEvent) => {
       let disposed = false
       const dispose = () => {

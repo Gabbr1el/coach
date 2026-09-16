@@ -1,5 +1,6 @@
 const WEEKDAYS = ['domingo', 'segunda', 'terca', 'quarta', 'quinta', 'sexta', 'sabado'] as const
 const MONTHS: Record<string, number> = { janeiro: 1, fevereiro: 2, marco: 3, abril: 4, maio: 5, junho: 6, julho: 7, agosto: 8, setembro: 9, outubro: 10, novembro: 11, dezembro: 12 }
+export const AUTHORITATIVE_TIMEZONE = 'America/Bahia'
 
 export type ResolvedAcademicDate = { readonly dateKey: string; readonly timestamp: number }
 export type ExtractedAcademicDate = ResolvedAcademicDate & { readonly expression: string }
@@ -20,16 +21,17 @@ function localParts(timestamp: number, timezone: string): Record<string, number>
   return result
 }
 
-function localEndOfDay(key: string, timezone: string): number {
+function localTimestamp(key: string, timezone: string, hour = 23, minute = 59): number {
   const [year, month, day] = parts(key)
-  let candidate = Date.UTC(year, month - 1, day, 23, 59)
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) throw new Error('Horário impossível')
+  let candidate = Date.UTC(year, month - 1, day, hour, minute)
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const local = localParts(candidate, timezone)
     const represented = Date.UTC(local.year!, local.month! - 1, local.day!, local.hour!, local.minute!, local.second!)
-    candidate += Date.UTC(year, month - 1, day, 23, 59) - represented
+    candidate += Date.UTC(year, month - 1, day, hour, minute) - represented
   }
   const local = localParts(candidate, timezone)
-  if (local.year !== year || local.month !== month || local.day !== day || local.hour !== 23 || local.minute !== 59) throw new Error('A data não existe no fuso horário informado')
+  if (local.year !== year || local.month !== month || local.day !== day || local.hour !== hour || local.minute !== minute) throw new Error('A data não existe no fuso horário informado')
   return candidate
 }
 
@@ -38,6 +40,20 @@ function rollYear(month: number, day: number, currentDate: string): string | nul
   const thisYear = dateKey(currentYear, month, day)
   if (thisYear && thisYear >= currentDate) return thisYear
   return dateKey(currentYear + 1, month, day)
+}
+
+function timeFrom(value: string): { hour: number; minute: number } | null {
+  if (/\bmeio-dia\b/.test(value)) return { hour: 12, minute: 0 }
+  if (/\bmeia-noite\b/.test(value)) return { hour: 0, minute: 0 }
+  const match = /\bas\s*(\d{1,2})(?::(\d{2}))?\s*(?:h(?:oras?)?)?(?:\s+da\s+(manha|tarde|noite))(?=\s|[,.;!?]|$)|\bas\s*(\d{1,2})(?::(\d{2}))?\s*(?:h(?:oras?)?)?\b|\b(\d{1,2}):(\d{2})\s*h?\b|\b(\d{1,2})\s*h\b|\b(\d{1,2})\s+da\s+(manha|tarde|noite)\b/.exec(value)
+  if (!match) return null
+  let hour = Number(match[1] ?? match[4] ?? match[6] ?? match[8] ?? match[9]); const minute = Number(match[2] ?? match[5] ?? match[7] ?? 0); const period = match[3] ?? match[10]
+  if (period) {
+    if (hour < 1 || hour > 12) throw new Error('Horário impossível')
+    if (period === 'tarde' || period === 'noite') { if (hour !== 12) hour += 12 }
+    else if (hour === 12) hour = 0
+  }
+  return { hour, minute }
 }
 
 export function resolveAcademicDate(expression: string, context: { currentDate: string; timezone: string }): ResolvedAcademicDate {
@@ -78,15 +94,19 @@ export function resolveAcademicDate(expression: string, context: { currentDate: 
     }
   }
   if (!resolved) throw new Error('Data ausente, ambígua ou impossível')
-  return { dateKey: resolved, timestamp: localEndOfDay(resolved, context.timezone) }
+  const explicitTime = timeFrom(value)
+  const hour = explicitTime?.hour ?? 23
+  const minute = explicitTime?.minute ?? 59
+  return { dateKey: resolved, timestamp: localTimestamp(resolved, context.timezone, hour, minute) }
 }
 
 const DATE_EXPRESSION = /\b(?:depois\s+de\s+amanha|amanha|hoje|daqui\s+a\s+\d+\s+dias?|\d{1,2}\s*[\/.]\s*\d{1,2}(?:\s*[\/.]\s*\d{4})?|\d{1,2}\s+de\s+(?:janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)(?:\s+de\s+\d{4})?|dia\s+\d{1,2}|(?:proxima\s+)?(?:domingo|segunda|terca|quarta|quinta|sexta|sabado)(?:-feira)?)\b/g
 
 export function extractAcademicDate(text: string, context: { currentDate: string; timezone: string }): ExtractedAcademicDate {
-  const matches = [...plain(text).matchAll(DATE_EXPRESSION)].map((match) => match[0])
+  const normalized = plain(text)
+  const matches = [...normalized.matchAll(DATE_EXPRESSION)].map((match) => match[0])
   if (matches.length !== 1) throw new Error(matches.length ? 'Data ambígua' : 'Data ausente')
-  return { ...resolveAcademicDate(matches[0]!, context), expression: matches[0]! }
+  return { ...resolveAcademicDate(normalized, context), expression: normalized.trim() }
 }
 
 export function extractAcademicDateChange(text: string, context: { currentDate: string; timezone: string }): { readonly from: ExtractedAcademicDate; readonly to: ExtractedAcademicDate } {

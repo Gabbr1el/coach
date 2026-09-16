@@ -61,8 +61,39 @@ export function validateCurriculum(modules: readonly CurriculumModule[]): void {
     }
   }
 }
-export const roadmapRebuildImpactSchema = z.object({ preservedModuleIds: z.array(z.string()), preservedTopicIds: z.array(z.string()), addedTopics: z.array(z.string()), removedTopics: z.array(z.string()), unsafeProgressTopicIds: z.array(z.string()), requiresAcknowledgement: z.boolean() }).strict()
-export const roadmapRebuildPreviewSchema = z.object({ id: z.string().min(1).max(200), workspaceId: workspaceIdSchema, currentRoadmapId: z.string().min(1).max(200), title: z.string().trim().min(1).max(160), modules: z.array(roadmapModuleSchema).min(1).max(16), materialIds: z.array(z.uuid()).min(1).max(20), impact: roadmapRebuildImpactSchema, status: z.enum(['pending', 'applied', 'stale']), appliedRoadmapId: z.string().nullable(), createdAt: z.number().int().nonnegative(), resolvedAt: z.number().int().nonnegative().nullable() }).strict()
+
+export function repairCurriculumPrerequisites(modules: readonly CurriculumModule[]): CurriculumModule[] {
+  const introductions = new Map<string, number>()
+  const orderedTopics = modules
+    .map((module, index) => ({ module, index }))
+    .sort((left, right) => (left.module.position ?? left.index) - (right.module.position ?? right.index) || left.index - right.index)
+    .flatMap(({ module }) => module.curricularTopics ?? [])
+  for (const [topicIndex, topic] of orderedTopics.entries()) for (const concept of topic.concepts) if (!introductions.has(concept.key)) introductions.set(concept.key, topicIndex)
+  let topicIndex = 0
+  return modules.map((module) => ({
+    ...module,
+    ...(module.curricularTopics ? { curricularTopics: module.curricularTopics.map((topic) => {
+      const currentIndex = topicIndex++
+      return { ...topic, assessmentIntents: topic.assessmentIntents.map((intent) => ({
+        ...intent,
+        prerequisiteConceptKeys: [...new Set(intent.prerequisiteConceptKeys)].filter((key) => key !== intent.conceptKey && (introductions.get(key) === undefined || introductions.get(key)! <= currentIndex)),
+      })) }
+    }) } : {}),
+  }))
+}
+export const roadmapRebuildImpactSchema = z.object({
+  relevance: z.enum(['compatible', 'partial', 'irrelevant']).default('compatible'),
+  summary: z.string().trim().min(1).max(2000).default('A adaptação preserva a estrutura curricular equivalente.'),
+  preservedModuleIds: z.array(z.string()),
+  preservedTopicIds: z.array(z.string()),
+  changedTopicIds: z.array(z.string()).default([]),
+  addedTopics: z.array(z.string()),
+  removedTopics: z.array(z.string()),
+  unsafeProgressTopicIds: z.array(z.string()),
+  reasons: z.array(z.string().trim().min(1).max(500)).max(30).default([]),
+  requiresAcknowledgement: z.boolean(),
+}).strict()
+export const roadmapRebuildPreviewSchema = z.object({ id: z.string().min(1).max(200), workspaceId: workspaceIdSchema, currentRoadmapId: z.string().min(1).max(200), title: z.string().trim().min(1).max(160), modules: z.array(roadmapModuleSchema).min(1).max(16), materialIds: z.array(z.uuid()).max(20), impact: roadmapRebuildImpactSchema, status: z.enum(['pending', 'applied', 'stale']), appliedRoadmapId: z.string().nullable(), createdAt: z.number().int().nonnegative(), resolvedAt: z.number().int().nonnegative().nullable() }).strict()
 
 export type RoadmapResource = z.infer<typeof roadmapResourceSchema>
 export type CurriculumSourceType = 'documentation' | 'reference' | 'outline' | 'student_material' | 'educational'
@@ -71,7 +102,7 @@ export type LearningPathStatus = 'idle' | 'generating' | 'ready' | 'waiting_for_
 export interface LearningPathState { readonly workspaceId: string; readonly status: LearningPathStatus; readonly activeRoadmapId: string | null; readonly lastAttemptAt: number | null; readonly retryAfter: number | null; readonly lastErrorCode: string | null; readonly updatedAt: number }
 export interface RoadmapModule { readonly id: string; readonly title: string; readonly objective: string; readonly estimatedMinutes: number; readonly position: number; readonly status: 'locked' | 'available' | 'active' | 'completed'; readonly topics: string[]; readonly curricularTopics?: z.infer<typeof curricularTopicSchema>[]; readonly outcomes: string[]; readonly practice: string; readonly completionCriteria: string[]; readonly resources: RoadmapResource[] }
 export interface Roadmap { readonly id: string; readonly workspaceId: string; readonly title: string; readonly status: 'proposed' | 'accepted' | 'archived'; readonly generationKind: 'ai_generated' | 'provisional_fallback'; readonly version: number; readonly providerId: string | null; readonly modelId: string | null; readonly modules: RoadmapModule[]; readonly createdAt: number; readonly updatedAt: number }
-export interface RoadmapRebuildImpact { readonly preservedModuleIds: string[]; readonly preservedTopicIds: string[]; readonly addedTopics: string[]; readonly removedTopics: string[]; readonly unsafeProgressTopicIds: string[]; readonly requiresAcknowledgement: boolean }
+export interface RoadmapRebuildImpact { readonly relevance?: 'compatible' | 'partial' | 'irrelevant'; readonly summary?: string; readonly preservedModuleIds: string[]; readonly preservedTopicIds: string[]; readonly changedTopicIds?: string[]; readonly addedTopics: string[]; readonly removedTopics: string[]; readonly unsafeProgressTopicIds: string[]; readonly reasons?: string[]; readonly requiresAcknowledgement: boolean }
 export type RoadmapRebuildPreviewStatus = 'pending' | 'applied' | 'stale'
 export interface RoadmapRebuildPreview { readonly id: string; readonly workspaceId: string; readonly currentRoadmapId: string; readonly title: string; readonly modules: RoadmapModule[]; readonly materialIds: string[]; readonly impact: RoadmapRebuildImpact; readonly status: RoadmapRebuildPreviewStatus; readonly appliedRoadmapId: string | null; readonly createdAt: number; readonly resolvedAt: number | null }
 export interface RoadmapApi { get(workspaceId: string): Promise<Roadmap | null>; getLearningPathState(workspaceId: string): Promise<LearningPathState>; generate(workspaceId: string, instruction?: string): Promise<Roadmap>; getRebuildPreview(input: z.infer<typeof getRoadmapRebuildPreviewInputSchema>): Promise<RoadmapRebuildPreview | null>; previewRebuild(input: z.infer<typeof previewRoadmapRebuildInputSchema>): Promise<RoadmapRebuildPreview>; applyRebuild(input: z.infer<typeof applyRoadmapRebuildInputSchema>): Promise<Roadmap>; accept(input: z.infer<typeof acceptRoadmapInputSchema>): Promise<Roadmap> }

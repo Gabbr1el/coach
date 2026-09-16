@@ -32,6 +32,7 @@ export const academicLifeMutationInputSchema = z.object({
 })
 
 export const academicLifeTransitionInputSchema = z.object({ id: z.uuid(), status: z.enum(['resolved', 'archived']) }).strict()
+export const academicLifeDeleteInputSchema = z.object({ id: z.uuid(), confirmCompleted: z.boolean().default(false) }).strict()
 export const academicLifeHistoryInputSchema = z.object({ limit: z.number().int().min(1).max(200).default(100) }).strict()
 
 export interface AcademicLifeItem {
@@ -58,9 +59,11 @@ export interface AcademicLifeItem {
 }
 
 export interface AcademicLifeProjection { readonly current: AcademicLifeItem[]; readonly history: AcademicLifeItem[]; readonly generatedAt: number }
+export interface AcademicLifeDeleteResult { readonly id: string; readonly deletedRootId: string; readonly affectedPlanning: boolean }
 export type AcademicLifeMutationInput = z.infer<typeof academicLifeMutationInputSchema>
 export interface AcademicLifeApi {
   getProjection(): Promise<AcademicLifeProjection>
   save(input: AcademicLifeMutationInput): Promise<AcademicLifeItem>
   transition(input: z.infer<typeof academicLifeTransitionInputSchema>): Promise<AcademicLifeItem>
+  delete(input: z.infer<typeof academicLifeDeleteInputSchema>): Promise<AcademicLifeDeleteResult>
 }

@@ -13,10 +13,15 @@ const exerciseContextSchema = z.object({
 
 export const ensureExerciseSetInputSchema = exerciseContextSchema
 export const getExerciseSetInputSchema = z.object({ workspaceId: workspaceIdSchema, topicId: entityIdSchema }).strict()
+export const projectExerciseSetsInputSchema = z.object({ workspaceId: workspaceIdSchema, roadmapId: entityIdSchema }).strict()
+export const exerciseSetProjectionSchema = z.object({ topicId: entityIdSchema, setId: entityIdSchema.nullable(), status: z.enum(['preparing', 'generating', 'ready', 'waiting_for_provider', 'failed_retryable']), retryAfter: z.number().int().nonnegative().nullable(), updatedAt: z.number().int().nonnegative().nullable() }).strict()
 export const exerciseSaveDraftInputSchema = z.object({ workspaceId: workspaceIdSchema, exerciseId: entityIdSchema, code: z.string().max(20_000) }).strict()
 export const exerciseRunInputSchema = z.object({ workspaceId: workspaceIdSchema, exerciseId: entityIdSchema, code: z.string().max(20_000).default(''), stdin: z.string().max(20_000).default('') }).strict()
 export const exerciseSubmitInputSchema = z.object({ workspaceId: workspaceIdSchema, exerciseId: entityIdSchema, code: z.string().max(20_000).default(''), prediction: z.string().trim().max(20_000).nullable().default(null), idempotencyKey: z.string().min(8).max(200) }).strict()
-export const exerciseHelpInputSchema = z.object({ workspaceId: workspaceIdSchema, exerciseId: entityIdSchema, requestId: z.string().min(8).max(200), type: z.enum(['hint_requested', 'coach_help_requested', 'worked_example_shown', 'solution_revealed']).default('hint_requested') }).strict()
+export const exerciseHelpInputSchema = z.object({ workspaceId: workspaceIdSchema, exerciseId: entityIdSchema, requestId: z.string().min(8).max(200), type: z.enum(['hint_requested', 'coach_help_requested', 'worked_example_shown', 'solution_revealed']).default('hint_requested'), currentSource: z.string().max(20_000).default(''), currentPrediction: z.string().trim().max(20_000).nullable().default(null) }).strict()
+export const exerciseAdaptationSelectionSchema = z.object({ workspaceId: workspaceIdSchema, exerciseId: entityIdSchema }).strict()
+export const simplifyExerciseInputSchema = z.object({ workspaceId: workspaceIdSchema, exerciseId: entityIdSchema, requestId: z.string().min(8).max(200) }).strict()
+export const activateExerciseAdaptationInputSchema = z.object({ workspaceId: workspaceIdSchema, exerciseId: entityIdSchema, adaptationId: entityIdSchema }).strict()
 
 export const publicExerciseTestSchema = z.object({ id: entityIdSchema, input: z.string().max(20_000), expectedOutput: z.string().max(20_000) }).strict()
 export const exerciseKindSchema = z.enum(['PROGRAMMING_PROBLEM', 'FIX_CODE', 'COMPLETE_CODE', 'PREDICT_OUTPUT'])
@@ -37,16 +42,25 @@ export const publicExerciseContextSchema = z.object({ exerciseId: entityIdSchema
 export const exerciseSetSchema = z.object({ id: entityIdSchema, workspaceId: workspaceIdSchema, roadmapId: entityIdSchema, moduleId: entityIdSchema, topicId: entityIdSchema, lessonId: entityIdSchema, status: z.enum(['generating', 'ready', 'waiting_for_provider', 'failed_retryable']), retryAfter: z.number().int().nonnegative().nullable(), lastErrorCode: z.string().max(100).nullable(), exercises: z.array(exerciseSchema).max(7), progress: z.array(exerciseProgressSchema), updatedAt: z.number().int().nonnegative() }).strict()
 export const exerciseCaseResultSchema = z.object({ id: entityIdSchema, visibility: z.literal('public'), passed: z.boolean(), actualOutput: z.string().max(8000).nullable(), message: z.string().max(1000) }).strict()
 export const exerciseExecutionSchema = z.object({ mode: z.enum(['run', 'submit']), exerciseId: entityIdSchema, attemptId: entityIdSchema.nullable(), learningAttemptId: entityIdSchema.nullable().optional(), status: z.enum(['executed', 'passed', 'failed', 'compile_error', 'runtime_error', 'timed_out']), passed: z.boolean(), passedTests: z.number().int().nonnegative(), totalTests: z.number().int().nonnegative(), message: z.string().min(1).max(1000), compileDiagnostics: z.array(z.string().min(1).max(1000)).max(20), cases: z.array(exerciseCaseResultSchema).max(8), stdout: z.string().max(8000), stderr: z.string().max(8000), durationMs: z.number().int().nonnegative(), createdAt: z.number().int().nonnegative() }).strict()
-export const exerciseHelpResultSchema = z.object({ exerciseId: entityIdSchema, helpCount: z.number().int().positive(), hint: z.string().min(1).max(1000) }).strict()
+export const exercisePublicWordingSchema = z.object({ title: z.string().min(1).max(180), statement: z.string().min(1).max(5000), inputDescription: z.string().max(2000), outputDescription: z.string().max(2000), predictionPrompt: z.string().min(1).max(1000).nullable() }).strict()
+export const exerciseAdaptationSchema = z.object({ id: entityIdSchema, workspaceId: workspaceIdSchema, exerciseId: entityIdSchema, requestId: z.string().min(8).max(200), revision: z.number().int().positive(), original: exercisePublicWordingSchema, adapted: exercisePublicWordingSchema, isActive: z.boolean(), providerId: z.string().min(1).max(200).nullable(), modelId: z.string().min(1).max(200).nullable(), createdAt: z.number().int().nonnegative() }).strict()
+export const exerciseHelpResultSchema = z.object({ exerciseId: entityIdSchema, helpCount: z.number().int().positive(), helpLevel: z.number().int().min(1).max(4), requestIdentity: z.string().length(32), hint: z.string().min(1).max(1000) }).strict()
 
 export type ExerciseSet = z.infer<typeof exerciseSetSchema>
 export type ExerciseExecution = z.infer<typeof exerciseExecutionSchema>
 export type PublicExerciseContext = z.infer<typeof publicExerciseContextSchema>
+export type ExerciseAdaptation = z.infer<typeof exerciseAdaptationSchema>
+export type ExerciseSetProjection = z.infer<typeof exerciseSetProjectionSchema>
 export interface ExerciseApi {
   ensureSet(input: z.infer<typeof ensureExerciseSetInputSchema>): Promise<ExerciseSet>
   getSet(input: z.infer<typeof getExerciseSetInputSchema>): Promise<ExerciseSet | null>
+  projectSets(input: z.infer<typeof projectExerciseSetsInputSchema>): Promise<ExerciseSetProjection[]>
   saveDraft(input: z.infer<typeof exerciseSaveDraftInputSchema>): Promise<void>
   run(input: z.infer<typeof exerciseRunInputSchema>): Promise<ExerciseExecution>
   submit(input: z.infer<typeof exerciseSubmitInputSchema>): Promise<ExerciseExecution>
   requestHelp(input: z.infer<typeof exerciseHelpInputSchema>): Promise<z.infer<typeof exerciseHelpResultSchema>>
+  simplify(input: z.infer<typeof simplifyExerciseInputSchema>): Promise<z.infer<typeof exerciseAdaptationSchema>>
+  listAdaptations(input: z.infer<typeof exerciseAdaptationSelectionSchema>): Promise<Array<z.infer<typeof exerciseAdaptationSchema>>>
+  restoreOriginal(input: z.infer<typeof exerciseAdaptationSelectionSchema>): Promise<ExerciseSet>
+  activateAdaptation(input: z.infer<typeof activateExerciseAdaptationInputSchema>): Promise<ExerciseSet>
 }

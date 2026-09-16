@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { ExerciseService, type ExerciseRepository, type PrivateExercise } from '../../src/application/exercises/exercise-service'
+import { activateExerciseAdaptationInputSchema, simplifyExerciseInputSchema } from '../../src/shared/contracts/exercise-contract'
+import { EXERCISE_GENERATION_MAX_OUTPUT_TOKENS, EXERCISE_REPAIR_MAX_OUTPUT_TOKENS, ExerciseService, expandCompactExerciseSet, type ExerciseRepository, type PrivateExercise } from '../../src/application/exercises/exercise-service'
 import { AIProviderManager } from '../../src/application/ai/ai-provider-manager'
-import type { ExerciseExecution, ExerciseSet, PublicExerciseContext } from '../../src/shared/contracts/exercise-contract'
+import type { ExerciseAdaptation, ExerciseExecution, ExerciseSet, PublicExerciseContext } from '../../src/shared/contracts/exercise-contract'
 import { streamWorkspaceMessageInputSchema } from '../../src/shared/contracts/conversation-contract'
 
 class MemoryRepository implements ExerciseRepository {
+  projectSets() { return [] }
   set: ExerciseSet | null = null
   exercise: PrivateExercise | null = null
   attempts = new Map<string, ExerciseExecution>()
@@ -18,7 +20,15 @@ class MemoryRepository implements ExerciseRepository {
   saveRun(): void {}
   findAttempt(_workspaceId: string, key: string, exerciseId: string, sourceRevision: string): ExerciseExecution | null { const result = this.attempts.get(key) ?? null; if (result && (result.exerciseId !== exerciseId || sourceRevision !== '5694d08a2e53ffca')) throw new Error('Idempotency key was already used for a different submission'); return result }
   saveSubmission(input: { idempotencyKey: string; execution: ExerciseExecution }): ExerciseExecution { this.attempts.set(input.idempotencyKey, input.execution); return input.execution }
-  requestHelp(): { helpCount: number; hint: string } { return { helpCount: 1, hint: this.exercise!.hint } }
+  adaptations: ExerciseAdaptation[] = []
+  createAdaptation(input: { id: string; workspaceId: string; exerciseId: string; requestId: string; adapted: ExerciseAdaptation['adapted']; providerId: string; modelId: string; createdAt: number }): ExerciseAdaptation { const exercise=this.exercise!; const item={...input,revision:this.adaptations.length+1,original:{title:exercise.title,statement:exercise.statement,inputDescription:exercise.inputDescription,outputDescription:exercise.outputDescription,predictionPrompt:exercise.predictionPrompt},isActive:true}; this.adaptations=this.adaptations.map((old)=>({...old,isActive:false})); this.adaptations.unshift(item); return item }
+  listAdaptations(): ExerciseAdaptation[] { return this.adaptations }
+  restoreOriginal(): ExerciseSet { return this.set! }
+  activateAdaptation(): ExerciseSet { return this.set! }
+  getHelpState() { if(!this.exercise)return null; return { exercise:this.exercise, wording:{title:this.exercise.title,statement:this.exercise.statement,inputDescription:this.exercise.inputDescription,outputDescription:this.exercise.outputDescription,predictionPrompt:this.exercise.predictionPrompt}, progress:{exerciseId:this.exercise.id,status:'in_progress' as const,currentCode:this.exercise.starterCode,attempts:0,lastRun:null,lastSubmission:null,passedTests:0,totalTests:0,helpUsed:false,firstTrySuccess:false,helpCount:0,passedAt:null,updatedAt:0} } }
+  findHelpResult() { return null }
+  helpResults = new Map<string, { exerciseId:string;helpCount:number;helpLevel:number;requestIdentity:string;hint:string }>()
+  saveHelpResult(input: { requestId:string;exerciseId:string;requestIdentity:string;helpLevel:number;hint:string }) { const existing=this.helpResults.get(input.requestId); if(existing)return existing; const result={exerciseId:input.exerciseId,helpCount:this.helpResults.size+1,helpLevel:input.helpLevel,requestIdentity:input.requestIdentity,hint:input.hint}; this.helpResults.set(input.requestId,result); return result }
 }
 
 const context = { workspaceId: '00000000-0000-4000-8000-000000000001', roadmapId: 'roadmap', moduleId: 'module', topicId: 'module:loops', lessonId: 'lesson' }
@@ -32,6 +42,25 @@ const generated = { exercises: [
 ] }
 
 describe('ExerciseService', () => {
+  it('accepts exact strict IPC payloads for simplifying and activating adaptations', () => {
+    const base = { workspaceId: crypto.randomUUID(), exerciseId: 'exercise-1' }
+    expect(simplifyExerciseInputSchema.parse({ ...base, requestId: 'simplify-1' })).toEqual({ ...base, requestId: 'simplify-1' })
+    expect(activateExerciseAdaptationInputSchema.parse({ ...base, adaptationId: 'adaptation-1' })).toEqual({ ...base, adaptationId: 'adaptation-1' })
+    expect(() => simplifyExerciseInputSchema.parse({ ...base, requestId: 'simplify-1', extra: true })).toThrow()
+  })
+  it('expands compact exercises without exposing private fields through the public contract', () => {
+    const tuple = ['intent', ['concept'], 'PREDICT_OUTPUT', 'standard', 'Preveja', 'Qual saída?', '', '', 'python', '', 'Informe a saída', 'print(2)', true, [], [], null, '2', 'Acompanhe a execução']
+    const expanded = expandCompactExerciseSet({ e: [tuple, tuple, tuple, tuple] }) as { exercises: Array<Record<string, unknown>> }
+    expect(expanded.exercises[0]).toMatchObject({ assessmentIntentKey: 'intent', conceptKeys: ['concept'], publicTests: [], hiddenTests: [], expectedPrediction: '2' })
+  })
+  it('uses the worker signal and bounded budgets for initial generation and one repair', async () => {
+    const repository = new MemoryRepository(); const requests: import('../../src/application/ai/ai-provider').AIRequest[] = []; const controller = new AbortController()
+    const provider = new AIProviderManager(); provider.register({ id: 'p', name: 'p', testConnection: async () => {}, getCapabilities: () => ({ streaming: false, usageInformation: false, supportedInput: ['text'] }), sendMessage: async (request) => { requests.push(request); return { content: requests.length === 1 ? '{"e":[]}' : JSON.stringify(generated), providerId: 'p', modelId: 'm' } } }); provider.select('p')
+    const service = new ExerciseService(repository, provider, { getStatuses: () => [{ language: 'python', available: true }], execute: async () => ({ phase: 'run', exitCode: 0, stdout: '3', stderr: '', timedOut: false }) } as never, async () => ({ id: context.workspaceId, name: 'Python', objective: 'Loops', status: 'active', createdAt: 1, updatedAt: 1, lastOpenedAt: null, archivedAt: null }), () => roadmap)
+    await service.prepareGeneration({ ...context, revision: 1, inputHash: 'a'.repeat(64) }, controller.signal).catch(() => {})
+    expect(requests.map((request) => request.signal)).toEqual([controller.signal, controller.signal])
+    expect(requests.map((request) => request.maxOutputTokens)).toEqual([EXERCISE_GENERATION_MAX_OUTPUT_TOKENS, EXERCISE_REPAIR_MAX_OUTPUT_TOKENS])
+  })
   it('accepts only the active exercise identifier from the renderer', () => {
     const input = { requestId: crypto.randomUUID(), workspaceId: context.workspaceId, content: 'Ajude', activePage: 'exercises' as const, activeExercise: { exerciseId: 'exercise' } }
     expect(streamWorkspaceMessageInputSchema.parse(input).activeExercise).toEqual({ exerciseId: 'exercise' })
@@ -80,5 +109,30 @@ describe('ExerciseService', () => {
     expect(failed).toMatchObject({ passed: false, passedTests: 0, totalTests: 0 })
     expect(passed).toMatchObject({ passed: true, passedTests: 0, totalTests: 0 })
     expect(failed.message).not.toContain('42'); expect(executions).toBe(0)
+  })
+
+  it('simplifies only public wording and keeps immutable assessment bytes untouched', async () => {
+    const repository = new MemoryRepository(); repository.exercise = { id: 'exercise', setId: 'set', workspaceId: context.workspaceId, topicId: context.topicId, position: 1, assessmentIntentKey: 'intent', conceptKeys: ['concept'], kind: 'FIX_CODE', difficulty: 'challenge', title: 'Original', statement: 'Corrija o defeito.', inputDescription: 'Entrada original', outputDescription: 'Saída original', language: 'python', starterCode: 'print(0) # bug', predictionPrompt: null, codeToObserve: null, requiredForTopicCompletion: true, publicTests: [{ id: 'public-1', input: '1', expectedOutput: '1' }], hiddenTests: [{ id: 'hidden-1', input: '2', expectedOutput: '2' }], referenceSolution: 'print(input())', expectedPrediction: null, hint: 'privado' }
+    const before = JSON.stringify(repository.exercise)
+    const providers = new AIProviderManager(); providers.register({ id:'fake',name:'fake',testConnection:async()=>{},getCapabilities:()=>({streaming:false,usageInformation:false,supportedInput:['text']}),sendMessage:async(request)=>{ const payload=JSON.stringify(request); expect(payload).not.toMatch(/hidden-1|referenceSolution|privado|print\(input/); return {content:JSON.stringify({title:'Mais simples',statement:'Conserte o erro.',inputDescription:'Um valor',outputDescription:'O valor',predictionPrompt:null}),providerId:'fake',modelId:'fake-model'} }}); providers.select('fake')
+    const service = new ExerciseService(repository,providers,{getStatuses:()=>[{language:'python',available:true}]} as never,async()=>null,()=>null)
+    const adapted=await service.simplify({workspaceId:context.workspaceId,exerciseId:'exercise',requestId:'simplify-1'})
+    expect(adapted).toMatchObject({revision:1,isActive:true,adapted:{title:'Mais simples'}}); expect(JSON.stringify(repository.exercise)).toBe(before)
+  })
+
+  it('builds dynamic escalating hint requests without private evaluator data', async () => {
+    const repository = new MemoryRepository(); repository.exercise = { id: 'exercise', setId: 'set', workspaceId: context.workspaceId, topicId: context.topicId, position: 1, assessmentIntentKey: 'intent', conceptKeys: ['concept'], kind: 'PROGRAMMING_PROBLEM', difficulty: 'standard', title: 'Loop', statement: 'Repita.', inputDescription: '', outputDescription: '', language: 'python', starterCode: 'for', predictionPrompt: null, codeToObserve: null, requiredForTopicCompletion: true, publicTests: [{ id: 'public-1', input: '1', expectedOutput: '1' }], hiddenTests: [{ id: 'hidden-secret', input: '99', expectedOutput: '99' }], referenceSolution: 'SECRET_SOLUTION', expectedPrediction: null, hint: 'SECRET_HINT' }
+    const requests:string[]=[]; const providers=new AIProviderManager(); providers.register({id:'fake',name:'fake',testConnection:async()=>{},getCapabilities:()=>({streaming:false,usageInformation:false,supportedInput:['text']}),sendMessage:async(request)=>{requests.push(JSON.stringify(request));return{content:`Dica ${requests.length}`,providerId:'fake',modelId:'fake-model'}}});providers.select('fake')
+    const service=new ExerciseService(repository,providers,{getStatuses:()=>[{language:'python',available:true}]} as never,async()=>null,()=>null)
+    const first=await service.requestHelp({workspaceId:context.workspaceId,exerciseId:'exercise',requestId:'hint-state-a',type:'hint_requested',currentSource:'for x in y:',currentPrediction:null}); const changed=await service.requestHelp({workspaceId:context.workspaceId,exerciseId:'exercise',requestId:'hint-state-b',type:'hint_requested',currentSource:'for x in values:',currentPrediction:null})
+    expect(first.requestIdentity).not.toBe(changed.requestIdentity); expect(requests.join('')).not.toMatch(/hidden-secret|SECRET_SOLUTION|SECRET_HINT|"99"/); expect(requests[0]).toContain('currentSource')
+  })
+
+  it('coalesces retries for the same hint state and escalates only after persistence', async () => {
+    const repository=new MemoryRepository(); repository.exercise={ id:'exercise',setId:'set',workspaceId:context.workspaceId,topicId:context.topicId,position:1,kind:'PROGRAMMING_PROBLEM',difficulty:'standard',title:'Loop',statement:'Repita.',inputDescription:'',outputDescription:'',language:'python',starterCode:'for',predictionPrompt:null,codeToObserve:null,requiredForTopicCompletion:true,publicTests:[{id:'public-1',input:'1',expectedOutput:'1'}],hiddenTests:[],referenceSolution:'solution',expectedPrediction:null,hint:'private' }
+    let calls=0; const providers=new AIProviderManager(); providers.register({id:'fake',name:'fake',testConnection:async()=>{},getCapabilities:()=>({streaming:false,usageInformation:false,supportedInput:['text']}),sendMessage:async()=>{calls++;await new Promise((resolve)=>setTimeout(resolve,5));return{content:`Dica ${calls}`,providerId:'fake',modelId:'fake'}}});providers.select('fake')
+    const service=new ExerciseService(repository,providers,{getStatuses:()=>[{language:'python',available:true}]} as never,async()=>null,()=>null)
+    const input={workspaceId:context.workspaceId,exerciseId:'exercise',requestId:'same-hint-request',type:'hint_requested' as const,currentSource:'for x in xs:',currentPrediction:null}
+    const [first,retry]=await Promise.all([service.requestHelp(input),service.requestHelp(input)]); expect(first).toEqual(retry); expect(calls).toBe(1); expect(first.helpLevel).toBe(1)
   })
 })

@@ -17,9 +17,18 @@ export interface StudyWorkspaceServiceDependencies {
   readonly eventBus?: WorkspaceEventBus
   readonly getRoadmap?: (workspaceId: string) => Roadmap | null
   readonly getStudyProgress?: (workspaceId: string) => StudyProgressState | null
-  readonly getPlanContext?: (workspaceId: string) => { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; learningStates: Map<string, import('../study-progress/topic-learning').TopicLearningState>; startMinutes: number; dayKey: string; lastPlannedDayKey: string | null }
+  readonly getPlanContext?: (workspaceId: string) => { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; learningStates: Map<string, import('../study-progress/topic-learning').TopicLearningState>; startMinutes: number; dayKey: string; lastPlannedDayKey: string | null; exerciseSetIds?: ReadonlyMap<string, string>; materialIds?: ReadonlyMap<string, string> }
   readonly getTodayPlan?: (workspaceId: string) => StudyPlanItem[]
-  readonly replanWeek?: () => void
+  readonly replanWeek?: (workspaceId: string) => void
+}
+
+export function enrichAuthoritativePlan(authoritative: StudyPlanItem[], mirror: StudyPlanItem[]): StudyPlanItem[] {
+  const targets = new Map(mirror.map((item) => [item.id, item]))
+  return authoritative.map((item) => {
+    const target = targets.get(item.id)
+    if (!target || !item.activityType || !item.topicId || !item.moduleId || target.activityType !== item.activityType || target.topicId !== item.topicId || target.moduleId !== item.moduleId) return item
+    return { ...item, ...(target.exerciseSetId ? { exerciseSetId: target.exerciseSetId } : {}), ...(target.materialId ? { materialId: target.materialId } : {}) }
+  })
 }
 
 interface WorkspaceCodeProfile { fileName: string; language: string; editorContent: string }
@@ -32,7 +41,7 @@ export function workspaceCodeProfile(workspace: Pick<Workspace, 'name' | 'object
   return { fileName: 'notes.txt', language: 'plaintext', editorContent: '' }
 }
 
-function createRoadmapPlan(workspaceId: string, roadmap: Roadmap | null, progress: StudyProgressState | null, existing: StudyPlanItem[], createId: () => string, context?: { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; learningStates: Map<string, import('../study-progress/topic-learning').TopicLearningState>; startMinutes: number }): StudyPlanItem[] { return roadmap ? deriveDailyPlan({ workspaceId, roadmap, progress, availableMinutes: context?.availableMinutes ?? 120, phase: context?.phase ?? null, learningStates: context?.learningStates ?? new Map(), startMinutes: context?.startMinutes ?? 18 * 60 }, existing, createId) : [] }
+function createRoadmapPlan(workspaceId: string, roadmap: Roadmap | null, progress: StudyProgressState | null, existing: StudyPlanItem[], createId: () => string, context?: { availableMinutes: number; phase: 'upcoming' | 'near' | 'today' | 'passed' | null; learningStates: Map<string, import('../study-progress/topic-learning').TopicLearningState>; startMinutes: number; exerciseSetIds?: ReadonlyMap<string, string>; materialIds?: ReadonlyMap<string, string> }): StudyPlanItem[] { return roadmap ? deriveDailyPlan({ workspaceId, roadmap, progress, availableMinutes: context?.availableMinutes ?? 120, phase: context?.phase ?? null, learningStates: context?.learningStates ?? new Map(), startMinutes: context?.startMinutes ?? 18 * 60, ...(context?.exerciseSetIds ? { exerciseSetIds: context.exerciseSetIds } : {}), ...(context?.materialIds ? { materialIds: context.materialIds } : {}) }, existing, createId) : [] }
 
 export class StudyWorkspaceService {
   private readonly now: () => number
@@ -57,9 +66,9 @@ export class StudyWorkspaceService {
         const running = checkpoint.timerRemainingSeconds > 0
         await this.dependencies.repository.updateTimer(workspaceId, existing.sessionId, { timerStatus: running ? 'running' : 'idle', timerRemainingSeconds: checkpoint.timerRemainingSeconds, timerStartedAt: running ? now : null, timerStartedMonotonicMs: running ? this.monotonicNow() : null, timerBootId: running ? this.bootId : null, accumulatedFocusSeconds: checkpoint.accumulatedFocusSeconds }, now)
         const reconciled = (await this.dependencies.repository.findState(workspaceId, now))!
-        return this.dependencies.getTodayPlan ? { ...reconciled, plan: this.dependencies.getTodayPlan(workspaceId) } : reconciled
+        return this.dependencies.getTodayPlan ? { ...reconciled, plan: enrichAuthoritativePlan(this.dependencies.getTodayPlan(workspaceId), reconciled.plan) } : reconciled
       }
-      return this.dependencies.getTodayPlan ? { ...existing, plan: this.dependencies.getTodayPlan(workspaceId) } : existing
+      return this.dependencies.getTodayPlan ? { ...existing, plan: enrichAuthoritativePlan(this.dependencies.getTodayPlan(workspaceId), existing.plan) } : existing
     }
     const initialState: Omit<StudyWorkspaceState, 'plan' | 'timerDurationSeconds' | 'timerRemainingSeconds'> = {
       workspaceId,
@@ -148,7 +157,7 @@ export class StudyWorkspaceService {
     const state = await this.getState(workspaceId)
     const context = this.dependencies.getPlanContext?.(workspaceId)
     await this.dependencies.repository.recalculatePlanAtomically(workspaceId, state.sessionId, () => {
-      this.dependencies.replanWeek?.()
+      this.dependencies.replanWeek?.(workspaceId)
       return this.dependencies.getTodayPlan?.(workspaceId) ?? createRoadmapPlan(workspaceId, this.dependencies.getRoadmap?.(workspaceId) ?? null, this.dependencies.getStudyProgress?.(workspaceId) ?? null, state.plan, this.createId, context)
     }, this.now(), context?.dayKey)
     return this.getState(workspaceId)

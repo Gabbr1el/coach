@@ -1,0 +1,73 @@
+name: Quick Windows Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release que receberá o instalador"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  package-windows:
+    name: Quick Package Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.24.0
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Coach
+        run: pnpm build
+
+      - name: Rebuild native dependencies for Electron
+        run: pnpm exec electron-builder install-app-deps
+
+      - name: Package Windows installer
+        run: pnpm exec electron-builder --win nsis --x64 --publish never
+
+      - name: Replace assets in existing GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          $files = Get-ChildItem release -File | Where-Object {
+            $_.Extension -eq ".exe" -or $_.Name.EndsWith(".blockmap")
+          }
+
+          if ($files.Count -eq 0) {
+            throw "Nenhum instalador foi encontrado em release/"
+          }
+
+          foreach ($file in $files) {
+            Write-Host "Atualizando $($file.Name) na release $env:RELEASE_TAG"
+            gh release upload $env:RELEASE_TAG $file.FullName --clobber
+          }
+
+      - name: Upload temporary workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Coach-Windows-Quick
+          path: |
+            release/*.exe
+            release/*.blockmap
+          if-no-files-found: error

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { HeavyGenerationQueue } from '../../src/application/ai/heavy-generation-queue'
-import { ContentGenerationWorker, classifyContentGenerationFailure, type WorkerClock } from '../../src/application/workspaces/content-generation-worker'
+import { ContentGenerationWorker, classifyContentGenerationFailure, contentJobAdmissionPriority, type WorkerClock } from '../../src/application/workspaces/content-generation-worker'
 import type { ContentJob } from '../../src/shared/contracts/workspace-content-contract'
 
 const job = (overrides: Partial<ContentJob> = {}): ContentJob => ({ id: 'job', workspaceId: '00000000-0000-4000-8000-000000000001', revision: 1, kind: 'lesson_generate', unitKey: 'module:topic', priority: 500, status: 'generating', idempotencyKey: 'a'.repeat(64), inputHash: 'b'.repeat(64), generatorContractVersion: 'v1', dependencyKeys: [], attemptCount: 1, maxAttempts: 3, availableAt: 0, leaseOwner: 'worker', leaseToken: 'lease', leaseExpiresAt: 120000, claimedCancellationGeneration: 1, startedAt: 0, completedAt: null, obsoleteAt: null, lastErrorCode: null, lastErrorMessage: null, createdAt: 0, updatedAt: 0, ...overrides })
@@ -12,6 +12,27 @@ function clock(): WorkerClock & { advance(ms: number): void } {
 }
 
 describe('ContentGenerationWorker', () => {
+  it('classifies initial roadmap and usable content ahead of progressive prefetch', () => {
+    expect(contentJobAdmissionPriority(job({ kind: 'roadmap_generate', priority: 900 }))).toBe('foreground')
+    expect(contentJobAdmissionPriority(job({ kind: 'lesson_generate', priority: 900 }))).toBe('foreground')
+    expect(contentJobAdmissionPriority(job({ kind: 'exercise_generate', priority: 900 }))).toBe('foreground')
+    expect(contentJobAdmissionPriority(job({ kind: 'lesson_generate', priority: 700 }))).toBe('background')
+    expect(contentJobAdmissionPriority(job({ kind: 'exercise_generate', priority: 500 }))).toBe('background')
+  })
+  it('starts the execution timeout only after provider admission', async () => {
+    const fakeClock = clock(); let admitted!: () => void; let handled = false
+    const gate = new Promise<void>((resolve) => { admitted = resolve })
+    const queued = job({ kind: 'roadmap_generate', priority: 900 })
+    let current: ContentJob | null = queued
+    const repository = { reconcile: vi.fn(), claimNext: () => { const value = current; current = null; return value }, renewLease: () => true, getJob: () => queued, publishLease: () => null, failLease: vi.fn(), releaseLease: vi.fn(), retryProviderUnavailable: vi.fn() }
+    const admission = { run: async <T>(task: () => Promise<T>) => { await gate; return task() } }
+    const worker = new ContentGenerationWorker({ repository: repository as never, admission, handlers: { roadmap_generate: async () => { handled = true; return { publish: () => null } } }, clock: fakeClock, timeoutMs: 100 })
+    worker.start(); fakeClock.advance(0); await Promise.resolve(); fakeClock.advance(500)
+    expect(handled).toBe(false); expect(repository.failLease).not.toHaveBeenCalled()
+    admitted(); await Promise.resolve(); await Promise.resolve()
+    expect(handled).toBe(true)
+    await worker.stop()
+  })
   it('classifies contract failures as terminal and provider/timeouts as retryable', () => {
     expect(classifyContentGenerationFailure(Object.assign(new Error('bad schema'), { code: 'LESSON_SCHEMA_INVALID' })).retryable).toBe(false)
     expect(classifyContentGenerationFailure(new Error('network offline'))).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: true, providerUnavailable: true })

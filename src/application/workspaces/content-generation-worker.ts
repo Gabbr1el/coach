@@ -16,6 +16,10 @@ export interface ContentJobExecution {
 }
 
 export type ContentJobHandler = (job: ContentJob, signal: AbortSignal) => Promise<ContentJobExecution>
+export const CONTENT_GENERATION_TIMEOUT_MS = 300_000
+export function contentJobAdmissionPriority(job: Pick<ContentJob, 'kind' | 'priority'>): 'foreground' | 'background' {
+  return job.kind === 'roadmap_generate' || ((job.kind === 'lesson_generate' || job.kind === 'exercise_generate') && job.priority >= 900) ? 'foreground' : 'background'
+}
 
 export interface ContentGenerationWorkerOptions {
   readonly repository: WorkspaceContentRepository
@@ -66,7 +70,7 @@ export class ContentGenerationWorker {
   private running = false
   private stopping: Promise<void> | null = null
   private activeTask: Promise<void> | null = null
-  private active: { job: ContentJob; controller: AbortController; renewal: unknown; timeout: unknown } | null = null
+  private active: { job: ContentJob; controller: AbortController; renewal: unknown; timeout: unknown | null } | null = null
 
   constructor(options: ContentGenerationWorkerOptions) {
     this.repository = options.repository
@@ -77,7 +81,7 @@ export class ContentGenerationWorker {
     this.pollMs = options.pollMs ?? 1_000
     this.leaseMs = options.leaseMs ?? CONTENT_JOB_DEFAULTS.leaseMs
     this.renewAfterMs = options.renewAfterMs ?? CONTENT_JOB_DEFAULTS.renewAfterMs
-    this.timeoutMs = options.timeoutMs ?? 300_000
+    this.timeoutMs = options.timeoutMs ?? CONTENT_GENERATION_TIMEOUT_MS
     this.onPublished = options.onPublished
     this.onSettled = options.onSettled
   }
@@ -135,11 +139,14 @@ export class ContentGenerationWorker {
       if (!this.repository.renewLease({ jobId: job.id, leaseToken, now: this.clock.now(), leaseMs: this.leaseMs })) controller.abort()
     }, this.renewAfterMs)
     let timedOut = false
-    const timeout = this.clock.setTimeout(() => { timedOut = true; controller.abort() }, this.timeoutMs)
-    const active = { job, controller, renewal, timeout }
+    const active = { job, controller, renewal, timeout: null as unknown | null }
     this.active = active
     const task = (async () => { try {
-      const output = await this.admission.run(() => handler(job, controller.signal), { priority: 'background', signal: controller.signal })
+      const output = await this.admission.run(() => {
+        if (!this.running) throw new DOMException('Request cancelled', 'AbortError')
+        active.timeout = this.clock.setTimeout(() => { timedOut = true; controller.abort() }, this.timeoutMs)
+        return handler(job, controller.signal)
+      }, { priority: contentJobAdmissionPriority(job), signal: controller.signal })
       if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
       if (!this.repository.renewLease({ jobId: job.id, leaseToken, now: this.clock.now(), leaseMs: this.leaseMs })) throw new DOMException('Content job lease expired before publication', 'AbortError')
       const published = this.repository.publishLease({ jobId: job.id, leaseToken, now: this.clock.now(), publish: () => {
@@ -162,7 +169,7 @@ export class ContentGenerationWorker {
     } finally {
       try { this.onSettled?.(job) } catch (error) { console.error('Content job settlement projection failed:', error) }
       this.clock.clearInterval(renewal)
-      this.clock.clearTimeout(timeout)
+      if (active.timeout !== null) this.clock.clearTimeout(active.timeout)
       if (this.active === active) this.active = null
       this.schedule(0)
     } })()

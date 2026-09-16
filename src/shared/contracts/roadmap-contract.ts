@@ -93,7 +93,7 @@ export const roadmapRebuildImpactSchema = z.object({
   reasons: z.array(z.string().trim().min(1).max(500)).max(30).default([]),
   requiresAcknowledgement: z.boolean(),
 }).strict()
-export const roadmapRebuildPreviewSchema = z.object({ id: z.string().min(1).max(200), workspaceId: workspaceIdSchema, currentRoadmapId: z.string().min(1).max(200), title: z.string().trim().min(1).max(160), modules: z.array(roadmapModuleSchema).min(1).max(16), materialIds: z.array(z.uuid()).min(1).max(20), impact: roadmapRebuildImpactSchema, status: z.enum(['pending', 'applied', 'stale']), appliedRoadmapId: z.string().nullable(), createdAt: z.number().int().nonnegative(), resolvedAt: z.number().int().nonnegative().nullable() }).strict()
+export const roadmapRebuildPreviewSchema = z.object({ id: z.string().min(1).max(200), workspaceId: workspaceIdSchema, currentRoadmapId: z.string().min(1).max(200), title: z.string().trim().min(1).max(160), modules: z.array(roadmapModuleSchema).min(1).max(16), materialIds: z.array(z.uuid()).max(20), impact: roadmapRebuildImpactSchema, status: z.enum(['pending', 'applied', 'stale']), appliedRoadmapId: z.string().nullable(), createdAt: z.number().int().nonnegative(), resolvedAt: z.number().int().nonnegative().nullable() }).strict()
 
 export type RoadmapResource = z.infer<typeof roadmapResourceSchema>
 export type CurriculumSourceType = 'documentation' | 'reference' | 'outline' | 'student_material' | 'educational'

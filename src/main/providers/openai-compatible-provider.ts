@@ -2,6 +2,10 @@ import type { AIProvider, AIProviderCapabilities, AIRequest, AIResponse, AIStrea
 
 type Fetcher = typeof fetch
 
+export function compatibleRequestTimeoutMs(maxOutputTokens: number): number {
+  return Math.min(240_000, Math.max(120_000, maxOutputTokens * 55))
+}
+
 export function normalizeCompatibleBaseUrl(value: string): string {
   const url = new URL(value)
   if (url.username || url.password) throw new Error('Credentials are not allowed in the provider URL')
@@ -20,6 +24,23 @@ interface ChatCompletionBody {
   readonly choices?: Array<{ message?: { content?: string }; delta?: { content?: string } }>
   readonly usage?: { prompt_tokens?: number; completion_tokens?: number }
   readonly error?: { message?: string }
+}
+
+interface ResponsesBody {
+  readonly model?: string
+  readonly output_text?: string
+  readonly output?: Array<{ content?: Array<{ type?: string; text?: string }> }>
+  readonly usage?: { input_tokens?: number; output_tokens?: number }
+  readonly error?: { message?: string }
+}
+
+function responsesText(body: ResponsesBody): string {
+  if (body.output_text) return body.output_text
+  return body.output?.flatMap((item) => item.content ?? []).filter((item) => item.type === 'output_text').map((item) => item.text ?? '').join('') ?? ''
+}
+
+function responsesEndpointUnsupported(status: number, message?: string): boolean {
+  return status === 404 || status === 405 || status === 501 || (status === 400 && /(?:unsupported|unknown|not found).*(?:response|endpoint)|(?:response|endpoint).*(?:unsupported|unknown|not found)/i.test(message ?? ''))
 }
 
 export class OpenAICompatibleProviderError extends Error {
@@ -55,7 +76,22 @@ export class OpenAICompatibleProvider implements AIProvider {
   }
 
   async sendMessage(request: AIRequest): Promise<AIResponse> {
-    const timeout = Math.min(300_000, Math.max(120_000, request.maxOutputTokens * 40))
+    const timeout = compatibleRequestTimeoutMs(request.maxOutputTokens)
+    const responses = await this.fetchWithTimeout(`${this.baseUrl}/responses`, {
+      method: 'POST', headers: this.headers(), signal: request.signal,
+      body: JSON.stringify({ model: request.model ?? this.defaultModel, input: request.messages, max_output_tokens: request.maxOutputTokens, store: false, ...(request.responseFormat === 'json_object' ? { text: { format: { type: 'json_object' } } } : {}) }),
+    }, timeout)
+    try {
+      const body = await this.jsonWithLimit(responses.response) as ResponsesBody
+      if (responsesEndpointUnsupported(responses.response.status, body.error?.message)) return this.sendChatCompletion(request, timeout)
+      if (!responses.response.ok) throw this.responseError(responses.response.status, body.error?.message)
+      const content = responsesText(body)
+      if (!content) throw new Error('Compatible provider returned an empty response')
+      return { content, providerId: this.id, modelId: body.model ?? request.model ?? this.defaultModel, usage: body.usage ? { inputTokens: body.usage.input_tokens ?? 0, outputTokens: body.usage.output_tokens ?? 0 } : undefined }
+    } finally { responses.cleanup() }
+  }
+
+  private async sendChatCompletion(request: AIRequest, timeout: number): Promise<AIResponse> {
     const { response, cleanup } = await this.fetchWithTimeout(`${this.baseUrl}/chat/completions`, {
       method: 'POST', headers: this.headers(), signal: request.signal,
       body: JSON.stringify({ model: request.model ?? this.defaultModel, messages: request.messages, max_tokens: request.maxOutputTokens, ...(request.responseFormat === 'json_object' ? { response_format: { type: 'json_object' } } : {}), stream: false }),
@@ -70,7 +106,7 @@ export class OpenAICompatibleProvider implements AIProvider {
   }
 
   async *streamMessage(request: AIRequest): AsyncIterable<AIStreamEvent> {
-    const timeout = Math.min(300_000, Math.max(120_000, request.maxOutputTokens * 40))
+    const timeout = compatibleRequestTimeoutMs(request.maxOutputTokens)
     const { response, cleanup } = await this.fetchWithTimeout(`${this.baseUrl}/chat/completions`, {
       method: 'POST', headers: this.headers(), signal: request.signal,
       body: JSON.stringify({ model: request.model ?? this.defaultModel, messages: request.messages, max_tokens: request.maxOutputTokens, stream: true }),
@@ -169,6 +205,7 @@ export class OpenAICompatibleProvider implements AIProvider {
         || detail.includes('usage limit')
       return new OpenAICompatibleProviderError(quotaExhausted ? 'INSUFFICIENT_QUOTA' : 'RATE_LIMITED')
     }
+    if (status >= 500) return new OpenAICompatibleProviderError('NETWORK_UNAVAILABLE', `Compatible provider failed with status ${status}`)
     return new OpenAICompatibleProviderError('UNKNOWN', `Compatible provider failed with status ${status}`)
   }
 }

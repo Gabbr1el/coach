@@ -63,4 +63,25 @@ describe('WorkspaceOnboardingService contextual analysis', () => {
   it.each(['Nunca usei Java', 'Não quero C', 'Java não', 'evite Java', 'sem Java', "I don't want Python", 'never Java', 'no Java', 'avoid Java', 'without Java', 'Não tenho experiência, quero Java', 'Posso usar Java ou Python'])('does not infer an implementation relation from any negation scope or multiple languages: %s', async (answer) => { const result = await service().analyze('POO', answer); expect(result.relatedContexts).toEqual([]); expect(result.canonicalFocus).toBe('Programação Orientada a Objetos') })
 
   it('does not call the provider and issues a non-creatable token for locally invalid input', async () => { const sendMessage = vi.fn(); const sut = service({ sendMessage }); const result = await sut.analyze('asdfgh'); expect(result.status).toBe('INVALID'); expect(sendMessage).not.toHaveBeenCalled(); expect(sut.validate(result.analysisToken, result.revision, result.topic, result.canonicalFocus, result.canonicalContext)).toBe(false) })
+  it.each(['ed', 'xy', 'abcq'])('requires a grounded description before creating unknown shorthand %s', async (topic) => { const sut = service(); const result = await sut.analyze(topic); expect(result).toMatchObject({ status: 'REQUIRED_DESCRIPTION', canonicalSubject: '', canonicalFocus: '', questionOptional: false }); expect(sut.validate(result.analysisToken, result.revision, result.topic, result.canonicalFocus, result.canonicalContext)).toBe(false) })
+  it('reanalyzes a supplied shorthand meaning and makes the grounded subject creatable', async () => { const sut = service(); const result = await sut.analyze('ed', 'ED significa Estrutura de Dados'); expect(result).toMatchObject({ status: 'VALID', canonicalSubject: 'Estrutura de Dados' }); expect(sut.validate(result.analysisToken, result.revision, result.topic, result.canonicalFocus, result.canonicalContext)).toBe(true) })
+  it('extracts curricular scope as declarations without producing learning evidence', async () => { const result = await service().analyze('POO', 'Já estudei até classes; quero começar a partir de herança, sem revisar fundamentos. Prefiro exemplos em Java.'); expect(result.curricularScope).toMatchObject({ requestedStart: 'herança', coveredThrough: 'classes', skipFundamentals: true }); expect(result.curricularScope.preferences).toContain('começar a partir de herança, sem revisar fundamentos'); expect(result.evidence).toEqual([]); expect(JSON.stringify(result.curricularScope)).not.toMatch(/mastery|conceptMemory|evidence/i) })
+  it('extracts both boundaries from the exact runtime preference', async () => {
+    const result = await service().analyze('POO', 'Quero começar a partir de Herança e cobrir Polimorfismo, sem revisar fundamentos.')
+    expect(result.curricularScope).toMatchObject({ requestedStart: 'Herança', coveredThrough: 'Polimorfismo', skipFundamentals: true })
+    expect(result.curricularScope.preferences).toContain('começar a partir de Herança e cobrir Polimorfismo, sem revisar fundamentos')
+    expect(result.evidence).toEqual([])
+  })
+  it.each([
+    ['Desejo iniciar em matrizes e cobrir determinantes, sem revisar fundamentos.', 'matrizes', 'determinantes'],
+    ['Quero partir de limites e ir até derivadas; pular fundamentos.', 'limites', 'derivadas'],
+    ['Começar a partir de listas e abranger árvores, sem fundamentos.', 'listas', 'árvores'],
+  ])('extracts generic Portuguese start and end boundaries from %s', async (answer, requestedStart, coveredThrough) => {
+    const result = await service().analyze('Tema acadêmico amplo', answer)
+    expect(result.curricularScope).toMatchObject({ requestedStart, coveredThrough, skipFundamentals: true })
+  })
+  it('does not split a conjunctive topic name without an explicit coverage verb', async () => {
+    const result = await service().analyze('Direito', 'Quero começar a partir de direitos e garantias fundamentais, sem revisar fundamentos.')
+    expect(result.curricularScope).toMatchObject({ requestedStart: 'direitos e garantias fundamentais', coveredThrough: null, skipFundamentals: true })
+  })
 })

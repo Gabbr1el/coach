@@ -407,6 +407,20 @@
       "when": 1789336800000,
       "tag": "0057_study_plan_target_ids",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "6",
+      "when": 1789412400000,
+      "tag": "0058_exercise_adaptations_and_hints",
+      "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "6",
+      "when": 1789416000000,
+      "tag": "0059_curricular_scope",
+      "breakpoints": true
     }
   ]
 }

@@ -12,6 +12,7 @@ import type { AIProviderManager } from '../../application/ai/ai-provider-manager
 import { evaluateCheckpointReasoning, pendingAssessment } from '../../application/study-progress/checkpoint-reasoning'
 import type { PedagogicalPrefetchScheduler } from '../../application/workspaces/pedagogical-prefetch-scheduler'
 import type { LearningEvidenceRecorder } from '../../shared/contracts/learning-evidence-contract'
+import { assertAcceptedTopicAccess } from '../curricular-access'
 
 type ProgressRow = { workspaceId: string; roadmapId: string; currentModuleId: string; currentTopicId: string; currentLessonId: string | null; currentCheckpointId: string | null; topicStatusesJson: string; lessonPositionsJson: string; checkpointStatesJson?: string; updatedAt: number }
 type LessonBlockRow = { contentJson: string }
@@ -89,6 +90,7 @@ export function registerStudyProgressHandlers(database: CoachDatabase, getToolch
   ipcMain.handle(STUDY_PROGRESS_CHANNELS.select, (event, payload) => {
     assertTrustedSender(event)
     const input = studySelectionSchema.parse(payload)
+    assertAcceptedTopicAccess(database, input)
     const existing = get(input.workspaceId)
     const sameRoadmap = existing?.roadmapId === input.roadmapId
     const statuses = { ...existing?.topicStatuses }

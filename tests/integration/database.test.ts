@@ -186,7 +186,7 @@ describe('Coach database migrations', () => {
 
     expect(database.sqlite.prepare("SELECT id, workspace_id AS workspaceId, topic_id AS topicId FROM exercise_sets WHERE id = 'partial-set'").get()).toEqual({ id: 'partial-set', workspaceId: 'partial-workspace', topicId: 'topic' })
     expect(database.sqlite.prepare("SELECT id FROM exercise_sets WHERE id = 'orphan-set'").get()).toBeUndefined()
-    expect(database.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'exercise%' ORDER BY name").all()).toEqual([{ name: 'exercise_attempts' }, { name: 'exercise_help_events' }, { name: 'exercise_progress' }, { name: 'exercise_sets' }, { name: 'exercises' }])
+    expect(database.sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'exercise%' ORDER BY name").all()).toEqual([{ name: 'exercise_adaptations' }, { name: 'exercise_attempts' }, { name: 'exercise_help_events' }, { name: 'exercise_hint_requests' }, { name: 'exercise_progress' }, { name: 'exercise_sets' }, { name: 'exercises' }])
     expect(database.sqlite.pragma('foreign_key_check')).toEqual([])
     validateCoachDatabaseSchema(database.sqlite, currentJournalMigrationCount)
     database.close()
@@ -340,8 +340,10 @@ describe('Coach database migrations', () => {
       { name: 'conversation_messages' },
       { name: 'conversation_threads' },
       { name: 'daily_planning_budgets' },
+      { name: 'exercise_adaptations' },
       { name: 'exercise_attempts' },
       { name: 'exercise_help_events' },
+      { name: 'exercise_hint_requests' },
       { name: 'exercise_progress' },
       { name: 'exercise_sets' },
       { name: 'exercises' },
@@ -500,13 +502,13 @@ describe('Coach database migrations', () => {
     expect(JSON.stringify(context)).not.toMatch(/hidden-secret|99 1|secret solution|Pense na operação/)
     expect(exerciseRepository.findPublicContext(crypto.randomUUID(), 'exercise')).toBeNull()
     database.sqlite.prepare('UPDATE exercise_progress SET help_used=0,help_count=0 WHERE workspace_id=? AND exercise_id=?').run(workspaceId, 'exercise')
-    expect(exerciseRepository.requestHelp(workspaceId, 'exercise', 'help-request-1', 'hint_requested', 20)).toMatchObject({ helpCount: 1 })
-    expect(exerciseRepository.requestHelp(workspaceId, 'exercise', 'help-request-2', 'hint_requested', 21)).toMatchObject({ helpCount: 2 })
-    expect(exerciseRepository.requestHelp(workspaceId, 'exercise', 'help-request-3', 'coach_help_requested', 22)).toMatchObject({ helpCount: 3 })
-    expect(exerciseRepository.requestHelp(workspaceId, 'exercise', 'help-request-4', 'worked_example_shown', 23)).toMatchObject({ helpCount: 4 })
-    expect(exerciseRepository.requestHelp(workspaceId, 'exercise', 'help-request-4', 'worked_example_shown', 24)).toMatchObject({ helpCount: 4 })
+    expect(exerciseRepository.saveHelpResult({ workspaceId, exerciseId: 'exercise', requestId: 'help-request-1', requestIdentity: '1'.repeat(32), helpLevel: 1, type: 'hint_requested', hint: 'h1', providerId: 'fake', modelId: 'fake', now: 20 })).toMatchObject({ helpCount: 1 })
+    expect(exerciseRepository.saveHelpResult({ workspaceId, exerciseId: 'exercise', requestId: 'help-request-2', requestIdentity: '2'.repeat(32), helpLevel: 2, type: 'hint_requested', hint: 'h2', providerId: 'fake', modelId: 'fake', now: 21 })).toMatchObject({ helpCount: 2 })
+    expect(exerciseRepository.saveHelpResult({ workspaceId, exerciseId: 'exercise', requestId: 'help-request-3', requestIdentity: '3'.repeat(32), helpLevel: 3, type: 'coach_help_requested', hint: 'h3', providerId: 'fake', modelId: 'fake', now: 22 })).toMatchObject({ helpCount: 3 })
+    expect(exerciseRepository.saveHelpResult({ workspaceId, exerciseId: 'exercise', requestId: 'help-request-4', requestIdentity: '4'.repeat(32), helpLevel: 4, type: 'worked_example_shown', hint: 'h4', providerId: 'fake', modelId: 'fake', now: 23 })).toMatchObject({ helpCount: 4 })
+    expect(exerciseRepository.saveHelpResult({ workspaceId, exerciseId: 'exercise', requestId: 'help-request-4', requestIdentity: '4'.repeat(32), helpLevel: 4, type: 'worked_example_shown', hint: 'h4', providerId: 'fake', modelId: 'fake', now: 24 })).toMatchObject({ helpCount: 4 })
     expect(database.sqlite.prepare('SELECT help_used AS helpUsed,help_count AS helpCount,status,current_code AS currentCode,attempts,passed_tests AS passedTests,total_tests AS totalTests FROM exercise_progress WHERE workspace_id=? AND exercise_id=?').get(workspaceId, 'exercise')).toEqual({ helpUsed: 1, helpCount: 4, status: 'in_progress', currentCode: 'print(typed_before_run)', attempts: 2, passedTests: 1, totalTests: 4 })
-    expect(database.sqlite.prepare('SELECT evidence_count AS evidenceCount,hints_used AS hintsUsed FROM topic_learning_states WHERE workspace_id=? AND topic_id=?').get(workspaceId, 'module:loops')).toEqual({ evidenceCount: 4, hintsUsed: 4 })
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM learning_attempts WHERE workspace_id=? AND source_ref=?').get(workspaceId, 'exercise')).toEqual({ count: 0 })
     database.close()
   })
 

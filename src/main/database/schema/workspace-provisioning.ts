@@ -11,6 +11,7 @@ export const workspaceLearningOverrides = sqliteTable('workspace_learning_overri
   declaredKnowledgeJson: text('declared_knowledge_json').notNull().default('[]'),
   declaredDifficultiesJson: text('declared_difficulties_json').notNull().default('[]'),
   goalsJson: text('goals_json').notNull().default('[]'),
+  curricularScopeJson: text('curricular_scope_json').notNull().default('{}'),
   onboardingAnalysisRevision: integer('onboarding_analysis_revision'),
   onboardingAnalysisFingerprint: text('onboarding_analysis_fingerprint'),
   createdAt: integer('created_at').notNull(),

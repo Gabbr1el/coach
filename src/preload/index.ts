@@ -50,10 +50,15 @@ const api: CoachDesktopApi = {
   exercise: {
     ensureSet: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.ensureSet, input),
     getSet: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.getSet, input),
+    projectSets: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.projectSets, input),
     saveDraft: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.saveDraft, input),
     run: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.run, input),
     submit: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.submit, input),
     requestHelp: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.requestHelp, input),
+    simplify: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.simplify, input),
+    listAdaptations: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.listAdaptations, input),
+    restoreOriginal: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.restoreOriginal, input),
+    activateAdaptation: (input) => ipcRenderer.invoke(EXERCISE_CHANNELS.activateAdaptation, input),
   },
   academicLife: {
     getProjection: () => ipcRenderer.invoke(ACADEMIC_LIFE_CHANNELS.getProjection),

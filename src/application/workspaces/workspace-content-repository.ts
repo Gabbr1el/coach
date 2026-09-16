@@ -15,7 +15,7 @@ export const CONTENT_UNIT_KEYS = {
 } as const
 
 export const CONTENT_GENERATOR_VERSIONS: Record<ContentUnitKind, string> = {
-  material_extract: 'material-v1', material_analyze: 'material-analysis-v1', roadmap_generate: 'roadmap-curriculum-v3', lesson_generate: 'lesson-curriculum-v2', exercise_generate: 'exercise-v1', plan_recalculate: 'plan-v1',
+  material_extract: 'material-v1', material_analyze: 'material-analysis-v1', roadmap_generate: 'roadmap-complete-curriculum-v4', lesson_generate: 'lesson-curriculum-v2', exercise_generate: 'exercise-v1', plan_recalculate: 'plan-v1',
 }
 
 export function contentJobKey(input: Pick<EnqueueContentJobInput, 'workspaceId' | 'revision' | 'kind' | 'unitKey' | 'inputHash' | 'generatorContractVersion'>): string {

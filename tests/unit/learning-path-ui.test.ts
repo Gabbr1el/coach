@@ -8,8 +8,14 @@ const drawerSource = readFileSync(new URL('../../src/renderer/app/LearningPathDr
 const lessonSource = readFileSync(new URL('../../src/renderer/app/StudyLessonView.tsx', import.meta.url), 'utf8')
 const preparationSource = readFileSync(new URL('../../src/renderer/app/studies-preparation.ts', import.meta.url), 'utf8')
 const revisionSource = readFileSync(new URL('../../src/shared/interactive-source-revision.ts', import.meta.url), 'utf8')
+const exercisesSource = readFileSync(new URL('../../src/renderer/app/ExercisesWorkspace.tsx', import.meta.url), 'utf8')
+const dialogFocusSource = readFileSync(new URL('../../src/renderer/app/dialog-focus.ts', import.meta.url), 'utf8')
 
 describe('learning path UI integration', () => {
+  it('loads the roadmap exercise projection with one batch IPC call', () => {
+    expect(exercisesSource.match(/exercise\.projectSets/g)).toHaveLength(1)
+    expect(exercisesSource).not.toContain('Promise.all(locations.map')
+  })
   it('keeps interactive source revisions browser-safe', () => {
     expect(lessonSource).toContain("from '../../shared/interactive-source-revision'")
     expect(revisionSource).not.toMatch(/node:|electron|from ['"](?:fs|path|crypto)['"]/)
@@ -45,7 +51,8 @@ describe('learning path UI integration', () => {
     expect(drawerSource).toContain('absolute inset-0')
     expect(drawerSource).not.toContain('fixed inset-0')
     expect(drawerSource).toContain('aria-labelledby="learning-path-title"')
-    expect(drawerSource).toContain("event.key === 'Escape'")
+    expect(drawerSource).toContain('useDialogFocus')
+    expect(dialogFocusSource).toContain("event.key === 'Escape'")
     expect(lessonSource).not.toContain('<aside')
     expect(lessonSource).not.toContain('Voltar ao plano')
     expect(lessonSource).not.toContain('Roteiro')

@@ -25,7 +25,7 @@ type StudyLessonAdapter = {
 
 type ExerciseHelper = {
   getPublicContext(input: { workspaceId: string; exerciseId: string }): PublicExerciseContext | null
-  requestHelp(input: { workspaceId: string; exerciseId: string; requestId: string; type: 'coach_help_requested' }): { exerciseId: string; helpCount: number; hint: string }
+  requestHelp(input: { workspaceId: string; exerciseId: string; requestId: string; type: 'coach_help_requested'; currentSource: string; currentPrediction: string | null }): Promise<{ exerciseId: string; helpCount: number; hint: string }> | { exerciseId: string; helpCount: number; hint: string }
 }
 
 export interface WorkspaceCoachResponseMetadata { readonly lessonAdapted?: { readonly lessonId: string; readonly blockId: string }; readonly plannerAction?: PlannerAction }
@@ -173,7 +173,7 @@ export class WorkspaceCoachService {
     const exerciseHelpRequested = Boolean(activeExercise && EXERCISE_HELP_REQUEST.test(input.content) && !EXERCISE_HELP_DENIAL.test(input.content))
     if (exerciseHelpRequested && this.dependencies.exerciseService) {
       if (signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
-      this.dependencies.exerciseService.requestHelp({ workspaceId, exerciseId: activeExercise!.exerciseId, requestId: `coach-help:${input.requestId}`, type: 'coach_help_requested' })
+      await this.dependencies.exerciseService.requestHelp({ workspaceId, exerciseId: activeExercise!.exerciseId, requestId: `coach-help:${input.requestId}`, type: 'coach_help_requested', currentSource: activeExercise!.currentCode, currentPrediction: null })
       activeExercise = this.dependencies.exerciseService.getPublicContext({ workspaceId, exerciseId: activeExercise!.exerciseId })
     }
     const routedInput = { ...input, activeExercise: undefined }

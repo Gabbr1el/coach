@@ -39,7 +39,7 @@ export class PedagogicalPrefetchScheduler {
       specs.push({ kind: 'exercise_generate', unitKey: current.topicId, priority: 700 })
     }
     if (next) specs.push({ kind: 'lesson_generate', unitKey: next.topicId, priority: trigger.type === 'topic_unlocked' ? 700 : 500 })
-    if (next && (trigger.type === 'required_exercise_near_completion' || trigger.type === 'reconcile')) specs.push({ kind: 'exercise_generate', unitKey: next.topicId, priority: 500 })
+    if (next && (trigger.type === 'required_exercise_near_completion' || trigger.type === 'topic_unlocked' || trigger.type === 'reconcile')) specs.push({ kind: 'exercise_generate', unitKey: next.topicId, priority: trigger.type === 'topic_unlocked' ? 700 : 500 })
     const jobs = specs.map((spec) => {
       const input = { workspaceId: trigger.workspaceId, revision: revision.revision, kind: spec.kind, unitKey: spec.unitKey, priority: spec.priority, inputHash: revision.inputHash, generatorContractVersion: CONTENT_GENERATOR_VERSIONS[spec.kind] }
       return this.options.repository.enqueue({ ...input, dependencyKeys: contentJobDependenciesForContract(input) }, this.now())

@@ -1,13 +1,60 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { BookOpen, ChevronDown, ChevronRight, X } from 'lucide-react'
 import type { Roadmap, RoadmapModule } from '../../shared/contracts/roadmap-contract'
 import type { StudyProgressState } from '../../shared/contracts/study-progress-contract'
+import { curriculumStateLabel, projectCurriculum } from './curriculum-projection'
+import { useDialogFocus } from './dialog-focus'
 
-export function LearningPathDrawer({ open, roadmap, progress, reviewTopicIds = [], onClose, onSelect }: { open: boolean; roadmap: Roadmap; progress: StudyProgressState | null; reviewTopicIds?: readonly string[]; onClose(): void; onSelect(module: RoadmapModule, topicIndex: number): Promise<void> | void }) {
-  const defaultModuleId = progress?.moduleId ?? roadmap.modules.find((module) => module.status !== 'locked')?.id ?? roadmap.modules[0]?.id ?? ''
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(defaultModuleId ? [defaultModuleId] : []))
-  const dialogRef = useRef<HTMLElement | null>(null)
-  useEffect(() => { if (!open) return; const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null; if (defaultModuleId) setExpanded((current) => new Set(current).add(defaultModuleId)); dialogRef.current?.querySelector<HTMLElement>('button')?.focus(); const close = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); if (event.key !== 'Tab' || !dialogRef.current) return; const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>('button:not(:disabled)')]; if (!focusable.length) return; const first = focusable[0]!; const last = focusable.at(-1)!; if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() } }; window.addEventListener('keydown', close); return () => { window.removeEventListener('keydown', close); previous?.focus() } }, [open, defaultModuleId, onClose])
+type Props = {
+  open: boolean
+  roadmap: Roadmap
+  progress: StudyProgressState | null
+  reviewTopicIds?: readonly string[]
+  onClose(): void
+  onSelect(module: RoadmapModule, topicIndex: number): Promise<void> | void
+}
+
+export function LearningPathDrawer({ open, roadmap, progress, reviewTopicIds = [], onClose, onSelect }: Props) {
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(roadmap.modules.map((module) => module.id)))
+  const dialogRef = useDialogFocus<HTMLElement>(open, onClose, 'button[aria-label="Fechar"]')
+  const projected = projectCurriculum(roadmap, progress)
+
+  useEffect(() => { if (open) setExpanded(new Set(roadmap.modules.map((module) => module.id))) }, [open, roadmap.id])
+
   if (!open) return null
-  return <div className="absolute inset-0 z-30 overflow-hidden" role="presentation"><button aria-label="Fechar Trilha de aprendizado" className="absolute inset-0 bg-black/55 backdrop-blur-[1px]" onClick={onClose} /><aside ref={dialogRef} id="learning-path-drawer" role="dialog" aria-modal="true" aria-labelledby="learning-path-title" className="coach-enter absolute inset-y-0 left-0 flex w-[min(360px,calc(100%-2rem))] flex-col border-r border-coach-line bg-[#0e1014] shadow-2xl"><header className="flex shrink-0 items-center justify-between border-b border-coach-line px-5 py-5"><div className="flex items-center gap-3"><span className="grid size-9 place-items-center rounded-lg bg-coach-green/15 text-coach-green"><BookOpen size={17} /></span><div><p className="text-[9px] font-black uppercase tracking-[.18em] text-coach-muted">Estrutura da sessão</p><h2 id="learning-path-title" className="mt-1 text-sm font-black text-white">Trilha de aprendizado</h2></div></div><button onClick={onClose} aria-label="Fechar" className="grid size-8 place-items-center rounded-lg text-coach-muted hover:bg-white/5 hover:text-white"><X size={17} /></button></header><div className="coach-scroll-pane min-h-0 flex-1 p-4">{roadmap.modules.map((module) => { const isExpanded = expanded.has(module.id); const locked = module.status === 'locked'; return <section key={module.id} className="mb-2"><button onClick={() => setExpanded((current) => { const next = new Set(current); if (next.has(module.id)) next.delete(module.id); else next.add(module.id); return next })} className="flex w-full items-center gap-2 rounded-lg px-3 py-3 text-left hover:bg-white/[.04]">{isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}<span className="text-xs font-black text-white">{module.position}. {module.title}</span>{locked && <span className="ml-auto text-[10px] text-coach-muted" aria-label="Módulo bloqueado">Bloqueado</span>}</button>{isExpanded && <div className="ml-5 border-l border-coach-line pl-3">{module.topics.map((topic, index) => { const topicId = `${module.id}:${topic}`; const status = progress?.topicStatuses[topicId] ?? 'NOT_STARTED'; const current = progress?.topicId === topicId; const review = reviewTopicIds.includes(topicId); const marker = status === 'COMPLETED' ? '✓' : current ? '→' : status === 'IN_PROGRESS' ? '◐' : '○'; return <button key={topicId} disabled={locked} onClick={() => { void Promise.resolve(onSelect(module, index)).then(onClose).catch(() => undefined) }} className={`flex w-full items-start gap-2 rounded-md px-3 py-2 text-left text-[11px] leading-4 ${current ? 'bg-coach-orange/10 font-black text-coach-orange' : status === 'COMPLETED' ? 'text-coach-green' : 'text-coach-muted hover:bg-white/[.04] hover:text-white'} disabled:cursor-not-allowed disabled:opacity-45`}><span aria-hidden="true" className="w-4 shrink-0 text-center">{marker}</span><span className="min-w-0 flex-1">{module.position}.{index + 1} {topic}</span>{review && <span className="shrink-0 font-black text-coach-orange" title="Precisa de revisão">!</span>}</button> })}</div>}</section> })}</div></aside></div>
+  return <div className="absolute inset-0 z-30 overflow-hidden" role="presentation">
+    <button aria-label="Fechar trilha" onClick={onClose} className="absolute inset-0 bg-black/60" />
+    <aside ref={dialogRef} id="learning-path-drawer" role="dialog" aria-modal="true" aria-labelledby="learning-path-title" className="absolute inset-y-0 right-0 flex w-full max-w-[430px] flex-col border-l border-coach-line bg-[#0d0e12] shadow-2xl">
+      <header className="flex items-start justify-between border-b border-coach-line px-5 py-5">
+        <div><h2 id="learning-path-title" className="font-display text-xl font-black text-coach-ink">Estudos</h2><p className="mt-1 text-sm font-bold text-coach-green">{roadmap.title}</p></div>
+        <button onClick={onClose} aria-label="Fechar" className="rounded-lg p-2 text-coach-muted hover:bg-white/5 hover:text-coach-ink"><X size={18} /></button>
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        {roadmap.modules.map((module, moduleIndex) => {
+          const topics = projected.filter((item) => item.module.id === module.id)
+          const complete = topics.every((item) => item.state === 'completed')
+          const moduleState = complete ? 'completed' : module.id === progress?.moduleId ? 'in_progress' : module.status === 'locked' ? 'locked' : 'available'
+          const isExpanded = expanded.has(module.id)
+          return <section key={module.id} className="mb-3 overflow-hidden rounded-xl border border-coach-line bg-[#111217]">
+            <button onClick={() => setExpanded((current) => { const next = new Set(current); if (next.has(module.id)) next.delete(module.id); else next.add(module.id); return next })} className="flex w-full items-center gap-3 px-4 py-4 text-left">
+              <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-black ${complete ? 'bg-coach-green text-[#07110d]' : moduleState === 'locked' ? 'bg-white/5 text-coach-muted' : 'bg-coach-green/15 text-coach-green'}`}>{moduleIndex + 1}</span>
+              <span className="min-w-0 flex-1"><span className="block truncate text-sm font-black text-coach-ink">{module.title}</span><span className="mt-1 block text-[10px] font-bold uppercase tracking-wider text-coach-muted">{curriculumStateLabel[moduleState]}</span></span>
+              {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            </button>
+            {isExpanded && <div className="border-t border-coach-line px-3 py-2">{topics.map((item, topicIndex) => {
+              const topic = item.topic
+              const topicId = `${module.id}:${topic}`
+              const disabled = item.state === 'locked'
+              const current = item.state === 'current' || item.state === 'in_progress'
+              return <button key={topicId} disabled={disabled} onClick={() => { void onSelect(module, topicIndex); onClose() }} className={`my-1 flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left ${current ? 'bg-coach-green/10 text-coach-green' : disabled ? 'cursor-not-allowed text-coach-muted/55' : 'text-coach-ink hover:bg-white/[.04]'}`}>
+                <BookOpen size={15} className="shrink-0" /><span className="min-w-0 flex-1 text-sm font-bold">{topic}</span>
+                {reviewTopicIds.includes(item.topicId) && <span className="rounded bg-coach-orange/15 px-2 py-1 text-[9px] font-black uppercase text-coach-orange">Revisar</span>}
+                <span className="text-[10px] font-black uppercase tracking-wider">{curriculumStateLabel[item.state]}</span>
+              </button>
+            })}</div>}
+          </section>
+        })}
+      </div>
+    </aside>
+  </div>
 }

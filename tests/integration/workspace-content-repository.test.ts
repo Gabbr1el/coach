@@ -167,6 +167,20 @@ describe('SqliteWorkspaceContentRepository', () => {
     db.close()
   })
 
+  it('claims initial roadmaps and usable units before progressive prefetch', () => {
+    const db = database(); const first = workspace(db); const second = workspace(db, '00000000-0000-4000-8000-000000000002'); const repository = new SqliteWorkspaceContentRepository(db)
+    const firstRevision = repository.createRevision({ workspaceId: first, inputHash: hash('a'), now: 10 })
+    const secondRevision = repository.createRevision({ workspaceId: second, inputHash: hash('b'), now: 10 })
+    const progressive = repository.enqueue({ workspaceId: first, revision: firstRevision.revision, kind: 'lesson_generate', unitKey: 'later', priority: 700, inputHash: firstRevision.inputHash, generatorContractVersion: 'lesson-v1' }, 11)
+    const usable = repository.enqueue({ workspaceId: first, revision: firstRevision.revision, kind: 'lesson_generate', unitKey: 'first', priority: 900, inputHash: firstRevision.inputHash, generatorContractVersion: 'lesson-v1' }, 12)
+    const roadmap = repository.enqueue({ workspaceId: second, revision: secondRevision.revision, kind: 'roadmap_generate', unitKey: 'roadmap', priority: 900, inputHash: secondRevision.inputHash, generatorContractVersion: 'roadmap-v1' }, 13)
+    expect(repository.claimNext({ owner: 'worker', now: 20 })?.id).toBe(roadmap.id)
+    repository.failLease({ jobId: roadmap.id, leaseToken: repository.getJob(roadmap.id)!.leaseToken!, now: 21, errorCode: 'done', retryable: false })
+    expect(repository.claimNext({ owner: 'worker', now: 22 })?.id).toBe(usable.id)
+    expect(progressive.id).not.toBe(usable.id)
+    db.close()
+  })
+
   it('uses CAS leases, requeues only expired generation, and rejects stale publication', () => {
     const db = database(); const id = workspace(db); const repository = new SqliteWorkspaceContentRepository(db)
     const revision = repository.createRevision({ workspaceId: id, inputHash: hash('b'), now: 10 })

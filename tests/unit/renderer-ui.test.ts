@@ -66,8 +66,9 @@ describe('renderer UI safeguards', () => {
 
   it('exposes dialogs and hidden row actions to keyboard users', () => {
     const app = read('src/renderer/app/App.tsx')
+    const focus = read('src/renderer/app/dialog-focus.ts')
     const home = read('src/renderer/app/HomeScreen.tsx')
-    expect(app).toContain("event.key === 'Escape'")
+    expect(focus).toContain("event.key === 'Escape'")
     expect(app).toContain('aria-labelledby="quick-notes-title"')
     expect(app).toContain('aria-label="Fechar notas"')
     expect(app).toContain('htmlFor="quick-notes"')
@@ -163,12 +164,16 @@ describe('renderer UI safeguards', () => {
 
   it('documents non-obvious fields and protects editable keyboard targets', () => {
     const app = read('src/renderer/app/App.tsx')
+    const focus = read('src/renderer/app/dialog-focus.ts')
     const lesson = read('src/renderer/app/StudyLessonView.tsx')
-    expect(app).toContain('isEditableTarget(event.target)')
-    expect(app).toContain('[contenteditable]:not([contenteditable="false"])')
+    expect(focus).toContain("event.key !== 'Tab'")
+    expect(focus).toContain('[contenteditable]:not([contenteditable="false"])')
     expect(app).toContain('Tema principal')
     expect(app).toContain('Pergunta contextual opcional')
     expect(app).toContain('Você pode responder ou criar o Workspace sem responder.')
+    expect(app).toContain('Descrição obrigatória')
+    expect(app).toContain('Completar Trilha legada')
+    expect(app).toContain('nada será alterado sem sua confirmação')
     expect(app).toContain('setAnalyzed(event.target.value.trim().length === 0)')
     expect(app).not.toContain('Nível atual (autoavaliação)')
     expect(app).not.toContain('Conhecimento técnico local do Workspace')

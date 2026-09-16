@@ -48,4 +48,11 @@ describe('PedagogicalPrefetchScheduler', () => {
     expect(jobs.map((value) => `${value.kind}:${value.unitKey}`)).toEqual(['lesson_generate:m:one', 'exercise_generate:m:one', 'lesson_generate:m:two'])
     expect(jobs.some((value) => value.kind === 'exercise_generate' && value.unitKey === 'm:two')).toBe(false)
   })
+  it('enqueues the unlocked topic lesson and exercise plus N+1 across a module boundary', () => {
+    const enqueue = vi.fn((input) => input)
+    const revision = { workspaceId: 'workspace', revision: 1, inputHash: 'a'.repeat(64) }
+    const scheduler = new PedagogicalPrefetchScheduler({ repository: { getRevision: () => revision, enqueue } as never, getRoadmap: () => ({ modules: [{ id: 'm1', topics: ['one'] }, { id: 'm2', topics: ['two', 'three'] }] }) as never })
+    const jobs = scheduler.schedule({ type: 'topic_unlocked', workspaceId: 'workspace', topicId: 'm2:two' })
+    expect(jobs.map((job) => `${job.kind}:${job.unitKey}`)).toEqual(['lesson_generate:m2:two', 'exercise_generate:m2:two', 'lesson_generate:m2:three', 'exercise_generate:m2:three'])
+  })
 })

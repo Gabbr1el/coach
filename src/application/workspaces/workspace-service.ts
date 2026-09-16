@@ -10,7 +10,7 @@ export interface WorkspaceServiceDependencies {
   readonly ensureLearningPath?: (workspaceId: string) => Promise<unknown>
   readonly academicContext?: AcademicSubjectContextService
   readonly createAcademicContexts?: (workspaceId: string, workspaceName: string, related: NonNullable<CreateWorkspaceInput['relatedSubjects']>) => void | (() => void)
-  readonly saveLearningOverrides?: (workspaceId: string, subject: string, input: Pick<CreateWorkspaceInput, 'analysisRevision' | 'declaredLevel' | 'declaredKnowledge' | 'declaredDifficulties' | 'goals' | 'localKnowledgeProjection' | 'canonicalFocus' | 'canonicalContext'>, now: number) => void
+  readonly saveLearningOverrides?: (workspaceId: string, subject: string, input: Pick<CreateWorkspaceInput, 'analysisRevision' | 'declaredLevel' | 'declaredKnowledge' | 'declaredDifficulties' | 'goals' | 'localKnowledgeProjection' | 'canonicalFocus' | 'canonicalContext' | 'curricularScope'>, now: number) => void
   readonly provisioning?: { createDraft(workspaceId: string): WorkspaceProvisioningState; start(workspaceId: string): WorkspaceProvisioningState; get(workspaceId: string): WorkspaceProvisioningState | null; retry(workspaceId: string): WorkspaceProvisioningState; discardDraft(workspaceId: string): void; reconcile?(workspaceId: string): void }
   readonly findSemanticDuplicate?: (canonicalKey: string, excludedId?: string) => Workspace | null
   readonly validateAnalysis?: (token: string, revision: number, subject: string, focus?: string, context?: string) => boolean
@@ -91,7 +91,7 @@ export class WorkspaceService {
       createdAt: now,
       updatedAt: now,
     }
-    const academic = { declaredLevel: input.declaredLevel, declaredKnowledge: input.declaredKnowledge ?? [], declaredDifficulties: input.declaredDifficulties ?? [], goals: [...(input.goals ?? []), input.objective].filter(Boolean), localKnowledgeProjection: input.localKnowledgeProjection }
+    const academic = { declaredLevel: input.declaredLevel, declaredKnowledge: input.declaredKnowledge ?? [], declaredDifficulties: input.declaredDifficulties ?? [], goals: [...(input.goals ?? []), input.objective].filter(Boolean), localKnowledgeProjection: input.localKnowledgeProjection, curricularScope: input.curricularScope }
     const workspace = await this.repository.create(record)
     let rollbackContexts: void | (() => void) = undefined
     try {

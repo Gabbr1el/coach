@@ -1,14 +1,21 @@
 import { ipcMain } from 'electron'
 import type { ExerciseService } from '../../application/exercises/exercise-service'
 import { EXERCISE_CHANNELS } from '../../shared/contracts/exercise-channels'
-import { ensureExerciseSetInputSchema, exerciseExecutionSchema, exerciseHelpInputSchema, exerciseRunInputSchema, exerciseSaveDraftInputSchema, exerciseSetSchema, exerciseSubmitInputSchema, getExerciseSetInputSchema } from '../../shared/contracts/exercise-contract'
+import { activateExerciseAdaptationInputSchema, ensureExerciseSetInputSchema, exerciseAdaptationSchema, exerciseAdaptationSelectionSchema, exerciseExecutionSchema, exerciseHelpInputSchema, exerciseHelpResultSchema, exerciseRunInputSchema, exerciseSaveDraftInputSchema, exerciseSetProjectionSchema, exerciseSetSchema, exerciseSubmitInputSchema, getExerciseSetInputSchema, projectExerciseSetsInputSchema, simplifyExerciseInputSchema } from '../../shared/contracts/exercise-contract'
 import { assertTrustedSender } from './trusted-sender'
+import type { CoachDatabase } from '../database/connection'
+import { assertAcceptedTopicAccess, assertAcceptedTopicIdAccess, assertExerciseAccess } from '../curricular-access'
 
-export function registerExerciseHandlers(service: ExerciseService): void {
-  ipcMain.handle(EXERCISE_CHANNELS.ensureSet, async (event, payload) => { assertTrustedSender(event); return exerciseSetSchema.parse(await service.ensureSet(ensureExerciseSetInputSchema.parse(payload))) })
-  ipcMain.handle(EXERCISE_CHANNELS.getSet, (event, payload) => { assertTrustedSender(event); const set = service.getSet(getExerciseSetInputSchema.parse(payload)); return set ? exerciseSetSchema.parse(set) : null })
-  ipcMain.handle(EXERCISE_CHANNELS.saveDraft, (event, payload) => { assertTrustedSender(event); service.saveDraft(exerciseSaveDraftInputSchema.parse(payload)) })
-  ipcMain.handle(EXERCISE_CHANNELS.run, async (event, payload) => { assertTrustedSender(event); return exerciseExecutionSchema.parse(await service.run(exerciseRunInputSchema.parse(payload))) })
-  ipcMain.handle(EXERCISE_CHANNELS.submit, async (event, payload) => { assertTrustedSender(event); return exerciseExecutionSchema.parse(await service.submit(exerciseSubmitInputSchema.parse(payload))) })
-  ipcMain.handle(EXERCISE_CHANNELS.requestHelp, (event, payload) => { assertTrustedSender(event); return service.requestHelp(exerciseHelpInputSchema.parse(payload)) })
+export function registerExerciseHandlers(service: ExerciseService, database?: CoachDatabase): void {
+  ipcMain.handle(EXERCISE_CHANNELS.ensureSet, async (event, payload) => { assertTrustedSender(event); const input = ensureExerciseSetInputSchema.parse(payload); if (database) assertAcceptedTopicAccess(database, input); return exerciseSetSchema.parse(await service.ensureSet(input)) })
+  ipcMain.handle(EXERCISE_CHANNELS.getSet, (event, payload) => { assertTrustedSender(event); const input = getExerciseSetInputSchema.parse(payload); if (database) assertAcceptedTopicIdAccess(database, input.workspaceId, input.topicId); const set = service.getSet(input); return set ? exerciseSetSchema.parse(set) : null })
+  ipcMain.handle(EXERCISE_CHANNELS.projectSets, (event, payload) => { assertTrustedSender(event); const input = projectExerciseSetsInputSchema.parse(payload); return exerciseSetProjectionSchema.array().parse(service.projectSets(input)) })
+  ipcMain.handle(EXERCISE_CHANNELS.saveDraft, (event, payload) => { assertTrustedSender(event); const input = exerciseSaveDraftInputSchema.parse(payload); if (database) assertExerciseAccess(database, input.workspaceId, input.exerciseId); service.saveDraft(input) })
+  ipcMain.handle(EXERCISE_CHANNELS.run, async (event, payload) => { assertTrustedSender(event); const input = exerciseRunInputSchema.parse(payload); if (database) assertExerciseAccess(database, input.workspaceId, input.exerciseId); return exerciseExecutionSchema.parse(await service.run(input)) })
+  ipcMain.handle(EXERCISE_CHANNELS.submit, async (event, payload) => { assertTrustedSender(event); const input = exerciseSubmitInputSchema.parse(payload); if (database) assertExerciseAccess(database, input.workspaceId, input.exerciseId); return exerciseExecutionSchema.parse(await service.submit(input)) })
+  ipcMain.handle(EXERCISE_CHANNELS.requestHelp, async (event, payload) => { assertTrustedSender(event); const input = exerciseHelpInputSchema.parse(payload); if (database) assertExerciseAccess(database, input.workspaceId, input.exerciseId); return exerciseHelpResultSchema.parse(await service.requestHelp(input)) })
+  ipcMain.handle(EXERCISE_CHANNELS.simplify, async (event, payload) => { assertTrustedSender(event); const input = simplifyExerciseInputSchema.parse(payload); if (database) assertExerciseAccess(database, input.workspaceId, input.exerciseId); return exerciseAdaptationSchema.parse(await service.simplify({ workspaceId: input.workspaceId, exerciseId: input.exerciseId, requestId: input.requestId })) })
+  ipcMain.handle(EXERCISE_CHANNELS.listAdaptations, (event, payload) => { assertTrustedSender(event); const input = exerciseAdaptationSelectionSchema.parse(payload); if (database) assertExerciseAccess(database, input.workspaceId, input.exerciseId); return exerciseAdaptationSchema.array().parse(service.listAdaptations(input)) })
+  ipcMain.handle(EXERCISE_CHANNELS.restoreOriginal, (event, payload) => { assertTrustedSender(event); const input = exerciseAdaptationSelectionSchema.parse(payload); if (database) assertExerciseAccess(database, input.workspaceId, input.exerciseId); return exerciseSetSchema.parse(service.restoreOriginal(input)) })
+  ipcMain.handle(EXERCISE_CHANNELS.activateAdaptation, (event, payload) => { assertTrustedSender(event); const input = activateExerciseAdaptationInputSchema.parse(payload); if (database) assertExerciseAccess(database, input.workspaceId, input.exerciseId); return exerciseSetSchema.parse(service.activateAdaptation(input)) })
 }

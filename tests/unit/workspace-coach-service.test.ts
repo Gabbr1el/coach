@@ -137,7 +137,7 @@ describe('WorkspaceCoachService', () => {
     for await (const _ of service.streamMessage(workspace.id, { requestId: messageRequestId, workspaceId: workspace.id, content: 'Me dê uma dica para continuar', activePage: 'exercises', activeExercise: { exerciseId: activeExercise.exerciseId } }, new AbortController().signal)) {}
 
     expect(requestHelp).toHaveBeenCalledTimes(1)
-    expect(requestHelp).toHaveBeenCalledWith({ workspaceId: workspace.id, exerciseId: 'exercise-1', requestId: `coach-help:${messageRequestId}`, type: 'coach_help_requested' })
+    expect(requestHelp).toHaveBeenCalledWith({ workspaceId: workspace.id, exerciseId: 'exercise-1', requestId: `coach-help:${messageRequestId}`, type: 'coach_help_requested', currentSource: 'print("typed before Tutor")', currentPrediction: null })
     const helpRequest = requestHelp.mock.calls[0]![0]
     expect(helpRequest.requestId).toBe(`coach-help:${messageRequestId}`)
     expect(helpRequest.type).not.toBe('hint_requested')

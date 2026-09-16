@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { declaredAcademicLevelSchema } from './academic-subject-context-contract'
-import { fundamentalsAnswerSchema, implementationLanguageSchema } from './workspace-onboarding-contract'
+import { curricularScopeSchema, fundamentalsAnswerSchema, implementationLanguageSchema } from './workspace-onboarding-contract'
 
 export const workspaceIdSchema = z.uuid()
 
@@ -15,6 +15,7 @@ export const createWorkspaceInputSchema = z.object({
   fundamentals: fundamentalsAnswerSchema.optional(),
   implementationLanguage: implementationLanguageSchema.optional(),
   localKnowledgeProjection: z.string().max(4000).optional(),
+  curricularScope: curricularScopeSchema.optional(),
   duplicateOverride: z.object({ confirmed: z.literal(true), meaningfulDifference: z.string().trim().min(8).max(500) }).strict().optional(),
   declaredLevel: declaredAcademicLevelSchema.optional(),
   declaredKnowledge: z.array(z.string().trim().min(1).max(500)).max(50).optional(),

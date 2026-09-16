@@ -1,6 +1,6 @@
 import type { AIProviderManager } from '../ai/ai-provider-manager'
 import type { ConversationRepository } from '../conversations/conversation-repository'
-import { workspaceTopicAnalysisStatusSchema, type WorkspaceRelatedContext, type WorkspaceTopicAnalysis, type WorkspaceTopicAnalysisStatus } from '../../shared/contracts/workspace-onboarding-contract'
+import { workspaceTopicAnalysisStatusSchema, type CurricularScope, type WorkspaceRelatedContext, type WorkspaceTopicAnalysis, type WorkspaceTopicAnalysisStatus } from '../../shared/contracts/workspace-onboarding-contract'
 import { z } from 'zod'
 import { randomUUID } from 'node:crypto'
 import type { analyzeWorkspaceTopicInputSchema } from '../../shared/contracts/workspace-onboarding-contract'
@@ -33,6 +33,7 @@ function providerInterpretationIsGrounded(topic: string, value: z.infer<typeof p
 }
 function providerStatusIsCoherent(topic: string, local: SemanticAnalysis, value: z.infer<typeof providerAnalysisSchema>): boolean {
   if (value.status === 'INVALID') return local.status === 'INVALID'
+  if (value.status === 'REQUIRED_DESCRIPTION') return local.status === 'REQUIRED_DESCRIPTION' && value.question !== null
   if (value.status === 'VALID') return value.question === null
   if (value.status === 'NEEDS_CLARIFICATION') return value.question !== null
   if (value.question !== null) return false
@@ -48,10 +49,27 @@ function fallbackSemantic(topic: string): SemanticAnalysis {
   if (/^(?:ingles|english)$/.test(value)) return { status: 'VALID', canonicalSubject: 'Inglês', canonicalFocus: 'Inglês', explanation: 'Reconheci Inglês como área de estudo. Não preciso de informação adicional para criar o Workspace.', question: null }
   if (/^(?:matematica|math|mathematics)$/.test(value)) return { status: 'VALID', canonicalSubject: 'Matemática', canonicalFocus: 'Matemática', explanation: 'Reconheci Matemática como área de estudo. Não preciso de informação adicional para criar o Workspace.', question: null }
   if (/^(?:matematca|matemtica|matematia)$/.test(value)) return { status: 'NEEDS_CONFIRMATION', canonicalSubject: 'Matemática', canonicalFocus: 'Matemática', explanation: `Corrigi o provável erro de digitação “${topic.trim()}” para “Matemática”.`, question: null, confirmationSubject: 'Matemática' }
-  if (/^(?:asdf|asdfg|asdfgh|qwerty|xyzzy|teste teste|aaa+|kkk+)$/.test(value) || !/[aeiou]/.test(value) || /(.)\1{3}/.test(value)) return { status: 'INVALID', canonicalSubject: '', canonicalFocus: '', explanation: 'Não reconheci um tema acadêmico ou habilidade estudável. Informe uma disciplina, assunto ou habilidade específica.', question: null }
+  if (/^(?:asdf|asdfg|asdfgh|qwerty|xyzzy|teste teste|aaa+|kkk+)$/.test(value) || /(.)\1{3}/.test(value)) return { status: 'INVALID', canonicalSubject: '', canonicalFocus: '', explanation: 'Não reconheci um tema acadêmico ou habilidade estudável. Informe uma disciplina, assunto ou habilidade específica.', question: null }
   if (!/^[\p{L}\p{N}+#.()\s-]{2,80}$/u.test(topic.trim())) return { status: 'INVALID', canonicalSubject: '', canonicalFocus: '', explanation: 'O tema informado não parece uma disciplina, assunto ou habilidade estudável.', question: null }
+  if (/^[\p{L}\p{N}]{2,5}$/u.test(topic.trim())) return { status: 'REQUIRED_DESCRIPTION', canonicalSubject: '', canonicalFocus: '', explanation: `Não consegui identificar “${topic.trim()}” com segurança. Descreva o significado ou a área de estudo para eu analisar novamente.`, question: `O que “${topic.trim()}” significa neste contexto de estudo?` }
   const subject = normalizeSubject(topic).subject
   return { status: 'NEEDS_CLARIFICATION', canonicalSubject: subject, canonicalFocus: subject, explanation: `Interpretei “${topic.trim()}” como “${subject}”. Você pode criar agora ou acrescentar um contexto opcional.`, question: `Há algum recorte ou experiência anterior relevante para ${subject}?` }
+}
+
+function extractCurricularScope(answer?: string): CurricularScope {
+  const empty: CurricularScope = { requestedStart: null, coveredThrough: null, focusFrom: null, skipFundamentals: false, preferences: [] }
+  if (!answer?.trim()) return empty
+  const compact = answer.trim().replace(/\s+/g, ' ')
+  const capture = (patterns: RegExp[]) => patterns.map((pattern) => compact.match(pattern)?.[1]?.trim().replace(/[.;,]+$/, '')).find(Boolean) ?? null
+  const requestedStart = capture([/(?:come(?:çar|car)|iniciar|partir)\s+(?:a\s+partir\s+)?(?:de|do|da|em)\s+(.+?)(?=\s*(?:,|;|\.|$|e\s+(?:focar|ir|seguir|cobrir|abranger|percorrer|chegar)))/i, /(?:start|begin)\s+(?:from|at)\s+(.+?)(?=\s*(?:,|;|\.|$|and\s+(?:focus|continue|cover)))/i])
+  const coveredThrough = capture([/\b(?:cobrir|abranger|percorrer|chegar|ir)\b\s+(?:at[eé]\s+)?(.+?)(?=\s*(?:,|;|\.|$|sem\s+(?:revisar|fundamentos?)))/i, /(?:j[aá]\s+)?(?:vi|estudei|cobri|cheguei)\s+(?:at[eé]|até o|até a)\s+(.+?)(?=\s*(?:,|;|\.|$))/i, /\b(?:cover|continue)\b\s+(?:through|up to|to)\s+(.+?)(?=\s*(?:,|;|\.|$))/i, /(?:covered|studied)\s+(?:through|up to)\s+(.+?)(?=\s*(?:,|;|\.|$))/i])
+  const focusFrom = capture([/(?:foco|focar|ênfase|enfase)\s+(?:a\s+partir\s+)?(?:em|no|na|de|do|da)\s+(.+?)(?=\s*(?:,|;|\.|$))/i, /(?:focus)\s+(?:from|on)\s+(.+?)(?=\s*(?:,|;|\.|$))/i])
+  const skipFundamentals = /\b(?:sem|pular|pule|dispensar|não revisar|nao revisar|skip|without)\b.{0,30}\b(?:fundamentos?|b[aá]sico|basics?)\b/i.test(compact) || Boolean(requestedStart && /(?:a partir|partir|start|begin)/i.test(compact))
+  const preferences = [
+    /\b(?:prefiro|preferência|preferencia|quero)\s+(.+?)(?=\s*(?:;|\.|$))/gi,
+    /\b(?:prefer|preference)\s+(.+?)(?=\s*(?:;|\.|$))/gi,
+  ].flatMap((pattern) => [...compact.matchAll(pattern)].map((match) => match[1]!.trim())).filter((value) => value.length > 0 && value.length <= 300).slice(0, 20)
+  return { requestedStart, coveredThrough, focusFrom, skipFundamentals, preferences }
 }
 
 function implementationFrom(answer: string): string | null {
@@ -80,7 +98,11 @@ export class WorkspaceOnboardingService {
     return context
   }
   async analyze(topic: string, diagnosticAnswer?: string, choices: Pick<z.infer<typeof analyzeWorkspaceTopicInputSchema>, 'confirmation' | 'fundamentals' | 'implementationLanguage'> = {}): Promise<WorkspaceTopicAnalysis> {
-    const fallback = fallbackSemantic(topic)
+    const initialFallback = fallbackSemantic(topic)
+    const describedSubject = initialFallback.status === 'REQUIRED_DESCRIPTION' && diagnosticAnswer
+      ? diagnosticAnswer.match(/^(?:[\p{L}\p{N}+#.()-]+\s+)?(?:significa|quer dizer|is|means)\s+(.+)$/iu)?.[1]?.trim()
+      : null
+    const fallback = describedSubject ? fallbackSemantic(describedSubject) : initialFallback
     let semantic = fallback
     const provider = this.dependencies.providerManager.route('planner')
     if (choices.confirmation) {
@@ -93,14 +115,15 @@ export class WorkspaceOnboardingService {
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error('Workspace topic provider timed out')) }, this.dependencies.providerTimeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS) })
-        const response = await Promise.race([provider.sendMessage({ messages: [{ role: 'system', content: 'Analise somente o tema fornecido. Você pode normalizar grafia, expandir abreviação ou especificar um foco diretamente relacionado, mas nunca substituir por outro assunto. Retorne SOMENTE JSON estrito: {status:VALID|NEEDS_CONFIRMATION|NEEDS_CLARIFICATION|INVALID,canonicalSubject,canonicalFocus,explanation,question}. question deve ser null ou uma única pergunta opcional. Não invente currículo, domínio ou evidência.' }, { role: 'user', content: JSON.stringify({ topic: topic.trim() }) }], maxOutputTokens: 300, signal: controller.signal }), timeout])
+        const response = await Promise.race([provider.sendMessage({ messages: [{ role: 'system', content: 'Analise somente o tema fornecido. Você pode normalizar grafia, expandir abreviação ou especificar um foco diretamente relacionado, mas nunca substituir por outro assunto. Retorne SOMENTE JSON estrito: {status:VALID|NEEDS_CONFIRMATION|NEEDS_CLARIFICATION|REQUIRED_DESCRIPTION|INVALID,canonicalSubject,canonicalFocus,explanation,question}. question deve ser null ou uma única pergunta opcional. Não invente currículo, domínio ou evidência.' }, { role: 'user', content: JSON.stringify({ topic: describedSubject ?? topic.trim(), description: describedSubject ? diagnosticAnswer : null }) }], maxOutputTokens: 300, signal: controller.signal }), timeout])
         const parsed = providerAnalysisSchema.parse(JSON.parse(response.content.replace(/^```json\s*|\s*```$/g, '')))
         if (providerInterpretationIsGrounded(topic, parsed) && providerStatusIsCoherent(topic, fallback, parsed)) semantic = parsed
       } catch {} finally { if (timer) clearTimeout(timer) }
     }
-    if (!choices.confirmation && (fallback.status === 'INVALID' || fallback.confirmationSubject || /^(?:poo|programacao orientada a objetos?|estruturas? de dados|ingles|english|matematica|math|mathematics)$/i.test(plain(topic)))) semantic = fallback
-    if (semantic.status === 'INVALID') {
-      const finishInvalid = this.finish({ status: 'INVALID', explanation: semantic.explanation, topic: topic.trim(), canonicalSubject: '', canonicalFocus: '', canonicalContext: '', objective: '', needsDiagnostic: false, question: null, questionOptional: false, contextSource: 'none', declaredLevel: null, declaredKnowledge: [], declaredDifficulties: [], declarations: [], evidence: [], goals: [], relatedContexts: [], isProgramming: false, needsFundamentals: false, fundamentals: null, implementationLanguage: null, needsImplementationLanguage: false, localKnowledgeProjection: '' })
+    if (!choices.confirmation && (fallback.status === 'INVALID' || fallback.status === 'REQUIRED_DESCRIPTION' || fallback.confirmationSubject || /^(?:poo|programacao orientada a objetos?|estruturas? de dados|ingles|english|matematica|math|mathematics)$/i.test(plain(describedSubject ?? topic)))) semantic = fallback
+    const curricularScope = extractCurricularScope(diagnosticAnswer)
+    if (semantic.status === 'INVALID' || semantic.status === 'REQUIRED_DESCRIPTION') {
+      const finishInvalid = this.finish({ status: semantic.status, explanation: semantic.explanation, topic: topic.trim(), canonicalSubject: '', canonicalFocus: '', canonicalContext: '', objective: '', needsDiagnostic: semantic.status === 'REQUIRED_DESCRIPTION', question: semantic.question, questionOptional: false, contextSource: 'none', declaredLevel: null, declaredKnowledge: [], declaredDifficulties: [], declarations: [], evidence: [], goals: [], relatedContexts: [], isProgramming: false, needsFundamentals: false, fundamentals: null, implementationLanguage: null, needsImplementationLanguage: false, curricularScope, localKnowledgeProjection: '' })
       return finishInvalid
     }
     const normalizedTopic = semantic.canonicalSubject
@@ -119,7 +142,7 @@ export class WorkspaceOnboardingService {
     const declarations = [...(persisted?.sourceEvidence ?? []), ...context.declared]
     const evidence = [...context.observed]
     const question = diagnosticAnswer ? null : semantic.question
-    return this.finish({ status: semantic.status, explanation: semantic.explanation, topic: normalizedTopic, objective, needsDiagnostic: semantic.status === 'NEEDS_CONFIRMATION', question, questionOptional: Boolean(question), contextSource: persisted ? 'academic-context' : diagnosticAnswer ? 'diagnostic' : inferredImplementation ? 'workspace-context' : hasDeclaredKnowledge ? 'general-memory' : 'fallback', canonicalSubject: normalizedTopic, canonicalFocus, canonicalContext, declaredLevel: persisted?.declaredLevel ?? null, declaredKnowledge: persisted?.declaredKnowledge ?? context.declared, declaredDifficulties: persisted?.declaredDifficulties ?? [], declarations, evidence, goals: persisted?.goals ?? [], relatedContexts, isProgramming: isProgrammingSubject(normalizedTopic), needsFundamentals: false, fundamentals: choices.fundamentals ?? null, implementationLanguage: choices.implementationLanguage ?? null, needsImplementationLanguage: false, localKnowledgeProjection: [...(persisted?.declaredKnowledge ?? context.declared), ...(persisted?.declaredDifficulties ?? []).map((item) => `Dificuldade declarada: ${item}`), ...(diagnosticAnswer ? [`Contexto declarado: ${diagnosticAnswer}`] : []), ...(inferredImplementation ? [`Contexto relacionado: ${inferredImplementation}`] : [])].join('\n') })
+    return this.finish({ status: semantic.status, explanation: semantic.explanation, topic: normalizedTopic, objective, needsDiagnostic: semantic.status === 'NEEDS_CONFIRMATION', question, questionOptional: Boolean(question), contextSource: persisted ? 'academic-context' : diagnosticAnswer ? 'diagnostic' : inferredImplementation ? 'workspace-context' : hasDeclaredKnowledge ? 'general-memory' : 'fallback', canonicalSubject: normalizedTopic, canonicalFocus, canonicalContext, declaredLevel: persisted?.declaredLevel ?? null, declaredKnowledge: persisted?.declaredKnowledge ?? context.declared, declaredDifficulties: persisted?.declaredDifficulties ?? [], declarations, evidence, goals: persisted?.goals ?? [], relatedContexts, isProgramming: isProgrammingSubject(normalizedTopic), needsFundamentals: false, fundamentals: choices.fundamentals ?? null, implementationLanguage: choices.implementationLanguage ?? null, needsImplementationLanguage: false, curricularScope, localKnowledgeProjection: [...(persisted?.declaredKnowledge ?? context.declared), ...(persisted?.declaredDifficulties ?? []).map((item) => `Dificuldade declarada: ${item}`), ...(diagnosticAnswer ? [`Contexto declarado: ${diagnosticAnswer}`] : []), ...(inferredImplementation ? [`Contexto relacionado: ${inferredImplementation}`] : [])].join('\n') })
   }
   private finish(value: Omit<WorkspaceTopicAnalysis, 'analysisToken' | 'revision'>): WorkspaceTopicAnalysis { const revision = Date.now(); const analysisToken = randomUUID(); this.analyses.set(analysisToken, { revision, subject: value.canonicalSubject, focus: value.canonicalFocus, context: value.canonicalContext, explanation: value.explanation, status: value.status, creatable: value.status === 'VALID' || value.status === 'NEEDS_CLARIFICATION' }); if (this.analyses.size > 100) this.analyses.delete(this.analyses.keys().next().value!); return { ...value, revision, analysisToken } }
   validate(token: string, revision: number, subject: string, focus = '', context = ''): boolean { const value = this.analyses.get(token); return Boolean(value?.creatable && value.revision === revision && normalizeSubject(value.subject).subject === normalizeSubject(subject).subject && value.focus === focus && value.context === context) }

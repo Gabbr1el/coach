@@ -63,7 +63,19 @@
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*"
     ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
+    },
     "linux": {
+      "icon": "build/icon.png",
       "target": [
         "dir"
       ],

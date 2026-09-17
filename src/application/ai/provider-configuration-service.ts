@@ -19,7 +19,7 @@ export type ProviderHealth = {
 const OPENAI_SECRET_REFERENCE = 'provider-openai-api-key'
 
 const LOCAL_OMNIROUTE_ACCOUNT_ID =
-  'omniroute-local-default'
+  crypto.randomUUID()
 
 function isLocalOmniRoute(
   baseUrl: string | null,
@@ -239,6 +239,54 @@ export class ProviderConfigurationService {
       ?? operationalAccountId
       ?? null
 
+    const activeProvider =
+      this.manager.getActive()
+
+    /*
+     * O OmniRoute pode entrar ou sair do ar enquanto o Coach
+     * permanece aberto.
+     *
+     * checkAvailability() consulta somente GET /models.
+     * Não envia prompt e não gera resposta do modelo.
+     */
+    if (
+      accountId
+      && activeProvider?.id === 'omniroute'
+      && activeProvider.checkAvailability
+    ) {
+      try {
+        await activeProvider
+          .checkAvailability()
+
+        const previousHealth =
+          this.healthByAccount.get(
+            accountId,
+          )
+
+        this.healthByAccount.set(
+          accountId,
+          {
+            connected: true,
+            quota:
+              previousHealth?.quota
+              ?? 'unknown',
+          },
+        )
+      } catch (error) {
+        this.healthByAccount.set(
+          accountId,
+          failedHealth(error),
+        )
+      }
+    }
+
+    const healthKnown =
+      accountId
+        ? this.healthByAccount.has(
+            accountId,
+          )
+        : false
+
     const health =
       accountId
         ? this.healthByAccount.get(
@@ -258,22 +306,26 @@ export class ProviderConfigurationService {
         || configuration,
       )
 
+    const connected =
+      health.connected
+      && Boolean(
+        activeProvider,
+      )
+
     return {
       configured,
 
-      connected:
-        health.connected
-        && Boolean(
-          this.manager.getActive(),
-        ),
+      connected,
 
       connectionState:
         configured
-          ? health.connected
+          ? connected
             ? 'connected'
-            : this.manager.getActive()
-              ? 'unchecked'
-              : 'unreachable'
+            : healthKnown
+              ? 'unreachable'
+              : activeProvider
+                ? 'unchecked'
+                : 'unreachable'
           : 'not-configured',
 
       quota:
@@ -301,7 +353,9 @@ export class ProviderConfigurationService {
         accountId,
 
       sessionOnly:
-        Boolean(sessionAccount),
+        Boolean(
+          sessionAccount,
+        ),
     }
   }
 
@@ -929,9 +983,15 @@ export class ProviderConfigurationService {
             )
 
             if (wasActive) {
+              /*
+               * Desativar a conta é uma operação local.
+               * A tentativa de escolher outra conta é best-effort:
+               * falha de rede de outro provider não pode desfazer
+               * nem transformar a desativação em erro.
+               */
               await this.ensureActiveProvider(
-                true,
-              )
+                false,
+              ).catch(() => {})
             }
 
             return this.getStatus()
@@ -988,9 +1048,14 @@ export class ProviderConfigurationService {
           )
 
           if (wasActive) {
+            /*
+             * A configuração já foi desativada no repositório.
+             * Encontrar uma substituta não faz parte do sucesso
+             * da operação de desativação.
+             */
             await this.ensureActiveProvider(
-              true,
-            )
+              false,
+            ).catch(() => {})
           }
 
           return this.getStatus()
@@ -1320,8 +1385,8 @@ async updateAccount(
 
       if (wasActive) {
         await this.ensureActiveProvider(
-          true,
-        )
+          false,
+        ).catch(() => {})
       }
 
       return this.getStatus()
@@ -1376,8 +1441,8 @@ async updateAccount(
 
     if (wasActive) {
       await this.ensureActiveProvider(
-        true,
-      )
+        false,
+      ).catch(() => {})
     }
 
     return this.getStatus()
@@ -1519,11 +1584,14 @@ async updateAccount(
       }
     }
 
-    this.activateLocalOmniRoute(
-      'OmniRoute local',
-      'http://127.0.0.1:20128/v1',
-      'codex/gpt-5.6-sol',
-    )
+    /*
+     * Não criamos mais um OmniRoute implícito quando nenhuma conta
+     * configurada está disponível.
+     *
+     * A Central de IA tornou a conexão uma decisão explícita do usuário.
+     * Se nenhuma conta puder ser selecionada, o Coach permanece sem um
+     * provider ativo até que uma conta seja conectada ou escolhida.
+     */
   }
 
   private createProviderForConfiguration(

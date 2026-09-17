@@ -3,7 +3,7 @@ import { BookOpen, CalendarDays, MoreHorizontal, Plus, Send, Sparkles, X } from 
 import type { ApplicationInfo } from '../../shared/contracts/application-contract'
 import type { CreateWorkspaceInput, Workspace, WorkspaceSummary } from '../../shared/contracts/workspace-contract'
 import type { ConversationMessage } from '../../shared/contracts/conversation-contract'
-import type { ConfigureProviderResult, ProviderAccountSummary, ProviderStatus } from '../../shared/contracts/provider-contract'
+import type { ProviderAccountSummary, ProviderStatus } from '../../shared/contracts/provider-contract'
 import type { DailyStudyReport, StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
 import type { GlobalReportOverview } from '../../shared/contracts/report-contract'
 import type { LearningPathState, Roadmap, RoadmapModule, RoadmapRebuildPreview } from '../../shared/contracts/roadmap-contract'
@@ -160,111 +160,6 @@ function WorkspaceCreationScreen({ open, submitting, initial, onClose, onSubmit 
   )
 }
 
-function ProviderSettingsDialog({ status, accounts, onClose, onConfigured, onConfiguredCompatible, onSelect, onRemove }: {
-  status: ProviderStatus | null
-  accounts: ProviderAccountSummary[]
-  onClose: () => void
-  onConfigured: (label: string, apiKey: string, model: string, persistence: 'secure-vault' | 'session') => Promise<ConfigureProviderResult>
-  onConfiguredCompatible: (
-  connectorId:
-    | 'omniroute'
-    | 'openai-compatible',
-  label: string,
-  baseUrl: string,
-  apiKey: string,
-  model: string,
-  persistence:
-    | 'secure-vault'
-    | 'session',
-) => Promise<ConfigureProviderResult>
-  onSelect: (accountId: string) => Promise<void>
-  onRemove: (accountId: string) => Promise<void>
-}) {
-  const [label, setLabel] = useState('OmniRoute local')
-  const [apiKey, setApiKey] = useState('omniroute')
-  const [model, setModel] = useState('codex/gpt-5.6-sol')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [persistence, setPersistence] = useState<'secure-vault' | 'session'>('session')
-  const [providerType, setProviderType] = useState<'openai' | 'omniroute' | 'openai-compatible'>('omniroute')
-  const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:20128/v1')
-
-  const secureStorageUnavailable = status?.secureStorageAvailable === false
-  const effectivePersistence = secureStorageUnavailable ? 'session' : persistence
-  const dialogRef = useDialogFocus<HTMLDivElement>(true, onClose)
-
-  async function configure() {
-    setSaving(true)
-    setError(null)
-    try {
-      const result = providerType === 'openai'
-        ? await onConfigured(label, apiKey, model, effectivePersistence)
-        : await onConfiguredCompatible(
-            providerType,
-            label,
-            baseUrl,
-            apiKey,
-            model,
-            effectivePersistence,
-          )
-      if (!result.ok) {
-        const providerLabel =
-          providerType === 'openai'
-            ? 'A OpenAI'
-            : providerType === 'omniroute'
-              ? 'O OmniRoute'
-              : 'O provedor compatível'
-        const messages = {
-          INVALID_CREDENTIAL: `${providerLabel} recusou a credencial. Verifique a chave ou token configurado.`,
-          INSUFFICIENT_QUOTA: 'A conta de API está sem créditos ou faturamento ativo. ChatGPT Plus não inclui créditos da API.',
-          MODEL_UNAVAILABLE: `${providerLabel} aceitou a credencial, mas o modelo “${model}” não está disponível. Verifique o identificador do modelo e o acesso desta conta.`,
-          ACCESS_RESTRICTED: `${providerLabel} bloqueou o acesso por permissão, política ou região.`,
-          RATE_LIMITED: `${providerLabel} está limitando temporariamente as requisições. Aguarde um pouco e tente novamente.`,
-          NETWORK_UNAVAILABLE: `Não foi possível alcançar ${providerType === 'openai' ? 'a OpenAI' : providerType === 'omniroute' ? 'o OmniRoute' : 'o provedor compatível'}. Verifique o serviço, rede ou firewall.`,
-          SECURE_STORAGE_UNAVAILABLE: 'O cofre seguro não está disponível. Escolha “Somente nesta sessão”.',
-          INVALID_CONFIGURATION: 'A configuração enviada é inválida. Revise nome, chave, modelo e armazenamento.',
-          ACCOUNT_DISABLED: 'Esta conta de IA está desativada.',
-          ACCOUNT_NOT_FOUND: 'A conta de IA não foi encontrada.',
-          ACCOUNT_LIMIT_REACHED: 'O limite de 10 contas de IA foi atingido.',
-          UNKNOWN: `${providerLabel} retornou uma resposta inesperada. Confira a conta e tente novamente.`,
-        } as const
-        setError(messages[result.code])
-        return
-      }
-      setApiKey('')
-    } catch {
-      setError('A conexão falhou. Verifique a chave, o modelo e o acesso de API da conta.')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div ref={dialogRef} className="fixed inset-0 z-30 overflow-y-auto bg-coach-ink/55 p-3 backdrop-blur-sm sm:p-5" role="dialog" aria-modal="true" aria-labelledby="provider-settings-title">
-      <div className="flex min-h-full items-center justify-center">
-      <section className="my-3 w-full max-w-lg rounded-[2rem] bg-coach-paper p-5 shadow-2xl sm:my-5 sm:p-7">
-        <div className="flex items-start justify-between"><div><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">BYOK · sua chave</p><h2 id="provider-settings-title" className="mt-2 font-display text-3xl font-black">Provedor de IA</h2></div><button type="button" aria-label="Fechar" onClick={() => { setApiKey(''); onClose() }} className="rounded-full p-2 hover:bg-black/5"><X /></button></div>
-        <p className="mt-4 text-sm leading-6 text-coach-muted">As mensagens recentes necessárias serão enviadas ao provedor escolhido. Na OpenAI direta, o Coach desativa o armazenamento remoto na requisição; em endpoints compatíveis, retenção e privacidade dependem do serviço conectado.</p>
-        {accounts.length > 0 && <div className="mt-6 space-y-2">{accounts.map((account) => <div key={account.id} className={`flex items-center justify-between rounded-xl border p-3 ${account.isActive ? 'border-emerald-300 bg-emerald-50' : 'border-coach-line bg-[#111217]'}`}><div><p className="font-bold">{account.label}</p><p className="text-xs text-coach-muted">{account.providerName} · {account.model}</p></div><div className="flex gap-2">{!account.isActive && <button type="button" disabled={saving} onClick={() => { setSaving(true); setError(null); void onSelect(account.id).catch(() => setError('Não foi possível ativar esta conta. Verifique a credencial e a conexão.')).finally(() => setSaving(false)) }} className="rounded-lg border border-coach-line px-3 py-2 text-xs font-bold">Usar</button>}<button type="button" disabled={saving} onClick={() => { setSaving(true); setError(null); void onRemove(account.id).catch(() => setError('Não foi possível remover a conta com segurança.')).finally(() => setSaving(false)) }} className="rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-700">Remover</button></div></div>)}</div>}
-          <form className="mt-6" onSubmit={(event) => { event.preventDefault(); void configure() }}>
-            {secureStorageUnavailable && <div className="mb-5 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">O cofre seguro persistente não está disponível neste Linux. Você ainda pode usar a chave somente nesta sessão; ela será esquecida ao fechar o Coach.</div>}
-            {error && <div className="mb-5 rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">{error}</div>}
-            <label className="block text-sm font-bold">Tipo de conexão<select value={providerType} onChange={(event) => { const type = event.target.value as 'openai' | 'omniroute' | 'openai-compatible'; setProviderType(type); if (type === 'omniroute') { setLabel('OmniRoute local'); setBaseUrl('http://127.0.0.1:20128/v1'); setApiKey('omniroute'); setModel('codex/gpt-5.6-sol'); setPersistence('session') } else if (type === 'openai-compatible') { setLabel('Provedor compatível'); setBaseUrl(''); setApiKey(''); setModel('') } else { setLabel('OpenAI'); setApiKey(''); setModel('gpt-4.1-mini') } }} className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] px-4 py-3"><option value="omniroute">OmniRoute</option><option value="openai">OpenAI direta</option><option value="openai-compatible">OpenAI-compatible</option></select></label>
-            <label className="mt-5 block text-sm font-bold">Nome desta conta<input required maxLength={60} value={label} onChange={(event) => setLabel(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none focus:border-coach-green" /></label>
-            {providerType !== 'openai' && <label className="mt-5 block text-sm font-bold">Endpoint<input required value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={providerType === 'omniroute' ? 'http://127.0.0.1:20128/v1' : 'https://api.exemplo.com/v1'} className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] px-4 py-3 font-mono text-sm outline-none focus:border-coach-green" /></label>}
-            <label className="mt-5 block text-sm font-bold">{providerType === 'openai' ? 'Chave de API OpenAI' : providerType === 'omniroute' ? 'Token OmniRoute' : 'Token / chave de API'}<input type="password" autoComplete="off" required minLength={providerType === 'openai' ? 20 : 1} maxLength={512} value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={providerType === 'openai' ? 'sk-…' : providerType === 'omniroute' ? 'Token local' : 'Token ou chave do provedor'} className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] px-4 py-3 font-mono outline-none focus:border-coach-green" /></label>
-            <label className="mt-5 block text-sm font-bold">Modelo<input required maxLength={100} value={model} onChange={(event) => setModel(event.target.value)} className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none focus:border-coach-green" /></label>
-            <label className="mt-5 block text-sm font-bold">Armazenamento<select value={effectivePersistence} onChange={(event) => setPersistence(event.target.value as 'secure-vault' | 'session')} className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none"><option value="session">Somente nesta sessão</option>{!secureStorageUnavailable && <option value="secure-vault">Cofre seguro do sistema</option>}</select></label>
-            <button disabled={saving || !apiKey.trim()} className="mt-6 w-full rounded-xl bg-coach-orange px-5 py-3 font-extrabold text-white disabled:opacity-45">{saving ? 'Testando conexão…' : accounts.length ? 'Adicionar e usar conta' : 'Testar e conectar'}</button>
-          </form>
-      </section>
-      </div>
-    </div>
-  )
-}
-
-
-
 export function App() {
   const [applicationInfo, setApplicationInfo] = useState<ApplicationInfo | null>(null)
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
@@ -285,7 +180,6 @@ export function App() {
   const [plannerLoading, setPlannerLoading] = useState(true)
   const [plannerError, setPlannerError] = useState<string | null>(null)
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null)
-  const [providerDialogOpen, setProviderDialogOpen] = useState(false)
   const [providerAccounts, setProviderAccounts] = useState<ProviderAccountSummary[]>([])
   const [workspaceMessages, setWorkspaceMessages] = useState<ConversationMessage[]>([])
   const [workspaceInput, setWorkspaceInput] = useState('')
@@ -392,6 +286,54 @@ export function App() {
     void window.coach.plannerAction.listPending().then(setPlannerActions)
     void window.coach.report.getGlobalOverview().then(setGlobalReport).catch(() => setPlannerError('Não foi possível carregar o panorama geral.'))
   }, [loadWorkspaces])
+
+  useEffect(() => {
+    let disposed = false
+    let checking = false
+
+    const refreshProviderHealth =
+      async () => {
+        if (checking)
+          return
+
+        checking = true
+
+        try {
+          const status =
+            await window.coach.provider
+              .getStatus()
+
+          if (!disposed) {
+            setProviderStatus(
+              status,
+            )
+          }
+        } catch {
+          /*
+           * Falha isolada no IPC não deve poluir o Planner.
+           * A próxima verificação tenta novamente.
+           */
+        } finally {
+          checking = false
+        }
+      }
+
+    const timer =
+      window.setInterval(
+        () => {
+          void refreshProviderHealth()
+        },
+        5_000,
+      )
+
+    return () => {
+      disposed = true
+
+      window.clearInterval(
+        timer,
+      )
+    }
+  }, [])
 
   useEffect(() => { if (!workspaces.some((workspace) => workspace.provisioning && workspace.provisioning.status !== 'ready')) return; const timer = window.setInterval(() => void loadWorkspaces(), 1500); return () => window.clearInterval(timer) }, [workspaces, loadWorkspaces])
 
@@ -845,7 +787,19 @@ export function App() {
       })
     }
     return (
-      <WorkspaceShell name={selected.name} objective={selected.objective} page={workspacePage} timerLabel={timerLabel} timerRunning={studyState?.timerStatus === 'running'} finishing={sessionCompleting} coachMessages={workspaceMessages} streamedMessage={workspaceStreamedContent} coachInput={workspaceInput} coachBusy={workspaceSending || workspaceLoading} coachStage={workspaceSendStage} coachContextSummary={workspaceContextSummary} coachError={workspaceError} plannerActions={workspacePlannerActions} conversationRef={workspaceConversationPane} messageEndRef={workspaceMessageEnd} onConversationScroll={() => { const pane = workspaceConversationPane.current; if (pane) workspaceFollowLatest.current = isNearChatBottom(pane) }} onPage={selectPage} onHome={() => { workspaceOpenEpoch.current += 1; stopWorkspaceStream(); void (workspacePage === 'exercises' ? leaveExercises() : Promise.resolve()).then(() => { setSelected(null); setHomeSection('home'); void window.coach.planning.listPriorities().then(setPriorities) }) }} onSettings={() => setProviderDialogOpen(true)} onToggleTimer={() => { if (!studyState || timerUpdating) return; const workspaceId = selected.id; const epoch = workspaceLoadEpoch.current; const action = studyState.timerStatus === 'running' ? 'pause' : 'start'; setTimerUpdating(true); const configure = action === 'start' && studyState.timerStatus === 'idle' && studyState.timerDurationSeconds !== adaptiveMinutes * 60 ? window.coach.studyWorkspace.setTimerDuration({ workspaceId, durationSeconds: adaptiveMinutes * 60 }) : Promise.resolve(studyState); void configure.then(() => window.coach.studyWorkspace.updateTimer({ workspaceId, action })).then(applyStudyState(workspaceId, epoch)).catch(() => setWorkspaceError('Não foi possível atualizar o foco.')).finally(() => setTimerUpdating(false)) }} onFinish={() => { if (sessionCompleting) return; setSessionCompleting(true); void window.coach.studyWorkspace.completeSession(selected.id).then(setStudyState).finally(() => setSessionCompleting(false)) }} onCoachInput={setWorkspaceInput} onCoachSend={sendWorkspaceMessage} onResolveAction={(actionId, decision) => void resolveWorkspacePlannerAction(selected.id, actionId, decision)} onNotes={() => setNotesOpen(true)}>
+      <WorkspaceShell name={selected.name} objective={selected.objective} page={workspacePage} timerLabel={timerLabel} timerRunning={studyState?.timerStatus === 'running'} finishing={sessionCompleting} coachMessages={workspaceMessages} streamedMessage={workspaceStreamedContent} coachInput={workspaceInput} coachBusy={workspaceSending || workspaceLoading} coachStage={workspaceSendStage} coachContextSummary={workspaceContextSummary} coachError={workspaceError} plannerActions={workspacePlannerActions} conversationRef={workspaceConversationPane} messageEndRef={workspaceMessageEnd} onConversationScroll={() => { const pane = workspaceConversationPane.current; if (pane) workspaceFollowLatest.current = isNearChatBottom(pane) }} onPage={selectPage} onHome={() => { workspaceOpenEpoch.current += 1; stopWorkspaceStream(); void (workspacePage === 'exercises' ? leaveExercises() : Promise.resolve()).then(() => { setSelected(null); setHomeSection('home'); void window.coach.planning.listPriorities().then(setPriorities) }) }} onSettings={() => {
+        workspaceOpenEpoch.current += 1
+        stopWorkspaceStream()
+
+        void (
+          workspacePage === 'exercises'
+            ? leaveExercises()
+            : Promise.resolve()
+        ).then(() => {
+          setSelected(null)
+          setHomeSection('ai')
+        })
+      }} onToggleTimer={() => { if (!studyState || timerUpdating) return; const workspaceId = selected.id; const epoch = workspaceLoadEpoch.current; const action = studyState.timerStatus === 'running' ? 'pause' : 'start'; setTimerUpdating(true); const configure = action === 'start' && studyState.timerStatus === 'idle' && studyState.timerDurationSeconds !== adaptiveMinutes * 60 ? window.coach.studyWorkspace.setTimerDuration({ workspaceId, durationSeconds: adaptiveMinutes * 60 }) : Promise.resolve(studyState); void configure.then(() => window.coach.studyWorkspace.updateTimer({ workspaceId, action })).then(applyStudyState(workspaceId, epoch)).catch(() => setWorkspaceError('Não foi possível atualizar o foco.')).finally(() => setTimerUpdating(false)) }} onFinish={() => { if (sessionCompleting) return; setSessionCompleting(true); void window.coach.studyWorkspace.completeSession(selected.id).then(setStudyState).finally(() => setSessionCompleting(false)) }} onCoachInput={setWorkspaceInput} onCoachSend={sendWorkspaceMessage} onResolveAction={(actionId, decision) => void resolveWorkspacePlannerAction(selected.id, actionId, decision)} onNotes={() => setNotesOpen(true)}>
         {timerExpired && activePlan && <div ref={timerExpiredDialogRef} role="dialog" aria-modal="true" aria-labelledby="timer-expired-title" className="absolute inset-0 z-30 grid place-items-center bg-black/65 p-5"><section className="w-full max-w-lg rounded-2xl border border-coach-yellow/40 bg-[#111217] p-7 shadow-2xl"><p className="text-xs font-black uppercase tracking-[.18em] text-coach-yellow">Bloco de foco encerrado</p><h2 id="timer-expired-title" className="mt-2 font-display text-2xl font-black">O tempo terminou. A atividade não foi concluída.</h2><p className="mt-3 text-sm leading-6 text-coach-muted">O cronômetro registrou o tempo de foco, sem concluir a atividade, o tópico ou alterar seu domínio. Escolha o próximo passo para “{activePlan.title}”.</p><div className="mt-6 flex flex-wrap gap-3"><button disabled={timerUpdating} onClick={() => { setTimerUpdating(true); void window.coach.studyWorkspace.updateTimer({ workspaceId: selected.id, action: 'extend' }).then((state) => { setStudyState(state); setTimerExpired(false) }).finally(() => setTimerUpdating(false)) }} className="rounded-xl bg-coach-yellow px-4 py-3 text-sm font-black text-[#0c0d10]">Estender +10 min</button><button disabled={timerUpdating} onClick={() => { setTimerUpdating(true); void window.coach.studyWorkspace.updateTimer({ workspaceId: selected.id, action: 'pause' }).then((state) => { setStudyState(state); setTimerExpired(false) }).finally(() => setTimerUpdating(false)) }} className="rounded-xl border border-coach-line px-4 py-3 text-sm font-black">Continuar depois</button><button disabled={planUpdating} onClick={() => { setPlanUpdating(true); void window.coach.studyWorkspace.completePlanItem({ workspaceId: selected.id, itemId: activePlan.id }).then((state) => { setStudyState(state); setTimerExpired(false) }).finally(() => setPlanUpdating(false)) }} className="rounded-xl bg-coach-green px-4 py-3 text-sm font-black text-white">Concluir atividade</button></div></section></div>}
         {workspacePage === 'studies' && <div className="relative flex h-full min-h-0 flex-col overflow-hidden">{livePriority?.eventPhase === 'today' && <div className="shrink-0 border-b border-coach-orange/30 bg-coach-orange/10 px-6 py-3 text-xs text-coach-muted"><strong className="text-coach-orange">Revisão para a prova hoje.</strong> A aula continua completa; pontos de revisão recebem destaque visual.</div>}{studyModule && studyRoadmap && studyProgress && studyLesson ? <><div className="flex shrink-0 items-center justify-between gap-4 border-b border-coach-line px-6 py-3"><p className="min-w-0 truncate text-xs text-coach-muted"><span className="text-coach-ink">{selected.name}</span><span className="mx-2">›</span>{studyModule.title}<span className="mx-2">›</span><span className="text-coach-ink">{studyModule.topics.find((topic) => `${studyModule.id}:${topic}` === studyProgress.topicId) ?? studyModule.title}</span></p><button aria-expanded={learningPathOpen} aria-controls="learning-path-drawer" onClick={() => setLearningPathOpen(true)} className="shrink-0 rounded-lg border border-coach-line px-3 py-2 text-xs font-black text-coach-green hover:bg-white/[.03]">Trilha de aprendizado</button></div><div className="min-h-0 flex-1"><StudyLessonView workspaceId={selected.id} module={studyModule} roadmap={studyRoadmap} lesson={studyLesson} progress={studyProgress} reviewMode={livePriority?.eventPhase === 'today'} onExercises={() => openExercises(studyRoadmap, studyProgress.topicId)} onPosition={(position, checkpointStates) => { void window.coach.studyProgress.updatePosition({ workspaceId: selected.id, position, checkpointStates }).then(setStudyProgress) }} onLessonChanged={setStudyLesson} onInteractiveContext={(block, state) => setInteractiveCodeContext({ block, state })} onCheckpoint={() => { void window.coach.studyWorkspace.recalculatePlan({ workspaceId: selected.id }).then(setStudyState) }} onComplete={() => { void window.coach.studyProgress.completeTopic({ workspaceId: selected.id, topicId: studyProgress.topicId }).then(({ state, nextTarget }) => { setStudyProgress(state); if (nextTarget) setStudyLesson(null); return Promise.all([window.coach.studyWorkspace.recalculatePlan({ workspaceId: selected.id }).then(setStudyState), window.coach.roadmap.get(selected.id).then((roadmap) => { if (roadmap) { setStudyRoadmap(roadmap); const module = nextTarget ? roadmap.modules.find((item) => item.id === nextTarget.moduleId) : null; if (module) setStudyModule(module) } }), nextTarget ? window.coach.studyLesson.getOrCreate({ workspaceId: selected.id, roadmapId: studyProgress.roadmapId, moduleId: nextTarget.moduleId, topicId: nextTarget.topicId }).then((result) => { if (result.status === 'ready') setStudyLesson(result.lesson); else setWorkspaceError(result.status === 'waiting_for_provider' ? 'A próxima aula aguarda um provedor de IA.' : 'Não foi possível preparar a próxima aula agora.') }) : Promise.resolve()]) }).catch((error) => setWorkspaceError(error instanceof Error ? error.message : 'Ainda existem critérios obrigatórios pendentes.')) }} onPractice={() => setWorkspacePage('practice')} /></div><LearningPathDrawer open={learningPathOpen} roadmap={studyRoadmap} progress={studyProgress} onClose={() => setLearningPathOpen(false)} onSelect={(module, topicIndex) => selectStudyTopic(studyRoadmap, module, topicIndex).catch((error) => { setWorkspaceError('Não foi possível abrir este tópico agora.'); throw error })} /></> : <div className="grid min-h-0 flex-1 place-items-center p-8 text-center"><div><p className="font-display text-xl font-black text-coach-ink">{studyLessonLoad?.status === 'waiting_for_provider' ? 'Esta aula será preparada quando a IA estiver disponível.' : studiesPreparationMessage(studyLessonLoad, learningPathState)}</p><p className="mt-2 text-xs text-coach-muted">Você pode continuar usando o Coach enquanto isso.</p>{studyLessonLoad && studyLessonLoad.status !== 'ready' && <button onClick={() => { setStudyLessonLoad(null); setStudyLessonRetryNonce((value) => value + 1) }} className="mt-4 rounded-lg bg-coach-orange px-4 py-2 text-xs font-black text-white">Tentar novamente</button>}{learningPathState?.status === 'failed_retryable' && <button onClick={() => { void window.coach.roadmap.generate(selected.id).then(() => openStudies()).catch(() => setWorkspaceError('Não foi possível tentar preparar a Trilha agora.')) }} className="mt-4 rounded-lg bg-coach-orange px-4 py-2 text-xs font-black text-white">Tentar novamente</button>}{studyRoadmap && <><button onClick={() => setLearningPathOpen(true)} className="ml-2 mt-4 rounded-lg border border-coach-line px-4 py-2 text-xs font-black text-coach-green">Ver Trilha</button><LearningPathDrawer open={learningPathOpen} roadmap={studyRoadmap} progress={studyProgress} onClose={() => setLearningPathOpen(false)} onSelect={(module, topicIndex) => selectStudyTopic(studyRoadmap, module, topicIndex).catch(() => setWorkspaceError('Não foi possível abrir este tópico agora.'))} /></>}</div></div>}</div>}
         {workspacePage === 'exercises' && exerciseRoadmap && exerciseTopicId && <ExercisesWorkspace workspaceId={selected.id} roadmap={exerciseRoadmap} initialTopicId={exerciseTopicId} expectedSetId={exerciseSetId} progressState={studyProgress} onBack={() => { void leaveExercises().then(() => openStudies()) }} onContext={setActiveExerciseContext} />}
@@ -858,14 +812,129 @@ export function App() {
         {workspacePage === 'videos' && <div className="coach-scroll-pane h-full p-5 lg:p-8"><div className="mx-auto max-w-5xl"><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Vídeos focados</p><h2 className="mt-2 font-display text-3xl font-black">Aprenda sem sair do contexto</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-coach-muted">Use uma busca direcionada ao objetivo deste Workspace. O Coach mantém a conversa e o plano visíveis sem abrir o feed tradicional.</p><div className="mt-7 rounded-xl border border-coach-line bg-[#111217] p-6"><label className="text-xs font-black uppercase text-coach-muted">Buscar no YouTube</label><div className="mt-3 flex gap-2"><input value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} placeholder={`Ex.: ${activePlan?.title ?? selected.name}`} className="min-w-0 flex-1 rounded-xl border border-coach-line bg-coach-paper p-3" /><button onClick={() => { const query = encodeURIComponent(`${materialQuery || activePlan?.title || selected.name} aula`); window.open(`https://www.youtube.com/results?search_query=${query}`, '_blank', 'noopener,noreferrer') }} className="rounded-xl bg-coach-orange px-5 text-sm font-black text-[#0c0d10]">Pesquisar</button></div><p className="mt-3 text-xs text-coach-muted">Links externos abrem somente após sua ação. Nenhum vídeo é enviado automaticamente ao provedor de IA.</p></div></div></div>}
         {workspacePage === 'reports' && <div className="coach-scroll-pane h-full p-5 lg:p-8"><div className="mx-auto max-w-5xl"><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Evolução</p><h2 className="mt-2 font-display text-3xl font-black">Relatórios de aprendizagem</h2><div className="mt-6 grid gap-4 md:grid-cols-2">{sessionHistory.length === 0 && <p className="rounded-lg bg-[#111217] p-5 text-sm text-coach-muted">Comece a estudar para acumular dados neste relatório.</p>}{sessionHistory.map((session) => <article key={session.date} className="rounded-lg border border-coach-line bg-[#111217] p-5"><div className="flex justify-between"><strong>{new Date(`${session.date}T12:00:00`).toLocaleDateString('pt-BR')} · {session.sessionCount} {session.sessionCount === 1 ? 'sessão' : 'sessões'}</strong><span className="rounded-full bg-coach-green/10 px-3 py-1 text-xs font-black text-coach-green">{Math.floor(session.focusSeconds / 60)} min</span></div><div className="mt-5 grid grid-cols-2 gap-3"><div className="rounded-xl bg-coach-paper p-3"><strong className="text-xl">{session.executions ? `${session.executions - session.errors}/${session.executions}` : "Não avaliado"}</strong><span className="block text-[10px] text-coach-muted">Execuções sem erro</span></div><div className="rounded-xl bg-coach-paper p-3"><strong className="text-sm">Ainda não avaliada</strong><span className="block text-[10px] text-coach-muted">Retenção após revisão futura</span></div></div><p className="mt-4 text-xs leading-5 text-coach-muted">{session.recommendation}</p></article>)}</div></div></div>}
         {notesOpen && <div ref={notesDialogRef} className="fixed inset-0 z-20 flex justify-end bg-black/30" role="dialog" aria-modal="true" aria-labelledby="quick-notes-title" onMouseDown={() => setNotesOpen(false)}><section className="flex h-full w-full max-w-md flex-col bg-coach-paper p-6 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}><div className="flex items-center justify-between"><h2 id="quick-notes-title" className="font-display text-2xl font-black">Notas rápidas</h2><button aria-label="Fechar notas" onClick={() => setNotesOpen(false)}><X /></button></div><label htmlFor="quick-notes" className="sr-only">Notas rápidas</label><textarea id="quick-notes" value={studyNotes} onChange={(event) => setStudyNotes(event.target.value)} className="mt-6 min-h-0 flex-1 resize-none rounded-lg border border-coach-line bg-[#111217] p-4" /></section></div>}
-        {providerDialogOpen && <ProviderSettingsDialog status={providerStatus} accounts={providerAccounts} onClose={() => setProviderDialogOpen(false)} onConfigured={async (label, apiKey, model, persistence) => { const result = await window.coach.provider.configureOpenAI({ label, apiKey, model, persistence }); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()); return result }} onConfiguredCompatible={async (connectorId,label, baseUrl, apiKey, model, persistence) => { const result = await window.coach.provider.configureCompatible({ connectorId, label, baseUrl, apiKey, model, persistence }); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()); return result }} onSelect={async (accountId) => { await window.coach.provider.selectAccount(accountId); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()) }} onRemove={async (accountId) => { await window.coach.provider.removeAccount(accountId); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()) }} />}
       </WorkspaceShell>
     )
   }
 
   return <>
-    <HomeScreen section={homeSection} loading={loading} error={error} report={globalReport} schedule={schedule} weeklyPlan={weeklyPlan} academicOverview={academicOverview} academicLife={academicLife} workspaces={workspaces} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={providerAccounts.find((account) => account.isActive)?.label ?? 'IA desconectada'} onSection={setHomeSection} onSettings={() => setProviderDialogOpen(true)} onCreate={() => { setWorkspaceCreationInitial(null); setDialogOpen(true) }} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} onRetryProvisioning={(id) => { void window.coach.workspace.retryProvisioning(id).then(() => loadWorkspaces()) }} onPlannerInput={setPlannerInput} onPlannerSend={() => void sendPlannerMessage()} onRefreshAcademicLife={(affectsPlanning) => affectsPlanning ? refreshDependentProjections().then(() => undefined) : refreshAfterAcademicMutation(false, { replan: () => Promise.resolve(), read: () => window.coach.academicLife.getProjection() }).then(setAcademicLife)} onResolveAction={(actionId, decision) => void resolveHomePlannerAction(actionId, decision)} />
+    <HomeScreen section={homeSection} loading={loading} error={error} report={globalReport} schedule={schedule} weeklyPlan={weeklyPlan} academicOverview={academicOverview} academicLife={academicLife} workspaces={workspaces} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={providerStatus?.connected === true
+      ? providerAccounts.find((account) => account.isActive)?.label
+        ?? providerStatus.providerName
+        ?? 'IA conectada'
+      : 'IA DESCONECTADA'}
+      providerConnected={providerStatus?.connected === true}
+      aiConnection={{
+      status: providerStatus,
+      accounts: providerAccounts,
+      onConfigured: async (label, apiKey, model, persistence) => {
+        const result = await window.coach.provider.configureOpenAI({
+          label,
+          apiKey,
+          model,
+          persistence,
+        })
+        setProviderStatus(await window.coach.provider.getStatus())
+        setProviderAccounts(await window.coach.provider.listAccounts())
+        return result
+      },
+      onConfiguredCompatible: async (
+        connectorId,
+        label,
+        baseUrl,
+        apiKey,
+        model,
+        persistence,
+      ) => {
+        const result = await window.coach.provider.configureCompatible({
+          connectorId,
+          label,
+          baseUrl,
+          apiKey,
+          model,
+          persistence,
+        })
+        setProviderStatus(await window.coach.provider.getStatus())
+        setProviderAccounts(await window.coach.provider.listAccounts())
+        return result
+      },
+      onSelect: async (accountId) => {
+        await window.coach.provider.selectAccount(accountId)
+        setProviderStatus(await window.coach.provider.getStatus())
+        setProviderAccounts(await window.coach.provider.listAccounts())
+      },
+      onSetEnabled: async (
+        accountId,
+        enabled,
+      ) => {
+        /*
+         * A mutação é a autoridade.
+         *
+         * Ativar/desativar é uma operação administrativa e não pode
+         * ser considerada falha só porque um refresh posterior ou o
+         * provider remoto/local está indisponível.
+         */
+        const status =
+          await window.coach.provider.setAccountEnabled({
+            accountId,
+            enabled,
+          })
+
+        setProviderStatus(status)
+
+        setProviderAccounts((current) =>
+          current.map((account) =>
+            account.id === accountId
+              ? {
+                  ...account,
+                  isEnabled: enabled,
+                  isActive:
+                    enabled
+                      ? account.isActive
+                      : false,
+                }
+              : account,
+          ),
+        )
+
+        /*
+         * Sincroniza a lista real do backend, mas uma eventual falha
+         * deste refresh não desfaz a operação que já foi concluída.
+         */
+        try {
+          setProviderAccounts(
+            await window.coach.provider.listAccounts(),
+          )
+        } catch {
+          // Mantemos o estado otimista aplicado acima.
+        }
+      },
+      onRemove: async (accountId) => {
+        /*
+         * Remover também não depende da disponibilidade do provider.
+         */
+        const status =
+          await window.coach.provider.removeAccount(
+            accountId,
+          )
+
+        setProviderStatus(status)
+
+        setProviderAccounts((current) =>
+          current.filter(
+            (account) =>
+              account.id !== accountId,
+          ),
+        )
+
+        try {
+          setProviderAccounts(
+            await window.coach.provider.listAccounts(),
+          )
+        } catch {
+          // A conta já foi removida; mantemos a UI coerente.
+        }
+      },
+    }} onSection={setHomeSection} onSettings={() => setHomeSection('ai')} onCreate={() => { setWorkspaceCreationInitial(null); setDialogOpen(true) }} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} onRetryProvisioning={(id) => { void window.coach.workspace.retryProvisioning(id).then(() => loadWorkspaces()) }} onPlannerInput={setPlannerInput} onPlannerSend={() => void sendPlannerMessage()} onRefreshAcademicLife={(affectsPlanning) => affectsPlanning ? refreshDependentProjections().then(() => undefined) : refreshAfterAcademicMutation(false, { replan: () => Promise.resolve(), read: () => window.coach.academicLife.getProjection() }).then(setAcademicLife)} onResolveAction={(actionId, decision) => void resolveHomePlannerAction(actionId, decision)} />
     {dialogOpen && <WorkspaceCreationScreen open={dialogOpen} submitting={submitting} initial={workspaceCreationInitial} onClose={() => { setDialogOpen(false); setWorkspaceCreationInitial(null) }} onSubmit={createWorkspace} />}
-    {providerDialogOpen && <ProviderSettingsDialog status={providerStatus} accounts={providerAccounts} onClose={() => setProviderDialogOpen(false)} onConfigured={async (label, apiKey, model, persistence) => { const result = await window.coach.provider.configureOpenAI({ label, apiKey, model, persistence }); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()); return result }} onConfiguredCompatible={async (connectorId,label, baseUrl, apiKey, model, persistence) => { const result = await window.coach.provider.configureCompatible({connectorId,label, baseUrl, apiKey, model, persistence }); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()); return result }} onSelect={async (accountId) => { await window.coach.provider.selectAccount(accountId); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()) }} onRemove={async (accountId) => { await window.coach.provider.removeAccount(accountId); setProviderStatus(await window.coach.provider.getStatus()); setProviderAccounts(await window.coach.provider.listAccounts()) }} />}
   </>
 }

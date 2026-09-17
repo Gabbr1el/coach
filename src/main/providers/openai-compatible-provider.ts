@@ -93,6 +93,28 @@ export class OpenAICompatibleProvider implements AIProvider {
     return { streaming: true, usageInformation: true, supportedInput: ['text'] }
   }
 
+  async checkAvailability(): Promise<void> {
+    const { response, cleanup } =
+      await this.fetchWithTimeout(
+        `${this.baseUrl}/models`,
+        {
+          method: 'GET',
+          headers: this.headers(),
+        },
+        3_000,
+      )
+
+    try {
+      if (!response.ok) {
+        throw this.responseError(
+          response.status,
+        )
+      }
+    } finally {
+      cleanup()
+    }
+  }
+
   async testConnection(): Promise<void> {
     const { response, cleanup } = await this.fetchWithTimeout(`${this.baseUrl}/models`, { method: 'GET', headers: this.headers() }, 10_000)
     let body: { data?: Array<{ id?: string }> }

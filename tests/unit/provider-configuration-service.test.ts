@@ -113,3 +113,212 @@ describe('ProviderConfigurationService', () => {
     expect(manager.list()).toEqual([])
   })
 })
+
+describe('ProviderConfigurationService multi-account behavior', () => {
+  it('keeps multiple session accounts registered when a new account is connected', async () => {
+    const repository =
+      new MemoryConfigurationRepository()
+
+    const manager =
+      new AIProviderManager()
+
+    const service =
+      new ProviderConfigurationService(
+        repository,
+        new MemoryVault(false),
+        manager,
+        openAIProvider,
+        compatibleProvider,
+      )
+
+    await service.configureOpenAI(
+      'Conta 1',
+      'secret-key-value-that-is-long-enough-1',
+      'gpt-test',
+      'session',
+    )
+
+    const firstAccountId =
+      manager.getActiveRegistrationId()
+
+    await service.configureOpenAI(
+      'Conta 2',
+      'secret-key-value-that-is-long-enough-2',
+      'gpt-test',
+      'session',
+    )
+
+    const secondAccountId =
+      manager.getActiveRegistrationId()
+
+    expect(firstAccountId)
+      .not
+      .toBeNull()
+
+    expect(secondAccountId)
+      .not
+      .toBeNull()
+
+    expect(secondAccountId)
+      .not
+      .toBe(firstAccountId)
+
+    expect(manager.list())
+      .toHaveLength(2)
+
+    const accounts =
+      await service.listAccounts()
+
+    expect(accounts)
+      .toHaveLength(2)
+
+    expect(
+      accounts.every(
+        (account) =>
+          account.sessionOnly,
+      ),
+    ).toBe(true)
+  })
+
+  it('switches between session accounts without unregistering the others', async () => {
+    const repository =
+      new MemoryConfigurationRepository()
+
+    const manager =
+      new AIProviderManager()
+
+    const service =
+      new ProviderConfigurationService(
+        repository,
+        new MemoryVault(false),
+        manager,
+        openAIProvider,
+        compatibleProvider,
+      )
+
+    await service.configureOpenAI(
+      'Conta A',
+      'secret-key-value-that-is-long-enough-a',
+      'gpt-test',
+      'session',
+    )
+
+    await service.configureOpenAI(
+      'Conta B',
+      'secret-key-value-that-is-long-enough-b',
+      'gpt-test',
+      'session',
+    )
+
+    const accounts =
+      await service.listAccounts()
+
+    expect(accounts)
+      .toHaveLength(2)
+
+    const accountA =
+      accounts.find(
+        (account) =>
+          account.label === 'Conta A',
+      )
+
+    const accountB =
+      accounts.find(
+        (account) =>
+          account.label === 'Conta B',
+      )
+
+    expect(accountA)
+      .toBeDefined()
+
+    expect(accountB)
+      .toBeDefined()
+
+    expect(
+      manager.getActiveRegistrationId(),
+    ).toBe(accountB!.id)
+
+    await service.selectAccount(
+      accountA!.id,
+    )
+
+    expect(
+      manager.getActiveRegistrationId(),
+    ).toBe(accountA!.id)
+
+    expect(manager.list())
+      .toHaveLength(2)
+
+    const afterSwitch =
+      await service.listAccounts()
+
+    expect(
+      afterSwitch.find(
+        (account) =>
+          account.id === accountA!.id,
+      )?.isActive,
+    ).toBe(true)
+
+    expect(
+      afterSwitch.find(
+        (account) =>
+          account.id === accountB!.id,
+      )?.isActive,
+    ).toBe(false)
+  })
+
+  it('rejects the eleventh user-created account', async () => {
+    const repository =
+      new MemoryConfigurationRepository()
+
+    const manager =
+      new AIProviderManager()
+
+    const service =
+      new ProviderConfigurationService(
+        repository,
+        new MemoryVault(false),
+        manager,
+        openAIProvider,
+        compatibleProvider,
+      )
+
+    for (
+      let index = 1;
+      index <= 10;
+      index += 1
+    ) {
+      await service.configureOpenAI(
+        `Conta ${index}`,
+        `secret-key-value-that-is-long-enough-${index}`,
+        'gpt-test',
+        'session',
+      )
+    }
+
+    expect(
+      await service.listAccounts(),
+    ).toHaveLength(10)
+
+    expect(manager.list())
+      .toHaveLength(10)
+
+    await expect(
+      service.configureOpenAI(
+        'Conta 11',
+        'secret-key-value-that-is-long-enough-11',
+        'gpt-test',
+        'session',
+      ),
+    ).rejects.toThrow(
+      'Provider account limit reached (10)',
+    )
+
+    expect(
+      await service.listAccounts(),
+    ).toHaveLength(10)
+
+    expect(manager.list())
+      .toHaveLength(10)
+  })
+})

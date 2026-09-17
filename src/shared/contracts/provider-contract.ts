@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import type {
   ProviderConnectorId,
+  ReasoningEffort,
 } from './provider-account-contract'
 
 export const configureOpenAIInputSchema = z
@@ -122,6 +123,20 @@ export const updateProviderAccountInputSchema =
         .max(120)
         .nullable()
         .optional(),
+
+    model:
+      z.string()
+        .trim()
+        .min(1)
+        .max(150),
+
+    reasoningEffort:
+      z.enum([
+        'auto',
+        'low',
+        'medium',
+        'high',
+      ]),
   })
     .strict()
 
@@ -202,6 +217,8 @@ export interface ProviderAccountSummary {
 
   readonly model:
     string
+  readonly reasoningEffort:
+    ReasoningEffort
 
   readonly isEnabled:
     boolean

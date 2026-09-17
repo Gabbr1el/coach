@@ -522,6 +522,8 @@ describe('ProviderConfigurationService account lifecycle', () => {
       accountId!,
       'Minha OpenAI',
       'Conta pessoal',
+      'gpt-test',
+      'auto',
     )
 
     const accounts =
@@ -679,6 +681,8 @@ describe('ProviderConfigurationService account lifecycle', () => {
       accountId,
       'OpenAI pessoal',
       'Conta principal',
+      'gpt-test',
+      'auto',
     )
 
     expect(
@@ -719,5 +723,305 @@ describe('ProviderConfigurationService account lifecycle', () => {
       providerName: 'OpenAI',
       activeAccountId: accountId,
     })
+  })
+  it('recreates only the edited session provider when model and reasoning change', async () => {
+    const repository =
+      new MemoryConfigurationRepository()
+
+    const manager =
+      new AIProviderManager()
+
+    const creations: Array<{
+      apiKey: string
+      model: string
+      reasoningEffort:
+        'auto'
+        | 'low'
+        | 'medium'
+        | 'high'
+      instance: AIProvider
+    }> = []
+
+    const trackedOpenAIProvider = (
+      apiKey: string,
+      model: string,
+      reasoningEffort:
+        'auto'
+        | 'low'
+        | 'medium'
+        | 'high',
+    ): AIProvider => {
+      const instance =
+        provider()
+
+      creations.push({
+        apiKey,
+        model,
+        reasoningEffort,
+        instance,
+      })
+
+      return instance
+    }
+
+    const service =
+      new ProviderConfigurationService(
+        repository,
+        new MemoryVault(false),
+        manager,
+        trackedOpenAIProvider,
+        compatibleProvider,
+      )
+
+    await service.configureOpenAI(
+      'Conta A',
+      'secret-key-value-that-is-long-enough-a',
+      'gpt-a',
+      'session',
+    )
+
+    const accountAId =
+      manager.getActiveRegistrationId()!
+
+    const providerABefore =
+      manager.getActive()
+
+    await service.configureOpenAI(
+      'Conta B',
+      'secret-key-value-that-is-long-enough-b',
+      'gpt-b',
+      'session',
+    )
+
+    const accountBId =
+      manager.getActiveRegistrationId()!
+
+    const providerBBefore =
+      manager.getActive()
+
+    expect(creations)
+      .toHaveLength(2)
+
+    await service.updateAccount(
+      accountAId,
+      'Conta A editada',
+      undefined,
+      'gpt-a-new',
+      'high',
+    )
+
+    expect(creations)
+      .toHaveLength(3)
+
+    expect(
+      creations.at(-1),
+    ).toMatchObject({
+      apiKey:
+        'secret-key-value-that-is-long-enough-a',
+
+      model:
+        'gpt-a-new',
+
+      reasoningEffort:
+        'high',
+    })
+
+    /*
+     * Editar A enquanto B está ativa não pode
+     * trocar ou recriar a conta B.
+     */
+    expect(
+      manager.getActiveRegistrationId(),
+    ).toBe(accountBId)
+
+    expect(
+      manager.getActive(),
+    ).toBe(providerBBefore)
+
+    await service.selectAccount(
+      accountAId,
+    )
+
+    expect(
+      manager.getActive(),
+    ).not.toBe(providerABefore)
+
+    await service.selectAccount(
+      accountBId,
+    )
+
+    expect(
+      manager.getActive(),
+    ).toBe(providerBBefore)
+
+    const accounts =
+      await service.listAccounts()
+
+    expect(
+      accounts.find(
+        (account) =>
+          account.id === accountAId,
+      ),
+    ).toMatchObject({
+      label:
+        'Conta A editada',
+
+      model:
+        'gpt-a-new',
+
+      reasoningEffort:
+        'high',
+    })
+
+    expect(
+      accounts.find(
+        (account) =>
+          account.id === accountBId,
+      ),
+    ).toMatchObject({
+      label:
+        'Conta B',
+
+      model:
+        'gpt-b',
+
+      reasoningEffort:
+        'auto',
+    })
+  })
+
+  it('recreates a persisted provider with its updated model and reasoning effort', async () => {
+    const repository =
+      new MemoryConfigurationRepository()
+
+    const vault =
+      new MemoryVault(true)
+
+    const manager =
+      new AIProviderManager()
+
+    const creations: Array<{
+      apiKey: string
+      model: string
+      reasoningEffort:
+        'auto'
+        | 'low'
+        | 'medium'
+        | 'high'
+      instance: AIProvider
+    }> = []
+
+    const trackedOpenAIProvider = (
+      apiKey: string,
+      model: string,
+      reasoningEffort:
+        'auto'
+        | 'low'
+        | 'medium'
+        | 'high',
+    ): AIProvider => {
+      const instance =
+        provider()
+
+      creations.push({
+        apiKey,
+        model,
+        reasoningEffort,
+        instance,
+      })
+
+      return instance
+    }
+
+    const service =
+      new ProviderConfigurationService(
+        repository,
+        vault,
+        manager,
+        trackedOpenAIProvider,
+        compatibleProvider,
+      )
+
+    await service.configureOpenAI(
+      'Principal',
+      'secret-key-value-that-is-long-enough',
+      'gpt-old',
+      'secure-vault',
+    )
+
+    const accountId =
+      repository.configuration!.id
+
+    const providerBefore =
+      manager.getActive()
+
+    expect(creations)
+      .toHaveLength(1)
+
+    expect(
+      creations[0],
+    ).toMatchObject({
+      model:
+        'gpt-old',
+
+      reasoningEffort:
+        'auto',
+    })
+
+    await service.updateAccount(
+      accountId,
+      'Principal',
+      undefined,
+      'gpt-new',
+      'medium',
+    )
+
+    expect(creations)
+      .toHaveLength(2)
+
+    expect(
+      creations[1],
+    ).toMatchObject({
+      apiKey:
+        'secret-key-value-that-is-long-enough',
+
+      model:
+        'gpt-new',
+
+      reasoningEffort:
+        'medium',
+    })
+
+    expect(
+      manager.getActiveRegistrationId(),
+    ).toBe(accountId)
+
+    expect(
+      manager.getActive(),
+    ).not.toBe(providerBefore)
+
+    expect(
+      repository.configuration,
+    ).toMatchObject({
+      id:
+        accountId,
+
+      model:
+        'gpt-new',
+
+      reasoningEffort:
+        'medium',
+
+      isActive:
+        true,
+
+      isEnabled:
+        true,
+    })
+
+    expect(vault.value)
+      .toBe(
+        'secret-key-value-that-is-long-enough',
+      )
   })
 })

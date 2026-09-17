@@ -141,7 +141,12 @@ void app.whenReady().then(async () => {
       new DrizzleProviderConfigurationRepository(database),
       new ElectronCredentialVault(),
       providerManager,
-      (apiKey, model) => new OpenAIProvider(apiKey, model),
+      (apiKey, model, reasoningEffort) =>
+        new OpenAIProvider(
+          apiKey,
+          model,
+          reasoningEffort,
+        ),
       (label, baseUrl, apiKey, model) => new OpenAICompatibleProvider(label, baseUrl, apiKey, model),
     )
     await providerConfigurationService.initialize()

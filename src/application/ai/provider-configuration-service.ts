@@ -86,7 +86,8 @@ export class ProviderConfigurationService {
    */
   private readonly sessionProviders =
     new Map<string, AIProvider>()
-
+  private readonly sessionSecrets =
+    new Map<string, string>()
   private readonly healthByAccount =
     new Map<string, ProviderHealth>()
 
@@ -104,6 +105,11 @@ export class ProviderConfigurationService {
       (
         apiKey: string,
         model: string,
+        reasoningEffort:
+          'auto'
+          | 'low'
+          | 'medium'
+          | 'high',
       ) => AIProvider,
 
     private readonly createCompatibleProvider:
@@ -132,6 +138,7 @@ export class ProviderConfigurationService {
       this.manager.clear()
       this.sessionAccounts.clear()
       this.sessionProviders.clear()
+      this.sessionSecrets.clear()
       this.healthByAccount.clear()
 
       const configurations =
@@ -315,6 +322,10 @@ export class ProviderConfigurationService {
           model:
             configuration.model,
 
+          reasoningEffort:
+            configuration.reasoningEffort
+            ?? 'auto',
+
           identityLabel:
             configuration.identityLabel
             ?? null,
@@ -397,6 +408,7 @@ export class ProviderConfigurationService {
       this.createOpenAIProvider(
         apiKey,
         model,
+        'auto',
       )
 
     const health =
@@ -430,6 +442,9 @@ export class ProviderConfigurationService {
 
         model,
 
+        reasoningEffort:
+          'auto',
+
         identityLabel:
           null,
 
@@ -457,7 +472,10 @@ export class ProviderConfigurationService {
         accountId,
         provider,
       )
-
+      this.sessionSecrets.set(
+        accountId,
+        apiKey,
+      )
       this.registerAndSelect(
         accountId,
         provider,
@@ -606,6 +624,9 @@ export class ProviderConfigurationService {
 
             model,
 
+            reasoningEffort:
+              'auto',
+
             identityLabel:
               null,
 
@@ -631,6 +652,10 @@ export class ProviderConfigurationService {
           this.sessionProviders.set(
             accountId,
             provider,
+          )
+          this.sessionSecrets.set(
+            accountId,
+            apiKey,
           )
 
           this.registerAndSelect(
@@ -996,11 +1021,17 @@ export class ProviderConfigurationService {
     )
   }
 
-  async updateAccount(
-    accountId: string,
-    label: string,
-    identityLabel?: string | null,
-  ): Promise<ProviderStatus> {
+async updateAccount(
+  accountId: string,
+  label: string,
+  identityLabel: string | null | undefined,
+  model: string,
+  reasoningEffort:
+    'auto'
+    | 'low'
+    | 'medium'
+    | 'high',
+): Promise<ProviderStatus> {
     return this.exclusive(
       async () => {
         const normalizedLabel =
@@ -1014,7 +1045,28 @@ export class ProviderConfigurationService {
             'Invalid provider account label',
           )
         }
+        const normalizedModel =
+          model.trim()
 
+        if (
+          normalizedModel.length < 1
+          || normalizedModel.length > 150
+        ) {
+          throw new Error(
+            'Invalid provider account model',
+          )
+        }
+
+        if (
+          reasoningEffort !== 'auto'
+          && reasoningEffort !== 'low'
+          && reasoningEffort !== 'medium'
+          && reasoningEffort !== 'high'
+        ) {
+          throw new Error(
+            'Invalid provider reasoning effort',
+          )
+        }
         const normalizedIdentity =
           identityLabel === undefined
             ? undefined
@@ -1041,19 +1093,89 @@ export class ProviderConfigurationService {
           )
 
         if (sessionAccount) {
-          this.sessionAccounts.set(
-            accountId,
-            {
+          const secret =
+            this.sessionSecrets.get(
+              accountId,
+            )
+
+          if (!secret) {
+            throw new Error(
+              'Provider session credential not found',
+            )
+          }
+
+          let provider: AIProvider
+
+          switch (sessionAccount.providerId) {
+            case 'openai':
+              provider =
+                this.createOpenAIProvider(
+                  secret,
+                  normalizedModel,
+                  reasoningEffort,
+                )
+              break
+
+            case 'openai-compatible':
+            case 'omniroute':
+              provider =
+                this.createCompatibleProvider(
+                  normalizedLabel,
+                  sessionAccount.baseUrl
+                    ?? '',
+                  secret,
+                  normalizedModel,
+                )
+              break
+
+            case 'gemini':
+            case 'anthropic':
+            case 'ollama':
+              throw new Error(
+                `Provider connector '${sessionAccount.providerId}' is not implemented yet`,
+              )
+          }
+
+          const updatedSessionAccount:
+            ProviderAccountSummary = {
               ...sessionAccount,
 
               label:
                 normalizedLabel,
 
+              model:
+                normalizedModel,
+
+              reasoningEffort,
+
               identityLabel:
                 normalizedIdentity
                 ?? sessionAccount.identityLabel
                 ?? null,
-            },
+            }
+
+          this.sessionAccounts.set(
+            accountId,
+            updatedSessionAccount,
+          )
+
+          this.sessionProviders.set(
+            accountId,
+            provider,
+          )
+
+          if (
+            updatedSessionAccount.isEnabled
+            !== false
+          ) {
+            this.manager.replace(
+              provider,
+              accountId,
+            )
+          }
+
+          this.healthByAccount.delete(
+            accountId,
           )
 
           return this.getStatus()
@@ -1069,6 +1191,22 @@ export class ProviderConfigurationService {
             'Provider account not found',
           )
         }
+        if (!this.vault.isAvailable()) {
+          throw new Error(
+            'Secure operating-system credential storage is unavailable',
+          )
+        }
+
+        const secret =
+          await this.vault.get(
+            existing.secretReference,
+          )
+
+        if (!secret) {
+          throw new Error(
+            'Provider credential not found',
+          )
+        }
 
         const updated =
           await this.repository.update(
@@ -1076,7 +1214,10 @@ export class ProviderConfigurationService {
             {
               label:
                 normalizedLabel,
+              model:
+                normalizedModel,
 
+              reasoningEffort,
               ...(normalizedIdentity
                 !== undefined
                 ? {
@@ -1095,7 +1236,25 @@ export class ProviderConfigurationService {
             'Provider account not found',
           )
         }
+        const provider =
+          this.createProviderForConfiguration(
+            updated,
+            secret,
+          )
 
+        if (
+          updated.isEnabled
+          !== false
+        ) {
+          this.manager.replace(
+            provider,
+            accountId,
+          )
+        }
+
+        this.healthByAccount.delete(
+          accountId,
+        )
         return this.getStatus()
       },
     )
@@ -1135,6 +1294,9 @@ export class ProviderConfigurationService {
       )
 
       this.sessionProviders.delete(
+        accountId,
+      )
+      this.sessionSecrets.delete(
         accountId,
       )
 
@@ -1363,6 +1525,8 @@ export class ProviderConfigurationService {
         return this.createOpenAIProvider(
           secret,
           configuration.model,
+          configuration.reasoningEffort
+            ?? 'auto',
         )
 
       case 'openai-compatible':
@@ -1403,6 +1567,9 @@ export class ProviderConfigurationService {
       label,
 
       model,
+
+      reasoningEffort:
+        'auto',
 
       identityLabel:
         null,
@@ -1458,6 +1625,9 @@ export class ProviderConfigurationService {
     )
 
     this.sessionProviders.delete(
+      LOCAL_OMNIROUTE_ACCOUNT_ID,
+    )
+    this.sessionSecrets.delete(
       LOCAL_OMNIROUTE_ACCOUNT_ID,
     )
 

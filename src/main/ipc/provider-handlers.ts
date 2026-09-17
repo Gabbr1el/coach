@@ -289,6 +289,8 @@ export function registerProviderHandlers(
         input.accountId,
         input.label,
         input.identityLabel,
+        input.model,
+        input.reasoningEffort,
       )
     },
   )

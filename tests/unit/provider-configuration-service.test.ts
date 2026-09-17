@@ -24,6 +24,57 @@ class MemoryConfigurationRepository implements ProviderConfigurationRepository {
   async list() { return this.configurations }
   async createAndActivate(configuration: ProviderConfiguration) { this.configurations = [...this.configurations.map((item) => ({ ...item, isActive: false })), configuration] }
   async activate(id: string, updatedAt: number) { this.configurations = this.configurations.map((item) => ({ ...item, isActive: item.id === id, updatedAt })) }
+
+  async setEnabled(id: string, enabled: boolean, updatedAt: number) {
+    const found = await this.findById(id)
+
+    if (!found) {
+      return null
+    }
+
+    this.configurations = this.configurations.map((item) =>
+      item.id === id
+        ? {
+            ...item,
+            isEnabled: enabled,
+            isActive: enabled ? item.isActive : false,
+            updatedAt,
+          }
+        : item,
+    )
+
+    return this.findById(id)
+  }
+
+  async update(
+    id: string,
+    input: {
+      readonly label?: string
+      readonly model?: string
+      readonly reasoningEffort?: 'auto' | 'low' | 'medium' | 'high'
+      readonly identityLabel?: string | null
+      readonly baseUrl?: string | null
+      readonly updatedAt: number
+    },
+  ) {
+    const found = await this.findById(id)
+
+    if (!found) {
+      return null
+    }
+
+    this.configurations = this.configurations.map((item) =>
+      item.id === id
+        ? {
+            ...item,
+            ...input,
+          }
+        : item,
+    )
+
+    return this.findById(id)
+  }
+
   async remove(id: string) { const found = await this.findById(id); this.configurations = this.configurations.filter((item) => item.id !== id); return found }
 }
 
@@ -320,5 +371,353 @@ describe('ProviderConfigurationService multi-account behavior', () => {
 
     expect(manager.list())
       .toHaveLength(10)
+  })
+})
+
+
+describe('ProviderConfigurationService account lifecycle', () => {
+  it('disables the active session account, selects another enabled account, and can re-enable it without losing the session provider', async () => {
+    const repository =
+      new MemoryConfigurationRepository()
+
+    const manager =
+      new AIProviderManager()
+
+    const service =
+      new ProviderConfigurationService(
+        repository,
+        new MemoryVault(false),
+        manager,
+        openAIProvider,
+        compatibleProvider,
+      )
+
+    await service.configureOpenAI(
+      'Conta A',
+      'secret-key-value-that-is-long-enough-a',
+      'gpt-test',
+      'session',
+    )
+
+    const accountAId =
+      manager.getActiveRegistrationId()
+
+    await service.configureOpenAI(
+      'Conta B',
+      'secret-key-value-that-is-long-enough-b',
+      'gpt-test',
+      'session',
+    )
+
+    const accountBId =
+      manager.getActiveRegistrationId()
+
+    expect(accountAId)
+      .not
+      .toBeNull()
+
+    expect(accountBId)
+      .not
+      .toBeNull()
+
+    expect(accountBId)
+      .not
+      .toBe(accountAId)
+
+    await service.setAccountEnabled(
+      accountBId!,
+      false,
+    )
+
+    expect(
+      manager.getActiveRegistrationId(),
+    ).toBe(accountAId)
+
+    let accounts =
+      await service.listAccounts()
+
+    expect(
+      accounts.find(
+        (account) =>
+          account.id === accountBId,
+      ),
+    ).toMatchObject({
+      isEnabled: false,
+      isActive: false,
+    })
+
+    await expect(
+      service.selectAccount(
+        accountBId!,
+      ),
+    ).rejects.toThrow(
+      'Provider account is disabled',
+    )
+
+    await service.setAccountEnabled(
+      accountBId!,
+      true,
+    )
+
+    expect(
+      manager.getActiveRegistrationId(),
+    ).toBe(accountAId)
+
+    accounts =
+      await service.listAccounts()
+
+    expect(
+      accounts.find(
+        (account) =>
+          account.id === accountBId,
+      ),
+    ).toMatchObject({
+      isEnabled: true,
+      isActive: false,
+    })
+
+    await service.selectAccount(
+      accountBId!,
+    )
+
+    expect(
+      manager.getActiveRegistrationId(),
+    ).toBe(accountBId)
+
+    expect(manager.list())
+      .toHaveLength(2)
+  })
+
+  it('edits a session account label without changing the connector identity', async () => {
+    const repository =
+      new MemoryConfigurationRepository()
+
+    const manager =
+      new AIProviderManager()
+
+    const service =
+      new ProviderConfigurationService(
+        repository,
+        new MemoryVault(false),
+        manager,
+        openAIProvider,
+        compatibleProvider,
+      )
+
+    await service.configureOpenAI(
+      'Principal',
+      'secret-key-value-that-is-long-enough',
+      'gpt-test',
+      'session',
+    )
+
+    const accountId =
+      manager.getActiveRegistrationId()
+
+    expect(accountId)
+      .not
+      .toBeNull()
+
+    await service.updateAccount(
+      accountId!,
+      'Minha OpenAI',
+      'Conta pessoal',
+    )
+
+    const accounts =
+      await service.listAccounts()
+
+    expect(
+      accounts.find(
+        (account) =>
+          account.id === accountId,
+      ),
+    ).toMatchObject({
+      providerId: 'openai',
+      providerName: 'OpenAI',
+      label: 'Minha OpenAI',
+      identityLabel: 'Conta pessoal',
+      isEnabled: true,
+      isActive: true,
+      sessionOnly: true,
+    })
+  })
+
+  it('disables and re-enables a persisted account without deleting its credential', async () => {
+    const repository =
+      new MemoryConfigurationRepository()
+
+    const vault =
+      new MemoryVault(true)
+
+    const manager =
+      new AIProviderManager()
+
+    const service =
+      new ProviderConfigurationService(
+        repository,
+        vault,
+        manager,
+        openAIProvider,
+        compatibleProvider,
+        () => 100,
+      )
+
+    await service.configureOpenAI(
+      'Principal',
+      'secret-key-value-that-is-long-enough',
+      'gpt-test',
+      'secure-vault',
+    )
+
+    const accountId =
+      repository.configuration!.id
+
+    const originalSecret =
+      vault.value
+
+    const originalReference =
+      repository.configuration!
+        .secretReference
+
+    await service.setAccountEnabled(
+      accountId,
+      false,
+    )
+
+    expect(
+      repository.configuration,
+    ).toMatchObject({
+      id: accountId,
+      isEnabled: false,
+      isActive: false,
+    })
+
+    expect(vault.value)
+      .toBe(originalSecret)
+
+    expect(
+      repository.configuration!
+        .secretReference,
+    ).toBe(originalReference)
+
+    await service.setAccountEnabled(
+      accountId,
+      true,
+    )
+
+    expect(
+      repository.configuration,
+    ).toMatchObject({
+      id: accountId,
+      isEnabled: true,
+      isActive: false,
+    })
+
+    expect(vault.value)
+      .toBe(originalSecret)
+
+    expect(
+      repository.configuration!
+        .secretReference,
+    ).toBe(originalReference)
+
+    await service.selectAccount(
+      accountId,
+    )
+
+    expect(
+      manager.getActiveRegistrationId(),
+    ).toBe(accountId)
+
+    expect(
+      repository.configuration,
+    ).toMatchObject({
+      isEnabled: true,
+      isActive: true,
+    })
+  })
+
+  it('edits persisted account metadata without touching the stored credential', async () => {
+    const repository =
+      new MemoryConfigurationRepository()
+
+    const vault =
+      new MemoryVault(true)
+
+    const manager =
+      new AIProviderManager()
+
+    const service =
+      new ProviderConfigurationService(
+        repository,
+        vault,
+        manager,
+        openAIProvider,
+        compatibleProvider,
+        () => 200,
+      )
+
+    await service.configureOpenAI(
+      'Principal',
+      'secret-key-value-that-is-long-enough',
+      'gpt-test',
+      'secure-vault',
+    )
+
+    const accountId =
+      repository.configuration!.id
+
+    const originalSecret =
+      vault.value
+
+    const originalReference =
+      repository.configuration!
+        .secretReference
+
+    await service.updateAccount(
+      accountId,
+      'OpenAI pessoal',
+      'Conta principal',
+    )
+
+    expect(
+      repository.configuration,
+    ).toMatchObject({
+      id: accountId,
+      providerId: 'openai',
+      displayName: 'OpenAI',
+      label: 'OpenAI pessoal',
+      identityLabel: 'Conta principal',
+    })
+
+    expect(
+      repository.configuration!
+        .secretReference,
+    ).toBe(originalReference)
+
+    expect(vault.value)
+      .toBe(originalSecret)
+
+    const accounts =
+      await service.listAccounts()
+
+    expect(
+      accounts.find(
+        (account) =>
+          account.id === accountId,
+      ),
+    ).toMatchObject({
+      providerName: 'OpenAI',
+      label: 'OpenAI pessoal',
+      identityLabel: 'Conta principal',
+    })
+
+    expect(
+      await service.getStatus(),
+    ).toMatchObject({
+      providerName: 'OpenAI',
+      activeAccountId: accountId,
+    })
   })
 })

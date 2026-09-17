@@ -6,94 +6,144 @@ import type {
 
 export const configureOpenAIInputSchema = z
   .object({
-    label: z
-      .string()
-      .trim()
-      .min(1)
-      .max(60),
+    label:
+      z.string()
+        .trim()
+        .min(1)
+        .max(60),
 
-    apiKey: z
-      .string()
-      .trim()
-      .min(20)
-      .max(512),
+    apiKey:
+      z.string()
+        .trim()
+        .min(20)
+        .max(512),
 
-    model: z
-      .string()
-      .trim()
-      .min(1)
-      .max(100)
-      .default('gpt-5-mini'),
+    model:
+      z.string()
+        .trim()
+        .min(1)
+        .max(100)
+        .default('gpt-5-mini'),
 
-    persistence: z
-      .enum([
+    persistence:
+      z.enum([
         'secure-vault',
         'session',
       ])
-      .default('secure-vault'),
+        .default('secure-vault'),
   })
   .strict()
 
 export const configureCompatibleInputSchema = z
   .object({
-    label: z
-      .string()
-      .trim()
-      .min(1)
-      .max(60),
+    label:
+      z.string()
+        .trim()
+        .min(1)
+        .max(60),
 
-    baseUrl: z
-      .url()
-      .max(500)
-      .refine((value) => {
-        const url = new URL(value)
+    baseUrl:
+      z.url()
+        .max(500)
+        .refine(
+          (value) => {
+            const url =
+              new URL(value)
 
-        return (
-          !url.username
-          && !url.password
-          && !url.search
-          && !url.hash
-          && (
-            url.protocol === 'https:'
-            || (
-              url.protocol === 'http:'
+            return (
+              !url.username
+              && !url.password
+              && !url.search
+              && !url.hash
               && (
-                url.hostname === '127.0.0.1'
-                || url.hostname === '[::1]'
+                url.protocol === 'https:'
+                || (
+                  url.protocol === 'http:'
+                  && (
+                    url.hostname === '127.0.0.1'
+                    || url.hostname === '[::1]'
+                  )
+                )
               )
             )
-          )
-        )
-      }, 'Invalid compatible provider URL'),
+          },
+          'Invalid compatible provider URL',
+        ),
 
-    apiKey: z
-      .string()
-      .trim()
-      .min(1)
-      .max(512),
+    apiKey:
+      z.string()
+        .trim()
+        .min(1)
+        .max(512),
 
-    model: z
-      .string()
-      .trim()
-      .min(1)
-      .max(150),
+    model:
+      z.string()
+        .trim()
+        .min(1)
+        .max(150),
 
-    persistence: z
-      .enum([
+    persistence:
+      z.enum([
         'secure-vault',
         'session',
       ])
-      .default('session'),
+        .default('session'),
   })
   .strict()
 
-export const providerAccountIdSchema = z.uuid()
+export const providerAccountIdSchema =
+  z.uuid()
+
+export const setProviderAccountEnabledInputSchema =
+  z.object({
+    accountId:
+      providerAccountIdSchema,
+
+    enabled:
+      z.boolean(),
+  })
+    .strict()
+
+export const updateProviderAccountInputSchema =
+  z.object({
+    accountId:
+      providerAccountIdSchema,
+
+    label:
+      z.string()
+        .trim()
+        .min(1)
+        .max(60),
+
+    identityLabel:
+      z.string()
+        .trim()
+        .min(1)
+        .max(120)
+        .nullable()
+        .optional(),
+  })
+    .strict()
 
 export type ConfigureOpenAIInput =
-  z.infer<typeof configureOpenAIInputSchema>
+  z.infer<
+    typeof configureOpenAIInputSchema
+  >
 
 export type ConfigureCompatibleInput =
-  z.infer<typeof configureCompatibleInputSchema>
+  z.infer<
+    typeof configureCompatibleInputSchema
+  >
+
+export type SetProviderAccountEnabledInput =
+  z.infer<
+    typeof setProviderAccountEnabledInputSchema
+  >
+
+export type UpdateProviderAccountInput =
+  z.infer<
+    typeof updateProviderAccountInputSchema
+  >
 
 export type ProviderConnectionState =
   | 'not-configured'
@@ -147,8 +197,14 @@ export interface ProviderAccountSummary {
   readonly label:
     string
 
+  readonly identityLabel?:
+    string | null
+
   readonly model:
     string
+
+  readonly isEnabled:
+    boolean
 
   readonly isActive:
     boolean
@@ -165,23 +221,43 @@ export interface ProviderApi {
     Promise<ProviderStatus>
 
   listAccounts():
-    Promise<ProviderAccountSummary[]>
+    Promise<
+      ProviderAccountSummary[]
+    >
 
   configureOpenAI(
-    input: ConfigureOpenAIInput,
-  ): Promise<ConfigureProviderResult>
+    input:
+      ConfigureOpenAIInput,
+  ):
+    Promise<ConfigureProviderResult>
 
   configureCompatible(
-    input: ConfigureCompatibleInput,
-  ): Promise<ConfigureProviderResult>
+    input:
+      ConfigureCompatibleInput,
+  ):
+    Promise<ConfigureProviderResult>
 
   selectAccount(
     accountId: string,
-  ): Promise<ProviderStatus>
+  ):
+    Promise<ProviderStatus>
+
+  setAccountEnabled(
+    input:
+      SetProviderAccountEnabledInput,
+  ):
+    Promise<ProviderStatus>
+
+  updateAccount(
+    input:
+      UpdateProviderAccountInput,
+  ):
+    Promise<ProviderStatus>
 
   removeAccount(
     accountId: string,
-  ): Promise<ProviderStatus>
+  ):
+    Promise<ProviderStatus>
 }
 
 export type ProviderConnectionErrorCode =
@@ -193,14 +269,19 @@ export type ProviderConnectionErrorCode =
   | 'NETWORK_UNAVAILABLE'
   | 'SECURE_STORAGE_UNAVAILABLE'
   | 'INVALID_CONFIGURATION'
+  | 'ACCOUNT_DISABLED'
+  | 'ACCOUNT_NOT_FOUND'
+  | 'ACCOUNT_LIMIT_REACHED'
   | 'UNKNOWN'
 
 export type ConfigureProviderResult =
   | {
       readonly ok: true
-      readonly status: ProviderStatus
+      readonly status:
+        ProviderStatus
     }
   | {
       readonly ok: false
-      readonly code: ProviderConnectionErrorCode
+      readonly code:
+        ProviderConnectionErrorCode
     }

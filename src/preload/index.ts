@@ -150,6 +150,8 @@ const api: CoachDesktopApi = {
     configureOpenAI: (input) => ipcRenderer.invoke(PROVIDER_CHANNELS.configureOpenAI, input),
     configureCompatible: (input) => ipcRenderer.invoke(PROVIDER_CHANNELS.configureCompatible, input),
     selectAccount: (accountId) => ipcRenderer.invoke(PROVIDER_CHANNELS.selectAccount, accountId),
+    setAccountEnabled: (input) => ipcRenderer.invoke(PROVIDER_CHANNELS.setAccountEnabled, input),
+    updateAccount: (input) => ipcRenderer.invoke(PROVIDER_CHANNELS.updateAccount, input),
     removeAccount: (accountId) => ipcRenderer.invoke(PROVIDER_CHANNELS.removeAccount, accountId),
   },
   studyWorkspace: {

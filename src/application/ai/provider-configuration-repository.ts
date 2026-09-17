@@ -12,21 +12,6 @@ export interface ProviderConfiguration {
   readonly displayName: string
   readonly label: string
 
-  /**
-   * Transitional optional fields:
-   *
-   * Eles são obrigatórios no banco novo, mas permanecem opcionais aqui
-   * durante a migração da camada de aplicação.
-   *
-   * Isso permite preservar integralmente os fluxos antigos de OpenAI e
-   * OpenAI-compatible enquanto atualizamos o serviço no próximo passo.
-   *
-   * O banco fornece defaults seguros:
-   *
-   * authKind         -> api-key
-   * reasoningEffort  -> auto
-   * isEnabled        -> true
-   */
   readonly authKind?: ProviderAuthKind
   readonly identityLabel?: string | null
 
@@ -44,10 +29,21 @@ export interface ProviderConfiguration {
   readonly updatedAt: number
 }
 
+export interface UpdateProviderConfigurationInput {
+  readonly label?: string
+  readonly model?: string
+  readonly reasoningEffort?: ReasoningEffort
+  readonly identityLabel?: string | null
+  readonly baseUrl?: string | null
+  readonly updatedAt: number
+}
+
 export interface ProviderConfigurationRepository {
   getActive(): Promise<ProviderConfiguration | null>
 
-  findById(id: string): Promise<ProviderConfiguration | null>
+  findById(
+    id: string,
+  ): Promise<ProviderConfiguration | null>
 
   list(): Promise<ProviderConfiguration[]>
 
@@ -59,6 +55,17 @@ export interface ProviderConfigurationRepository {
     id: string,
     updatedAt: number,
   ): Promise<void>
+
+  setEnabled(
+    id: string,
+    enabled: boolean,
+    updatedAt: number,
+  ): Promise<ProviderConfiguration | null>
+
+  update(
+    id: string,
+    input: UpdateProviderConfigurationInput,
+  ): Promise<ProviderConfiguration | null>
 
   remove(
     id: string,

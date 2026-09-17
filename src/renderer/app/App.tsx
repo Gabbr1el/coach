@@ -200,6 +200,9 @@ function ProviderSettingsDialog({ status, accounts, onClose, onConfigured, onCon
           NETWORK_UNAVAILABLE: `Não foi possível alcançar ${providerType === 'openai' ? 'a OpenAI' : 'o provedor configurado'}. Verifique o serviço, rede ou firewall.`,
           SECURE_STORAGE_UNAVAILABLE: 'O cofre seguro não está disponível. Escolha “Somente nesta sessão”.',
           INVALID_CONFIGURATION: 'A configuração enviada é inválida. Revise nome, chave, modelo e armazenamento.',
+          ACCOUNT_DISABLED: 'Esta conta de IA está desativada.',
+          ACCOUNT_NOT_FOUND: 'A conta de IA não foi encontrada.',
+          ACCOUNT_LIMIT_REACHED: 'O limite de 10 contas de IA foi atingido.',
           UNKNOWN: 'A OpenAI retornou uma resposta inesperada. Confira a conta e tente novamente.',
         } as const
         setError(messages[result.code])

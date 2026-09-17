@@ -76,6 +76,17 @@ export class ProviderConfigurationService {
   private readonly sessionAccounts =
     new Map<string, ProviderAccountSummary>()
 
+  /**
+   * Providers session-only permanecem somente em memória.
+   *
+   * Ao desativar uma conta, ela sai do AIProviderManager para não poder
+   * ser usada nem por seleção nem por rotas, mas sua instância permanece
+   * aqui para que possa ser habilitada novamente sem solicitar a
+   * credencial outra vez.
+   */
+  private readonly sessionProviders =
+    new Map<string, AIProvider>()
+
   private readonly healthByAccount =
     new Map<string, ProviderHealth>()
 
@@ -120,6 +131,7 @@ export class ProviderConfigurationService {
        */
       this.manager.clear()
       this.sessionAccounts.clear()
+      this.sessionProviders.clear()
       this.healthByAccount.clear()
 
       const configurations =
@@ -303,6 +315,14 @@ export class ProviderConfigurationService {
           model:
             configuration.model,
 
+          identityLabel:
+            configuration.identityLabel
+            ?? null,
+
+          isEnabled:
+            configuration.isEnabled
+            !== false,
+
           isActive:
             configuration.id
             === operationalAccountId,
@@ -410,6 +430,12 @@ export class ProviderConfigurationService {
 
         model,
 
+        identityLabel:
+          null,
+
+        isEnabled:
+          true,
+
         isActive:
           true,
 
@@ -425,6 +451,11 @@ export class ProviderConfigurationService {
       this.sessionAccounts.set(
         accountId,
         account,
+      )
+
+      this.sessionProviders.set(
+        accountId,
+        provider,
       )
 
       this.registerAndSelect(
@@ -575,6 +606,12 @@ export class ProviderConfigurationService {
 
             model,
 
+            identityLabel:
+              null,
+
+            isEnabled:
+              true,
+
             isActive:
               true,
 
@@ -589,6 +626,11 @@ export class ProviderConfigurationService {
           this.sessionAccounts.set(
             accountId,
             account,
+          )
+
+          this.sessionProviders.set(
+            accountId,
+            provider,
           )
 
           this.registerAndSelect(
@@ -696,6 +738,31 @@ export class ProviderConfigurationService {
       )
 
     if (sessionAccount) {
+      if (
+        sessionAccount.isEnabled
+        === false
+      ) {
+        throw new Error(
+          'Provider account is disabled',
+        )
+      }
+
+      const provider =
+        this.sessionProviders.get(
+          accountId,
+        )
+
+      if (!provider) {
+        throw new Error(
+          'Provider session connection not found',
+        )
+      }
+
+      this.manager.replace(
+        provider,
+        accountId,
+      )
+
       this.manager.select(
         accountId,
       )
@@ -783,6 +850,257 @@ export class ProviderConfigurationService {
     return this.getStatus()
   }
 
+  async setAccountEnabled(
+    accountId: string,
+    enabled: boolean,
+  ): Promise<ProviderStatus> {
+    return this.exclusive(
+      async () => {
+        const sessionAccount =
+          this.sessionAccounts.get(
+            accountId,
+          )
+
+        if (sessionAccount) {
+          const updated = {
+            ...sessionAccount,
+            isEnabled:
+              enabled,
+          }
+
+          this.sessionAccounts.set(
+            accountId,
+            updated,
+          )
+
+          if (!enabled) {
+            const wasActive =
+              this.manager
+                .getActiveRegistrationId()
+              === accountId
+
+            /*
+             * Remove da camada operacional para garantir que uma conta
+             * desativada não seja usada nem pela seleção principal nem
+             * por uma rota específica.
+             *
+             * A instância continua em sessionProviders.
+             */
+            this.manager.remove(
+              accountId,
+            )
+
+            if (wasActive) {
+              await this.ensureActiveProvider(
+                true,
+              )
+            }
+
+            return this.getStatus()
+          }
+
+          const provider =
+            this.sessionProviders.get(
+              accountId,
+            )
+
+          if (!provider) {
+            throw new Error(
+              'Provider session connection not found',
+            )
+          }
+
+          /*
+           * Habilitar torna a conta utilizável novamente, mas não a
+           * transforma automaticamente na conta principal.
+           */
+          this.manager.replace(
+            provider,
+            accountId,
+          )
+
+          return this.getStatus()
+        }
+
+        const configuration =
+          await this.repository.setEnabled(
+            accountId,
+            enabled,
+            this.now(),
+          )
+
+        if (!configuration) {
+          throw new Error(
+            'Provider account not found',
+          )
+        }
+
+        if (!enabled) {
+          const wasActive =
+            this.manager
+              .getActiveRegistrationId()
+            === accountId
+
+          this.manager.remove(
+            accountId,
+          )
+
+          this.healthByAccount.delete(
+            accountId,
+          )
+
+          if (wasActive) {
+            await this.ensureActiveProvider(
+              true,
+            )
+          }
+
+          return this.getStatus()
+        }
+
+        /*
+         * Ao habilitar uma conta persistida, reconstruímos o provider
+         * a partir da credencial segura. Ela fica disponível para uso,
+         * mas não vira principal automaticamente.
+         */
+        if (!this.vault.isAvailable()) {
+          throw new Error(
+            'Secure operating-system credential storage is unavailable',
+          )
+        }
+
+        const secret =
+          await this.vault.get(
+            configuration.secretReference,
+          )
+
+        if (!secret) {
+          throw new Error(
+            'Provider credential not found',
+          )
+        }
+
+        const provider =
+          this.createProviderForConfiguration(
+            configuration,
+            secret,
+          )
+
+        this.manager.replace(
+          provider,
+          accountId,
+        )
+
+        return this.getStatus()
+      },
+    )
+  }
+
+  async updateAccount(
+    accountId: string,
+    label: string,
+    identityLabel?: string | null,
+  ): Promise<ProviderStatus> {
+    return this.exclusive(
+      async () => {
+        const normalizedLabel =
+          label.trim()
+
+        if (
+          normalizedLabel.length < 1
+          || normalizedLabel.length > 60
+        ) {
+          throw new Error(
+            'Invalid provider account label',
+          )
+        }
+
+        const normalizedIdentity =
+          identityLabel === undefined
+            ? undefined
+            : identityLabel === null
+              ? null
+              : identityLabel.trim()
+
+        if (
+          normalizedIdentity !== undefined
+          && normalizedIdentity !== null
+          && (
+            normalizedIdentity.length < 1
+            || normalizedIdentity.length > 120
+          )
+        ) {
+          throw new Error(
+            'Invalid provider account identity label',
+          )
+        }
+
+        const sessionAccount =
+          this.sessionAccounts.get(
+            accountId,
+          )
+
+        if (sessionAccount) {
+          this.sessionAccounts.set(
+            accountId,
+            {
+              ...sessionAccount,
+
+              label:
+                normalizedLabel,
+
+              identityLabel:
+                normalizedIdentity
+                ?? sessionAccount.identityLabel
+                ?? null,
+            },
+          )
+
+          return this.getStatus()
+        }
+
+        const existing =
+          await this.repository.findById(
+            accountId,
+          )
+
+        if (!existing) {
+          throw new Error(
+            'Provider account not found',
+          )
+        }
+
+        const updated =
+          await this.repository.update(
+            accountId,
+            {
+              label:
+                normalizedLabel,
+
+              ...(normalizedIdentity
+                !== undefined
+                ? {
+                    identityLabel:
+                      normalizedIdentity,
+                  }
+                : {}),
+
+              updatedAt:
+                this.now(),
+            },
+          )
+
+        if (!updated) {
+          throw new Error(
+            'Provider account not found',
+          )
+        }
+
+        return this.getStatus()
+      },
+    )
+  }
+
   async removeAccount(
     accountId: string,
   ): Promise<ProviderStatus> {
@@ -813,6 +1131,10 @@ export class ProviderConfigurationService {
       )
 
       this.sessionAccounts.delete(
+        accountId,
+      )
+
+      this.sessionProviders.delete(
         accountId,
       )
 
@@ -1003,6 +1325,13 @@ export class ProviderConfigurationService {
       const account
       of this.sessionAccounts.values()
     ) {
+      if (
+        account.isEnabled
+        === false
+      ) {
+        continue
+      }
+
       try {
         this.manager.select(
           account.id,
@@ -1075,6 +1404,12 @@ export class ProviderConfigurationService {
 
       model,
 
+      identityLabel:
+        null,
+
+      isEnabled:
+        true,
+
       isActive:
         true,
 
@@ -1084,20 +1419,27 @@ export class ProviderConfigurationService {
       baseUrl,
     }
 
-    this.sessionAccounts.set(
-      LOCAL_OMNIROUTE_ACCOUNT_ID,
-      account,
-    )
-
-    this.registerAndSelect(
-      LOCAL_OMNIROUTE_ACCOUNT_ID,
-
+    const provider =
       this.createCompatibleProvider(
         label,
         baseUrl,
         'omniroute',
         model,
-      ),
+      )
+
+    this.sessionAccounts.set(
+      LOCAL_OMNIROUTE_ACCOUNT_ID,
+      account,
+    )
+
+    this.sessionProviders.set(
+      LOCAL_OMNIROUTE_ACCOUNT_ID,
+      provider,
+    )
+
+    this.registerAndSelect(
+      LOCAL_OMNIROUTE_ACCOUNT_ID,
+      provider,
     )
   }
 
@@ -1112,6 +1454,10 @@ export class ProviderConfigurationService {
     }
 
     this.sessionAccounts.delete(
+      LOCAL_OMNIROUTE_ACCOUNT_ID,
+    )
+
+    this.sessionProviders.delete(
       LOCAL_OMNIROUTE_ACCOUNT_ID,
     )
 

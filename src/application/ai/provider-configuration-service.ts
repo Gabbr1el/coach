@@ -114,6 +114,10 @@ export class ProviderConfigurationService {
 
     private readonly createCompatibleProvider:
       (
+        connectorId:
+          'openai-compatible'
+          | 'omniroute',
+
         label: string,
         baseUrl: string,
         apiKey: string,
@@ -152,8 +156,12 @@ export class ProviderConfigurationService {
           ...configurations,
         ].find(
           (item) =>
-            item?.providerId ===
-              'openai-compatible'
+            (
+              item?.providerId ===
+                'omniroute'
+              || item?.providerId ===
+                'openai-compatible'
+            )
             && isLocalOmniRoute(
               item.baseUrl,
             ),
@@ -564,6 +572,10 @@ export class ProviderConfigurationService {
   }
 
   async configureCompatible(
+    connectorId:
+      | 'openai-compatible'
+      | 'omniroute',
+
     label: string,
     baseUrl: string,
     apiKey: string,
@@ -587,6 +599,7 @@ export class ProviderConfigurationService {
 
         const provider =
           this.createCompatibleProvider(
+            connectorId,
             label,
             baseUrl,
             apiKey,
@@ -615,7 +628,7 @@ export class ProviderConfigurationService {
               accountId,
 
             providerId:
-              'openai-compatible',
+              connectorId,
 
             providerName:
               label,
@@ -683,7 +696,7 @@ export class ProviderConfigurationService {
               accountId,
 
             providerId:
-              'openai-compatible',
+              connectorId,
 
             displayName:
               label,
@@ -1120,6 +1133,7 @@ async updateAccount(
             case 'omniroute':
               provider =
                 this.createCompatibleProvider(
+                  sessionAccount.providerId,
                   normalizedLabel,
                   sessionAccount.baseUrl
                     ?? '',
@@ -1532,6 +1546,7 @@ async updateAccount(
       case 'openai-compatible':
       case 'omniroute':
         return this.createCompatibleProvider(
+          configuration.providerId,
           configuration.label,
           configuration.baseUrl
             ?? '',
@@ -1559,7 +1574,7 @@ async updateAccount(
         LOCAL_OMNIROUTE_ACCOUNT_ID,
 
       providerId:
-        'openai-compatible',
+        'omniroute',
 
       providerName:
         label,
@@ -1588,6 +1603,7 @@ async updateAccount(
 
     const provider =
       this.createCompatibleProvider(
+        'omniroute',
         label,
         baseUrl,
         'omniroute',

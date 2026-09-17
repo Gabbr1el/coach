@@ -169,6 +169,7 @@ export function registerProviderHandlers(
           status:
             await service
               .configureCompatible(
+                input.connectorId,
                 input.label,
                 input.baseUrl,
                 input.apiKey,

@@ -50,14 +50,43 @@ export class OpenAICompatibleProviderError extends Error {
   }
 }
 
+export type OpenAICompatibleConnectorId =
+  | 'openai-compatible'
+  | 'omniroute'
+
 export class OpenAICompatibleProvider implements AIProvider {
-  readonly id = 'openai-compatible'
+  readonly id:
+    OpenAICompatibleConnectorId
+
   readonly name: string
   private readonly baseUrl: string
 
-  constructor(name: string, baseUrl: string, private readonly apiKey: string, private readonly defaultModel: string, private readonly fetcher: Fetcher = fetch) {
-    this.name = name
-    this.baseUrl = normalizeCompatibleBaseUrl(baseUrl)
+  constructor(
+    connectorId:
+      OpenAICompatibleConnectorId,
+
+    name: string,
+    baseUrl: string,
+
+    private readonly apiKey:
+      string,
+
+    private readonly defaultModel:
+      string,
+
+    private readonly fetcher:
+      Fetcher = fetch,
+  ) {
+    this.id =
+      connectorId
+
+    this.name =
+      name
+
+    this.baseUrl =
+      normalizeCompatibleBaseUrl(
+        baseUrl,
+      )
   }
 
   getCapabilities(): AIProviderCapabilities {

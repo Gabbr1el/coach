@@ -37,6 +37,11 @@ export const configureOpenAIInputSchema = z
 
 export const configureCompatibleInputSchema = z
   .object({
+    connectorId:
+      z.enum([
+        'omniroute',
+        'openai-compatible',
+      ]),
     label:
       z.string()
         .trim()

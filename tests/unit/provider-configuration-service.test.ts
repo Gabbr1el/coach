@@ -92,6 +92,164 @@ describe('ProviderConfigurationService', () => {
     await service.initialize()
     expect(await service.getStatus()).toMatchObject({ configured: true, connected: false, connectionState: 'unchecked', quota: 'unknown', providerName: 'OmniRoute local', model: 'codex/gpt-5.6-sol', sessionOnly: true })
   })
+  it('restores a persisted OmniRoute identity when secure storage is unavailable', async () => {
+    const repository =
+      new MemoryConfigurationRepository()
+
+    repository.configuration = {
+      id:
+        '00000000-0000-4000-8000-000000000020',
+
+      providerId:
+        'omniroute',
+
+      displayName:
+        'Meu OmniRoute',
+
+      label:
+        'Meu OmniRoute',
+
+      baseUrl:
+        'http://127.0.0.1:20128/v1',
+
+      model:
+        'custom/model',
+
+      secretReference:
+        'unused-local-secret',
+
+      isActive:
+        true,
+
+      createdAt:
+        1,
+
+      updatedAt:
+        1,
+    }
+
+    const manager =
+      new AIProviderManager()
+
+    const service =
+      new ProviderConfigurationService(
+        repository,
+        new MemoryVault(false),
+        manager,
+        openAIProvider,
+        (
+          connectorId,
+          name,
+        ) => ({
+          ...provider(),
+          id:
+            connectorId,
+          name,
+        }),
+      )
+
+    await service.initialize()
+
+    expect(
+      await service.getStatus(),
+    ).toMatchObject({
+      providerId:
+        'omniroute',
+
+      providerName:
+        'Meu OmniRoute',
+
+      model:
+        'custom/model',
+
+      sessionOnly:
+        true,
+    })
+
+    expect(
+      manager.getActive()?.id,
+    ).toBe('omniroute')
+  })
+
+  it('keeps compatibility with legacy local OmniRoute entries stored as openai-compatible', async () => {
+    const repository =
+      new MemoryConfigurationRepository()
+
+    repository.configuration = {
+      id:
+        '00000000-0000-4000-8000-000000000021',
+
+      providerId:
+        'openai-compatible',
+
+      displayName:
+        'OmniRoute legado',
+
+      label:
+        'OmniRoute legado',
+
+      baseUrl:
+        'http://127.0.0.1:20128/v1',
+
+      model:
+        'legacy/model',
+
+      secretReference:
+        'unused-local-secret',
+
+      isActive:
+        true,
+
+      createdAt:
+        1,
+
+      updatedAt:
+        1,
+    }
+
+    const manager =
+      new AIProviderManager()
+
+    const service =
+      new ProviderConfigurationService(
+        repository,
+        new MemoryVault(false),
+        manager,
+        openAIProvider,
+        (
+          connectorId,
+          name,
+        ) => ({
+          ...provider(),
+          id:
+            connectorId,
+          name,
+        }),
+      )
+
+    await service.initialize()
+
+    expect(
+      await service.getStatus(),
+    ).toMatchObject({
+      providerId:
+        'omniroute',
+
+      providerName:
+        'OmniRoute legado',
+
+      model:
+        'legacy/model',
+
+      sessionOnly:
+        true,
+    })
+
+    expect(
+      manager.getActive()?.id,
+    ).toBe('omniroute')
+  })
+
   it('tests, stores and selects a provider without putting the key in metadata', async () => {
     const repository = new MemoryConfigurationRepository()
     const vault = new MemoryVault()
@@ -143,9 +301,16 @@ describe('ProviderConfigurationService', () => {
     const manager = new AIProviderManager()
     const service = new ProviderConfigurationService(repository, new MemoryVault(false), manager, openAIProvider, compatibleProvider)
 
-    const status = await service.configureCompatible('OmniRoute', 'http://localhost:20128/v1', 'omniroute', 'codex/gpt-5.6-sol', 'session')
+    const status = await service.configureCompatible(
+      'omniroute',
+      'OmniRoute',
+      'http://localhost:20128/v1',
+      'omniroute',
+      'codex/gpt-5.6-sol',
+      'session',
+    )
 
-    expect(status).toMatchObject({ configured: true, providerId: 'openai-compatible', providerName: 'OmniRoute', sessionOnly: true })
+    expect(status).toMatchObject({ configured: true, providerId: 'omniroute', providerName: 'OmniRoute', sessionOnly: true })
     expect(repository.configurations).toEqual([])
   })
 

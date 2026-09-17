@@ -147,7 +147,20 @@ void app.whenReady().then(async () => {
           model,
           reasoningEffort,
         ),
-      (label, baseUrl, apiKey, model) => new OpenAICompatibleProvider(label, baseUrl, apiKey, model),
+      (
+        connectorId,
+        label,
+        baseUrl,
+        apiKey,
+        model,
+      ) =>
+        new OpenAICompatibleProvider(
+          connectorId,
+          label,
+          baseUrl,
+          apiKey,
+          model,
+        ),
     )
     await providerConfigurationService.initialize()
     const homePlannerService = new HomePlannerService({

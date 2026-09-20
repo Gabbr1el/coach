@@ -34,6 +34,19 @@ export type AIStreamEvent =
 export interface AIProvider {
   readonly id: string
   readonly name: string
+
+  /**
+   * Verificação leve de disponibilidade.
+   * Não deve gerar conteúdo nem consumir uma resposta do modelo.
+   */
+  checkAvailability?(): Promise<void>
+
+  /**
+   * Lista os modelos anunciados pelo provider quando
+   * ele oferece descoberta dinâmica.
+   */
+  listModels?(): Promise<readonly string[]>
+
   testConnection(): Promise<void>
   sendMessage(request: AIRequest): Promise<AIResponse>
   streamMessage?(request: AIRequest): AsyncIterable<AIStreamEvent>

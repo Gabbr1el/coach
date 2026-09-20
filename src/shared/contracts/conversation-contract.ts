@@ -62,10 +62,22 @@ export interface ConversationApi {
   }
 }
 
+export type ConversationStreamErrorCode =
+  | 'PROVIDER_UNAVAILABLE'
+  | 'REQUEST_FAILED'
+  | 'THREAD_BUSY'
+  | 'INSUFFICIENT_QUOTA'
+  | 'MODEL_UNAVAILABLE'
+  | 'RATE_LIMITED'
+  | 'INVALID_CREDENTIAL'
+  | 'ACCESS_RESTRICTED'
+  | 'NETWORK_UNAVAILABLE'
+  | 'REQUEST_TIMEOUT'
+
 export type HomeStreamEvent =
   | { readonly requestId: string; readonly type: 'started'; readonly state: 'sending' }
   | { readonly requestId: string; readonly type: 'state'; readonly state: 'context' | 'generating' | 'executing'; readonly metadata?: { readonly intent?: 'current_topic' | 'planning' | 'materials' | 'action'; readonly contextResources?: readonly string[]; readonly historyCount?: number; readonly snippetCount?: number } }
   | { readonly requestId: string; readonly type: 'text-delta'; readonly content: string }
   | { readonly requestId: string; readonly type: 'completed'; readonly messages: ConversationMessage[]; readonly metadata?: { readonly lessonAdapted?: { readonly lessonId: string; readonly blockId: string }; readonly plannerAction?: PlannerAction } }
   | { readonly requestId: string; readonly type: 'cancelled' }
-  | { readonly requestId: string; readonly type: 'error'; readonly code: 'PROVIDER_UNAVAILABLE' | 'REQUEST_FAILED' | 'THREAD_BUSY' }
+  | { readonly requestId: string; readonly type: 'error'; readonly code: ConversationStreamErrorCode }

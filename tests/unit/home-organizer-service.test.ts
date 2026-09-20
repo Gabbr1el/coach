@@ -38,6 +38,110 @@ describe('HomeOrganizerService', () => {
     expect(prompts.at(-1)).toContain('PÚBLICO'); expect(publicContext.state().focusedAcademicEventId).toBe(publicId)
   })
   it('keeps exact pedagogical routing in Workspace/Tutor behavior', async () => { const ctx = setup({ workspaces: [{ id: 'c', name: 'C' }] }); const turn = await ctx.service.organize({ content: 'me explica ponteiros em C' }); expect(turn.result).toMatchObject({ outcome: 'needs_decision', affectedWorkspaceIds: ['c'] }); expect(ctx.proposed).toHaveLength(0) })
+  it('routes explicit learning intent to the requested Workspace instead of tutoring in HOME', async () => {
+    const ctx =
+      setup({
+        workspaces: [
+          {
+            id:
+              'poo',
+
+            name:
+              'POO',
+          },
+          {
+            id:
+              'java',
+
+            name:
+              'Java',
+          },
+        ],
+      })
+
+    const turn =
+      await ctx.service.organize({
+        content:
+          'eu vou ter prova de POO, e quero aprender java',
+      })
+
+    expect(
+      turn.result,
+    ).toMatchObject({
+      outcome:
+        'needs_information',
+
+      affectedWorkspaceIds:
+        ['java'],
+    })
+
+    expect(
+      turn.result.message,
+    ).toContain(
+      'Workspace de Java',
+    )
+
+    expect(
+      turn.result.message,
+    ).not.toMatch(
+      /classes|herança|polimorfismo|encapsulamento/i,
+    )
+
+    expect(
+      ctx.proposed,
+    ).toHaveLength(0)
+  })
+
+  it('does not confuse a study-duration planning request with a pedagogical request', async () => {
+    const ctx =
+      setup()
+
+    const turn =
+      await ctx.service.organize({
+        content:
+          'quero estudar 2 horas hoje',
+      })
+
+    expect(
+      turn.result.actions[0],
+    ).toMatchObject({
+      type:
+        'plan.today-budget.set',
+
+      payload: {
+        minutes:
+          120,
+      },
+    })
+  })
+
+  it('preserves an exam while routing a learning request from the same message', async () => {
+    const ctx = setup({ workspaces: [{ id: 'c', name: 'C' }] })
+    const turn = await ctx.service.organize({
+      content: 'eu vou ter prova de python de dados, e quero aprender c',
+    })
+
+    expect(turn.result.message).toContain('Workspace de C')
+    expect(ctx.state().pending).toMatchObject({
+      capability: 'academic.event.create',
+      entities: { subject: 'python de dados', eventKind: 'exam' },
+      missingFields: ['dateExpression'],
+    })
+  })
+
+  it('keeps a dated exam independent from Workspace while routing another learning subject', async () => {
+    const ctx = setup()
+    const turn = await ctx.service.organize({
+      content: 'tenho prova de Python dia 25 às 19h, e quero aprender JavaScript',
+    })
+
+    expect(turn.result.actions[0]).toMatchObject({
+      type: 'academic-life.save',
+      payload: { workspaceId: null },
+    })
+    expect(turn.result.message).toContain('Workspace de JavaScript')
+  })
+
   it('keeps small talk informational without proposing a write', async () => { const ctx = setup(); const turn = await ctx.service.organize({ content: 'como voce está?' }); expect(turn.result.outcome).toBe('informational'); expect(ctx.proposed).toHaveLength(0); expect(ctx.authority()).toMatchObject({ currentDate: '2026-09-07', operationResult: null }) })
   it.each(['quais provas eu tenho?', 'quando é meu próximo prazo?', 'mostre meus trabalhos'])('treats read phrase %s as a query with zero domain writes', async (content) => { const ctx = setup(); const turn = await ctx.service.organize({ content }); expect(turn.result.outcome).toBe('informational'); expect(ctx.proposed).toHaveLength(0); expect(ctx.planningWrites()).toBe(0); expect(ctx.contextWrites()).toBe(0) })
   it('does not classify cancellation as create', async () => { const ctx = setup(); const turn = await ctx.service.organize({ content: 'cancele a prova de C' }); expect(turn.result.outcome).toBe('needs_information'); expect(ctx.proposed).toHaveLength(0) })
@@ -71,6 +175,167 @@ describe('HomeOrganizerService', () => {
   it('replans only after a confirmed linked reschedule or archived cancellation', () => { const workspaceId = '00000000-0000-4000-8000-000000000011'; const linked = academicEvent({ workspaceId }); const unlinked = academicEvent({ id: '00000000-0000-4000-8000-000000000012' }); const ctx = setup(); const save = { id: '00000000-0000-4000-8000-000000000013', originMessageId: crypto.randomUUID(), label: 'reschedule', contextVersion: 1, type: 'academic-life.save' as const, status: 'applied' as const, payload: { kind: 'event', workspaceId, timezone: 'UTC' }, result: linked, createdAt: 1, resolvedAt: 2 }; const transition = (id: string, status: 'resolved' | 'archived', result: any) => ({ id, originMessageId: crypto.randomUUID(), label: status, contextVersion: 1, type: 'academic-life.transition' as const, status: 'applied' as const, payload: { id: result.id, status }, result, createdAt: 1, resolvedAt: 2 }); ctx.service.onPlannerActionResolved(save); ctx.service.onPlannerActionResolved(transition('00000000-0000-4000-8000-000000000014', 'resolved', linked)); ctx.service.onPlannerActionResolved(transition('00000000-0000-4000-8000-000000000015', 'archived', linked)); ctx.service.onPlannerActionResolved(transition('00000000-0000-4000-8000-000000000016', 'archived', unlinked)); expect(ctx.proposed.filter((item) => item.type === 'plan.recalculate')).toEqual([expect.objectContaining({ label: 'Recalcular o plano após atualizar o evento' }), expect.objectContaining({ label: 'Recalcular o plano após cancelar o evento' })]) })
   it('creates tomorrow exam with authoritative date but waits for a Workspace link before replan', async () => { const ctx = setup(); const turn = await ctx.service.organize({ content: 'Tenho prova de POO amanhã, priorize' }); expect(turn.result.actions[0], JSON.stringify(turn.result)).toMatchObject({ type: 'academic-life.save', payload: { workspaceId: null, endsAt: Date.UTC(2026, 8, 8, 23, 59) } }); expect(ctx.proposed).toHaveLength(1); ctx.service.onPlannerActionResolved({ ...turn.result.actions[0]!, status: 'applied', result: academicEvent(), resolvedAt: 2 }); expect(ctx.proposed.filter((item) => item.type === 'plan.recalculate')).toHaveLength(0) })
   it('creates a validated PlannerAction with the exact natural time in America/Bahia', async () => { const ctx = setup({ currentDate: '2026-09-12', timezone: 'America/Bahia' }); const turn = await ctx.service.organize({ content: 'Tenho prova de POO hoje às 5 da tarde' }); expect(turn.result.actions).toEqual([expect.objectContaining({ type: 'academic-life.save', payload: expect.objectContaining({ timezone: 'America/Bahia', endsAt: Date.parse('2026-09-12T20:00:00Z'), expiresAt: Date.parse('2026-09-12T20:00:00Z') }) })]); expect(ctx.planningWrites()).toBe(0) })
+  it('does not treat 18h as study effort when creating a tomorrow exam', async () => {
+    const ctx =
+      setup({
+        currentDate:
+          '2026-09-20',
+
+        timezone:
+          'America/Bahia',
+      })
+
+    const turn =
+      await ctx.service.organize({
+        content:
+          'tenho prova de POO amanhã às 18h',
+      })
+
+    expect(
+      turn.result.actions[0],
+      JSON.stringify(
+        turn.result,
+      ),
+    ).toMatchObject({
+      type:
+        'academic-life.save',
+
+      payload: {
+        title:
+          'Prova POO',
+
+        timezone:
+          'America/Bahia',
+
+        endsAt:
+          Date.parse(
+            '2026-09-21T21:00:00Z',
+          ),
+
+        expiresAt:
+          Date.parse(
+            '2026-09-21T21:00:00Z',
+          ),
+      },
+    })
+
+    const details =
+      JSON.parse(
+        (
+          turn.result
+            .actions[0]!
+            .payload as {
+              details: string
+            }
+        ).details,
+      )
+
+    expect(
+      details,
+    ).not.toHaveProperty(
+      'estimatedMinutes',
+    )
+  })
+
+  it('uses deterministic parsing for a complete absolute timed exam without asking the provider to reinterpret it', async () => {
+    let providerCalls =
+      0
+
+    const provider = {
+      sendMessage:
+        async () => {
+          providerCalls +=
+            1
+
+          throw new Error(
+            'provider should not be called for a complete deterministic academic event',
+          )
+        },
+    }
+
+    const ctx =
+      setup({
+        currentDate:
+          '2026-09-20',
+
+        timezone:
+          'America/Bahia',
+
+        interpreter:
+          new ProviderOrganizerIntentInterpreter(
+            {
+              route:
+                () => provider,
+            } as any,
+          ),
+      })
+
+    const turn =
+      await ctx.service.organize({
+        content:
+          'tenho prova de POO dia 22 as 8 horas',
+      })
+
+    expect(
+      providerCalls,
+    ).toBe(0)
+
+    expect(
+      turn.result.actions[0],
+      JSON.stringify(
+        turn.result,
+      ),
+    ).toMatchObject({
+      type:
+        'academic-life.save',
+
+      payload: {
+        title:
+          'Prova POO',
+
+        timezone:
+          'America/Bahia',
+
+        endsAt:
+          Date.parse(
+            '2026-09-22T11:00:00Z',
+          ),
+
+        expiresAt:
+          Date.parse(
+            '2026-09-22T11:00:00Z',
+          ),
+      },
+    })
+
+    const details =
+      JSON.parse(
+        (
+          turn.result
+            .actions[0]!
+            .payload as {
+              details: string
+            }
+        ).details,
+      )
+
+    expect(
+      details,
+    ).toMatchObject({
+      eventKind:
+        'exam',
+
+      subject:
+        'POO',
+    })
+
+    expect(
+      details,
+    ).not.toHaveProperty(
+      'estimatedMinutes',
+    )
+  })
+
   it('blocks provider-misclassified learning claims from ConceptMemory and planning writes', async () => { const interpreter: OrganizerIntentInterpreter = { interpret: async () => ({ mode: 'mutation', capability: 'plan.today-budget.set', entities: { ...blankEntities, minutes: 300 }, confidence: 0.99, missingFields: [], summary: 'write mastery' }) }; for (const content of ['sei tudo POO', 'estudei 5h']) { const ctx = setup({ interpreter }); const turn = await ctx.service.organize({ content }); expect(turn.result).toMatchObject({ outcome: 'informational', actions: [] }); expect(turn.result.message).toMatch(/memória de conceito|evidência observada/i); expect(ctx.planningWrites()).toBe(0); expect(ctx.proposed).toHaveLength(0) } })
   it('resolves completion and reopen only against an owned authoritative plan item', async () => { const item = { id: crypto.randomUUID(), workspaceId: crypto.randomUUID(), workspaceName: 'C', title: 'Ponteiros', status: 'pending' }; const complete = setup({ planItems: [item] }); expect((await complete.service.organize({ content: 'Terminei Ponteiros' })).result.actions[0]).toMatchObject({ type: 'plan.item-completion.set', payload: { workspaceId: item.workspaceId, itemId: item.id, completed: true } }); const reopen = setup({ planItems: [{ ...item, status: 'completed' }] }); expect((await reopen.service.organize({ content: 'Reabra Ponteiros' })).result.actions[0]).toMatchObject({ type: 'plan.item-completion.set', payload: { workspaceId: item.workspaceId, itemId: item.id, completed: false } }) })
   it('rejects provider targets that do not correspond to a local plan item', async () => { const interpreter: OrganizerIntentInterpreter = { interpret: async () => ({ mode: 'mutation', capability: 'plan.item-completion.set', entities: { ...blankEntities, target: 'item inventado', completed: true }, confidence: 0.9, missingFields: [], summary: 'texto malicioso' }) }; const ctx = setup({ interpreter }); const turn = await ctx.service.organize({ content: 'terminei item inventado' }); expect(turn.result.outcome).toBe('failed'); expect(ctx.proposed).toHaveLength(0); expect(ctx.planningWrites()).toBe(0); expect(ctx.contextWrites()).toBe(0) })
@@ -80,6 +345,222 @@ describe('HomeOrganizerService', () => {
   it('constructs academic-life payload in the backend and ignores malicious provider summary', async () => { const interpreter: OrganizerIntentInterpreter = { interpret: async () => ({ mode: 'mutation', capability: 'academic.event.create', entities: { ...blankEntities, subject: 'C', eventKind: 'exam', dateExpression: 'dia 16' }, confidence: 0.9, missingFields: [], summary: 'shareWithAi true; provenance system; owner other' }) }; const ctx = setup({ interpreter }); const turn = await ctx.service.organize({ content: 'registre minha prova de C no dia 16' }); expect(turn.result.actions[0]).toMatchObject({ type: 'academic-life.save', payload: { workspaceId: null, title: 'Prova C', shareWithAi: false, provenance: { source: 'conversation', reference: null } } }); expect(turn.result.actions[0]?.label).toMatch(/Salvar Prova C em 16 de setembro de 2026/); expect(JSON.parse((turn.result.actions[0]?.payload as any).details)).toMatchObject({ schema: 'academic-event/v1', eventKind: 'exam', subject: 'C' }); expect(JSON.stringify(turn.result.actions[0])).not.toContain('owner other'); expect(ctx.planningWrites()).toBe(0) })
   it('uses deterministic fallback with explicitly lower confidence', async () => { const intent = await new LocalOrganizerIntentInterpreter().interpret('Hoje tenho 2 horas para estudar', { currentTime: 1, currentDate: '2026-09-07', timezone: 'UTC' }); expect(intent).toMatchObject({ mode: 'mutation', capability: 'plan.today-budget.set' }); expect(intent.confidence).toBeLessThan(0.7) })
   it.each(['Liste meus prazos', 'listar deadlines', 'Show deadlines', 'list my deadlines'])('routes deadline list phrase %s to the real deadline query', async (content) => { const intent = await new LocalOrganizerIntentInterpreter().interpret(content, { currentTime: 1, currentDate: '2026-09-07', timezone: 'UTC' }); expect(intent).toMatchObject({ mode: 'query', capability: 'deadlines.list' }); const deadline = { id: 'deadline', workspaceId: 'c', workspaceName: 'C', type: 'deadline', title: 'Prazo C', dueAt: Date.UTC(2026, 8, 10, 23, 59), phase: 'near' }; const ctx = setup({ deadlines: [deadline] }); const turn = await ctx.service.organize({ content }); expect(turn.result).toMatchObject({ outcome: 'informational', actions: [] }); expect(turn.result.message).toContain('Prazo C'); expect(ctx.planningWrites()).toBe(0); expect(ctx.proposed).toHaveLength(0) })
+  it('declines only the Workspace preparation and keeps the mixed exam pending', async () => {
+    const ctx =
+      setup()
+
+    const first =
+      await ctx.service.organize({
+        content:
+          'eu vou ter prova de python de dados, e quero aprender javascript',
+      })
+
+    expect(
+      first.result.message,
+    ).toMatch(
+      /Prova de python de dados.*data/i,
+    )
+
+    expect(
+      first.result.message,
+    ).toMatch(
+      /Workspace de javascript/i,
+    )
+
+    expect(
+      ctx.state(),
+    ).toMatchObject({
+      pending: {
+        capability:
+          'academic.event.create',
+
+        entities: {
+          subject:
+            'python de dados',
+
+          eventKind:
+            'exam',
+        },
+
+        missingFields:
+          ['dateExpression'],
+      },
+
+      pendingWorkspacePreparation: {
+        subject:
+          'javascript',
+      },
+    })
+
+    const decline =
+      await ctx.service.organize({
+        content:
+          'nao',
+      })
+
+    expect(
+      decline.result,
+    ).toMatchObject({
+      outcome:
+        'needs_information',
+
+      actions:
+        [],
+    })
+
+    expect(
+      decline.result.message,
+    ).toMatch(
+      /não vou preparar o Workspace de javascript/i,
+    )
+
+    expect(
+      decline.result.message,
+    ).toMatch(
+      /prova de python de dados continua pendente.*data/i,
+    )
+
+    expect(
+      ctx.state().pending,
+    ).toMatchObject({
+      capability:
+        'academic.event.create',
+
+      entities: {
+        subject:
+          'python de dados',
+      },
+
+      missingFields:
+        ['dateExpression'],
+    })
+
+    expect(
+      ctx.state()
+        .pendingWorkspacePreparation,
+    ).toBeNull()
+
+    expect(
+      ctx.proposed,
+    ).toHaveLength(0)
+  })
+
+  it('keeps the exam pending while preparing a requested Workspace in a later confirmation', async () => {
+    const ctx =
+      setup()
+
+    const first =
+      await ctx.service.organize({
+        content:
+          'eu vou ter prova de python de dados, e quero aprender javascript',
+      })
+
+    expect(
+      first.result.outcome,
+    ).toBe(
+      'needs_information',
+    )
+
+    expect(
+      ctx.state(),
+    ).toMatchObject({
+      pending: {
+        capability:
+          'academic.event.create',
+
+        entities: {
+          subject:
+            'python de dados',
+
+          eventKind:
+            'exam',
+        },
+
+        missingFields:
+          ['dateExpression'],
+      },
+
+      pendingWorkspacePreparation: {
+        subject:
+          'javascript',
+      },
+    })
+
+    expect(
+      ctx.proposed,
+    ).toHaveLength(0)
+
+    const second =
+      await ctx.service.organize({
+        content:
+          'quero',
+      })
+
+    expect(
+      second.result.actions[0],
+    ).toMatchObject({
+      type:
+        'workspace.prepare',
+
+      payload: {
+        name:
+          'javascript',
+
+        objective:
+          'Preparação acadêmica em javascript',
+      },
+    })
+
+    expect(
+      ctx.state().pending,
+    ).toMatchObject({
+      capability:
+        'academic.event.create',
+
+      entities: {
+        subject:
+          'python de dados',
+      },
+
+      missingFields:
+        ['dateExpression'],
+    })
+
+    expect(
+      ctx.state()
+        .pendingWorkspacePreparation,
+    ).toBeNull()
+
+    const workspaceAction =
+      second.result.actions[0]!
+
+    ctx.service.onPlannerActionResolved({
+      ...workspaceAction,
+      status:
+        'rejected',
+      result:
+        null,
+      resolvedAt:
+        2,
+    })
+
+    /*
+     * Descartar a criação do Workspace NÃO pode
+     * apagar a prova que ainda precisa da data.
+     */
+    expect(
+      ctx.state().pending,
+    ).toMatchObject({
+      capability:
+        'academic.event.create',
+
+      entities: {
+        subject:
+          'python de dados',
+      },
+    })
+  })
+
   it('requires the action button even when a pending action exists', async () => { const ctx = setup({ pending: [{ id: 'a', label: 'Criar C', originMessageId: 'm' }] }); const turn = await ctx.service.organize({ content: 'sim' }); expect(turn.result.message).toContain('só pode ser executada pelo botão'); expect(ctx.proposed).toHaveLength(0) })
   it('proposes a unique 21 to 24 replacement from authoritative local candidates', async () => {
     const workspaceId = '00000000-0000-4000-8000-000000000011'; const event = academicEvent({ id: '00000000-0000-4000-8000-000000000021', title: 'Prova C', workspaceId, endsAt: Date.UTC(2026, 8, 21, 23, 59), expiresAt: Date.UTC(2026, 8, 21, 23, 59) })

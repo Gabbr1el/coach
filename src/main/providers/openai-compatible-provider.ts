@@ -50,18 +50,147 @@ export class OpenAICompatibleProviderError extends Error {
   }
 }
 
+export type OpenAICompatibleConnectorId =
+  | 'openai-compatible'
+  | 'omniroute'
+
 export class OpenAICompatibleProvider implements AIProvider {
-  readonly id = 'openai-compatible'
+  readonly id:
+    OpenAICompatibleConnectorId
+
   readonly name: string
   private readonly baseUrl: string
 
-  constructor(name: string, baseUrl: string, private readonly apiKey: string, private readonly defaultModel: string, private readonly fetcher: Fetcher = fetch) {
-    this.name = name
-    this.baseUrl = normalizeCompatibleBaseUrl(baseUrl)
+  constructor(
+    connectorId:
+      OpenAICompatibleConnectorId,
+
+    name: string,
+    baseUrl: string,
+
+    private readonly apiKey:
+      string,
+
+    private readonly defaultModel:
+      string,
+
+    private readonly fetcher:
+      Fetcher = fetch,
+  ) {
+    this.id =
+      connectorId
+
+    this.name =
+      name
+
+    this.baseUrl =
+      normalizeCompatibleBaseUrl(
+        baseUrl,
+      )
   }
 
   getCapabilities(): AIProviderCapabilities {
     return { streaming: true, usageInformation: true, supportedInput: ['text'] }
+  }
+
+  async checkAvailability(): Promise<void> {
+    const configuredModel =
+      this.defaultModel.trim()
+
+    const modelPath =
+      configuredModel
+        .split('/')
+        .map(
+          (segment) =>
+            encodeURIComponent(segment),
+        )
+        .join('/')
+
+    const omnirouteModelProbe =
+      this.id === 'omniroute'
+      && Boolean(modelPath)
+
+    const availabilityUrl =
+      omnirouteModelProbe
+        ? `${this.baseUrl}/models/${modelPath}`
+        : `${this.baseUrl}/models`
+
+    const { response, cleanup } =
+      await this.fetchWithTimeout(
+        availabilityUrl,
+        {
+          method:
+            this.id === 'omniroute'
+            && !omnirouteModelProbe
+              ? 'HEAD'
+              : 'GET',
+
+          headers: this.headers(),
+        },
+        3_000,
+      )
+
+    try {
+      if (!response.ok) {
+        throw this.responseError(
+          response.status,
+        )
+      }
+    } finally {
+      cleanup()
+    }
+  }
+
+  async listModels(): Promise<readonly string[]> {
+    const { response, cleanup } =
+      await this.fetchWithTimeout(
+        `${this.baseUrl}/models`,
+        {
+          method: 'GET',
+          headers: this.headers(),
+        },
+        10_000,
+      )
+
+    let body: {
+      data?: Array<{
+        id?: string
+      }>
+    }
+
+    try {
+      if (!response.ok) {
+        throw this.responseError(
+          response.status,
+        )
+      }
+
+      body =
+        await this.jsonWithLimit(
+          response,
+        ) as {
+          data?: Array<{
+            id?: string
+          }>
+        }
+    } finally {
+      cleanup()
+    }
+
+    const models =
+      (body.data ?? [])
+        .map(
+          (model) =>
+            model.id?.trim(),
+        )
+        .filter(
+          (id): id is string =>
+            Boolean(id),
+        )
+
+    return [
+      ...new Set(models),
+    ]
   }
 
   async testConnection(): Promise<void> {
@@ -71,15 +200,30 @@ export class OpenAICompatibleProvider implements AIProvider {
       if (!response.ok) throw this.responseError(response.status)
       body = await this.jsonWithLimit(response) as { data?: Array<{ id?: string }> }
     } finally { cleanup() }
-    if (body.data?.length && !body.data.some((model) => model.id === this.defaultModel)) throw new Error('Configured model is not listed by the compatible provider')
-    await this.sendMessage({ messages: [{ role: 'user', content: 'Reply only OK' }], maxOutputTokens: 8 })
+    if (
+      this.defaultModel.trim()
+      && body.data?.length
+      && !body.data.some(
+        (model) =>
+          model.id === this.defaultModel,
+      )
+    ) {
+      throw new Error(
+        'Configured model is not listed by the compatible provider',
+      )
+    }
   }
 
   async sendMessage(request: AIRequest): Promise<AIResponse> {
+    const model =
+      this.resolveModel(
+        request.model,
+      )
+
     const timeout = compatibleRequestTimeoutMs(request.maxOutputTokens)
     const responses = await this.fetchWithTimeout(`${this.baseUrl}/responses`, {
       method: 'POST', headers: this.headers(), signal: request.signal,
-      body: JSON.stringify({ model: request.model ?? this.defaultModel, input: request.messages, max_output_tokens: request.maxOutputTokens, store: false, ...(request.responseFormat === 'json_object' ? { text: { format: { type: 'json_object' } } } : {}) }),
+      body: JSON.stringify({ model, input: request.messages, max_output_tokens: request.maxOutputTokens, store: false, ...(request.responseFormat === 'json_object' ? { text: { format: { type: 'json_object' } } } : {}) }),
     }, timeout)
     try {
       const body = await this.jsonWithLimit(responses.response) as ResponsesBody
@@ -87,37 +231,76 @@ export class OpenAICompatibleProvider implements AIProvider {
       if (!responses.response.ok) throw this.responseError(responses.response.status, body.error?.message)
       const content = responsesText(body)
       if (!content) throw new Error('Compatible provider returned an empty response')
-      return { content, providerId: this.id, modelId: body.model ?? request.model ?? this.defaultModel, usage: body.usage ? { inputTokens: body.usage.input_tokens ?? 0, outputTokens: body.usage.output_tokens ?? 0 } : undefined }
+      this.assertUsableContent(content)
+      return { content, providerId: this.id, modelId: body.model ?? model, usage: body.usage ? { inputTokens: body.usage.input_tokens ?? 0, outputTokens: body.usage.output_tokens ?? 0 } : undefined }
     } finally { responses.cleanup() }
   }
 
   private async sendChatCompletion(request: AIRequest, timeout: number): Promise<AIResponse> {
+    const model =
+      this.resolveModel(
+        request.model,
+      )
+
     const { response, cleanup } = await this.fetchWithTimeout(`${this.baseUrl}/chat/completions`, {
       method: 'POST', headers: this.headers(), signal: request.signal,
-      body: JSON.stringify({ model: request.model ?? this.defaultModel, messages: request.messages, max_tokens: request.maxOutputTokens, ...(request.responseFormat === 'json_object' ? { response_format: { type: 'json_object' } } : {}), stream: false }),
+      body: JSON.stringify({ model, messages: request.messages, max_tokens: request.maxOutputTokens, ...(request.responseFormat === 'json_object' ? { response_format: { type: 'json_object' } } : {}), stream: false }),
     }, timeout)
     try {
       const body = await this.jsonWithLimit(response) as ChatCompletionBody
       if (!response.ok) throw this.responseError(response.status, body.error?.message)
       const content = body.choices?.[0]?.message?.content ?? ''
       if (!content) throw new Error('Compatible provider returned an empty response')
-      return { content, providerId: this.id, modelId: body.model ?? this.defaultModel, ...(body.usage ? { usage: { inputTokens: body.usage.prompt_tokens ?? 0, outputTokens: body.usage.completion_tokens ?? 0 } } : {}) }
+      this.assertUsableContent(content)
+      return { content, providerId: this.id, modelId: body.model ?? model, ...(body.usage ? { usage: { inputTokens: body.usage.prompt_tokens ?? 0, outputTokens: body.usage.completion_tokens ?? 0 } } : {}) }
     } finally { cleanup() }
   }
 
   async *streamMessage(request: AIRequest): AsyncIterable<AIStreamEvent> {
+    const model =
+      this.resolveModel(
+        request.model,
+      )
+
     const timeout = compatibleRequestTimeoutMs(request.maxOutputTokens)
     const { response, cleanup } = await this.fetchWithTimeout(`${this.baseUrl}/chat/completions`, {
       method: 'POST', headers: this.headers(), signal: request.signal,
-      body: JSON.stringify({ model: request.model ?? this.defaultModel, messages: request.messages, max_tokens: request.maxOutputTokens, stream: true }),
+      body: JSON.stringify({ model, messages: request.messages, max_tokens: request.maxOutputTokens, stream: true }),
     }, timeout)
-    if (!response.ok) { cleanup(); throw this.responseError(response.status) }
+    if (!response.ok) {
+      let message: string | undefined
+
+      try {
+        const body =
+          await this.jsonWithLimit(
+            response,
+          ) as ChatCompletionBody
+
+        message =
+          body.error?.message
+      } catch {
+        /*
+         * Mesmo se o body de erro estiver malformado,
+         * ainda classificamos pelo status HTTP.
+         */
+      } finally {
+        cleanup()
+      }
+
+      throw this.responseError(
+        response.status,
+        message,
+      )
+    }
     if (!response.body) { cleanup(); throw new OpenAICompatibleProviderError('UNKNOWN', 'Compatible provider returned no response body') }
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
     let content = ''
-    let effectiveModel = request.model ?? this.defaultModel
+    let effectiveModel =
+      model
+    const bufferUntilValidated =
+      this.id === 'omniroute'
     try {
       while (true) {
         const { done, value } = await reader.read()
@@ -132,14 +315,46 @@ export class OpenAICompatibleProvider implements AIProvider {
             if (!match || !match[1]) continue
             if (match[1] === '[DONE]') {
               if (!content) throw new Error('Compatible provider returned an empty stream')
-              yield { type: 'completed', response: { content, providerId: this.id, modelId: effectiveModel } }
+
+              this.assertUsableContent(
+                content,
+              )
+
+              if (bufferUntilValidated) {
+                yield {
+                  type: 'text-delta',
+                  content,
+                }
+              }
+
+              yield {
+                type: 'completed',
+                response: {
+                  content,
+                  providerId:
+                    this.id,
+                  modelId:
+                    effectiveModel,
+                },
+              }
+
               return
             }
             const body = JSON.parse(match[1]) as ChatCompletionBody
             if (body.error?.message) throw new OpenAICompatibleProviderError('UNKNOWN', 'Compatible provider returned a streaming error')
             if (body.model) effectiveModel = body.model
             const delta = body.choices?.[0]?.delta?.content
-            if (delta) { content += delta; yield { type: 'text-delta', content: delta } }
+            if (delta) {
+              content += delta
+
+              if (!bufferUntilValidated) {
+                yield {
+                  type: 'text-delta',
+                  content:
+                    delta,
+                }
+              }
+            }
           }
         }
       }
@@ -151,8 +366,63 @@ export class OpenAICompatibleProvider implements AIProvider {
     }
   }
 
+  private assertUsableContent(
+    content: string,
+  ): void {
+    if (this.id !== 'omniroute') {
+      return
+    }
+
+    const normalized =
+      content
+        .trim()
+        .replace(/\s+/g, ' ')
+
+    if (
+      /^.+ is no longer available\. Please switch to .+ in the latest version of Antigravity\.$/i
+        .test(normalized)
+    ) {
+      throw new OpenAICompatibleProviderError(
+        'MODEL_UNAVAILABLE',
+      )
+    }
+  }
+
+
+  private resolveModel(
+    requestedModel?: string,
+  ): string {
+    const model =
+      requestedModel?.trim()
+      || this.defaultModel.trim()
+
+    if (!model) {
+      throw new OpenAICompatibleProviderError(
+        'MODEL_UNAVAILABLE',
+        'No model selected for compatible provider',
+      )
+    }
+
+    return model
+  }
+
+
   private headers(): Record<string, string> {
-    return { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' }
+    const headers:
+      Record<string, string> = {
+        'Content-Type':
+          'application/json',
+      }
+
+    const apiKey =
+      this.apiKey.trim()
+
+    if (apiKey) {
+      headers.Authorization =
+        `Bearer ${apiKey}`
+    }
+
+    return headers
   }
 
   private async fetchWithTimeout(url: string, init: RequestInit, milliseconds: number): Promise<{ response: Response; cleanup: () => void }> {
@@ -203,6 +473,7 @@ export class OpenAICompatibleProvider implements AIProvider {
         || detail.includes('credit balance')
         || detail.includes('spend limit')
         || detail.includes('usage limit')
+        || detail.includes('quota threshold')
       return new OpenAICompatibleProviderError(quotaExhausted ? 'INSUFFICIENT_QUOTA' : 'RATE_LIMITED')
     }
     if (status >= 500) return new OpenAICompatibleProviderError('NETWORK_UNAVAILABLE', `Compatible provider failed with status ${status}`)

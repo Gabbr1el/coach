@@ -605,7 +605,7 @@ describe('Coach database migrations', () => {
 
   it('persists Organizer state by Home thread and clears invalid schema on read', async () => {
     const databasePath = createDatabasePath(); let database = openCoachDatabase({ databasePath, migrationsFolder }); const conversations = new DrizzleConversationRepository(database); const threadId = '00000000-0000-4000-8000-000000000000'; await conversations.ensureHomeThread(threadId, 1)
-    let repository = new SqliteOrganizerConversationStateRepository(database); repository.save(threadId, { focusedAcademicEventId: null, focusedWorkspaceId: null, focusedSubject: 'POO', pending: null, recentResolvedAcademicEventIds: [], recentResolvedWorkspaceIds: [], updatedAt: 2 }); database.close()
+    let repository = new SqliteOrganizerConversationStateRepository(database); repository.save(threadId, { focusedAcademicEventId: null, focusedWorkspaceId: null, focusedSubject: 'POO', pending: null, pendingWorkspacePreparation: null, recentResolvedAcademicEventIds: [], recentResolvedWorkspaceIds: [], updatedAt: 2 }); database.close()
     database = openCoachDatabase({ databasePath, migrationsFolder }); repository = new SqliteOrganizerConversationStateRepository(database); expect(repository.load(threadId)).toMatchObject({ focusedSubject: 'POO', updatedAt: 2 }); database.sqlite.prepare('UPDATE organizer_conversation_states SET state_json=? WHERE thread_id=?').run('{"invalid":true}', threadId); expect(repository.load(threadId)).toMatchObject({ focusedSubject: null, pending: null }); expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM organizer_conversation_states').get()).toEqual({ count: 0 }); database.close()
   })
 

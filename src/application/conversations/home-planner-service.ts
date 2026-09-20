@@ -80,10 +80,8 @@ export class HomePlannerService {
         assistantContent = response.content
         providerId = response.providerId
         modelId = response.modelId
-      } catch {
-        assistantContent = 'Não consegui consultar a IA conectada agora. Sua mensagem foi preservada localmente. Você pode tentar novamente depois ou continuar organizando em modo local.'
-        providerId = 'coach-local'
-        modelId = 'provider-failure-v1'
+      } catch (error) {
+        throw error
       }
     }
 
@@ -139,14 +137,6 @@ export class HomePlannerService {
       }
       if (!completed) throw new Error('Provider stream ended before completion')
     } catch (error) {
-      if (signal.aborted) throw error
-      const now = this.now()
-      await this.repository.ensureHomeThread(HOME_THREAD_ID, now)
-      await this.repository.addTurn({
-        threadId: HOME_THREAD_ID,
-        user: { id: this.createId(), threadId: HOME_THREAD_ID, role: 'user', content: input.content.trim(), createdAt: now, providerId: null, modelId: null },
-        assistant: { id: this.createId(), threadId: HOME_THREAD_ID, role: 'assistant', content: 'Não consegui consultar a IA conectada agora. Sua mensagem foi preservada localmente.', createdAt: now + 1, providerId: 'coach-local', modelId: 'provider-failure-v1' },
-      })
       throw error
     }
 
@@ -159,6 +149,70 @@ export class HomePlannerService {
       assistant: { id: this.createId(), threadId: HOME_THREAD_ID, role: 'assistant', content, createdAt: now + 1, providerId, modelId },
     })
   }
-  async saveAuthoritativeTurn(content: string, assistantContent: string, assistantId?: string, userId?: string): Promise<ConversationMessage[]> { const now = this.now(); await this.repository.ensureHomeThread(HOME_THREAD_ID, now); return this.repository.addTurn({ threadId: HOME_THREAD_ID, user: { id: userId ?? this.createId(), threadId: HOME_THREAD_ID, role: 'user', content, createdAt: now, providerId: null, modelId: null }, assistant: { id: assistantId ?? this.createId(), threadId: HOME_THREAD_ID, role: 'assistant', content: assistantContent, createdAt: now + 1, providerId: 'coach-local', modelId: 'home-organizer-v1' } }) }
+  async saveAuthoritativeTurn(
+    content: string,
+    assistantContent: string,
+    assistantId?: string,
+    userId?: string,
+    providerId = 'coach-local',
+    modelId = 'home-organizer-v1',
+  ): Promise<ConversationMessage[]> {
+    const now = this.now()
+
+    await this.repository.ensureHomeThread(
+      HOME_THREAD_ID,
+      now,
+    )
+
+    return this.repository.addTurn({
+      threadId:
+        HOME_THREAD_ID,
+
+      user: {
+        id:
+          userId
+          ?? this.createId(),
+
+        threadId:
+          HOME_THREAD_ID,
+
+        role:
+          'user',
+
+        content,
+
+        createdAt:
+          now,
+
+        providerId:
+          null,
+
+        modelId:
+          null,
+      },
+
+      assistant: {
+        id:
+          assistantId
+          ?? this.createId(),
+
+        threadId:
+          HOME_THREAD_ID,
+
+        role:
+          'assistant',
+
+        content:
+          assistantContent,
+
+        createdAt:
+          now + 1,
+
+        providerId,
+
+        modelId,
+      },
+    })
+  }
   saveSystemResult(content: string): Promise<ConversationMessage[]> { return this.saveAuthoritativeTurn('Ação aplicada pelo botão da Organizadora.', content) }
 }

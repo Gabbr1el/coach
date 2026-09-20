@@ -1,4 +1,5 @@
 import type { AIProvider, AIProviderCapabilities, AIRequest, AIResponse } from '../../application/ai/ai-provider'
+import type { ReasoningEffort } from '../../shared/contracts/provider-account-contract'
 
 type Fetcher = typeof fetch
 
@@ -29,6 +30,7 @@ export class OpenAIProvider implements AIProvider {
   constructor(
     private readonly apiKey: string,
     private readonly defaultModel: string,
+    private readonly reasoningEffort: ReasoningEffort = 'auto',
     private readonly fetcher: Fetcher = fetch,
   ) {}
 
@@ -45,8 +47,19 @@ export class OpenAIProvider implements AIProvider {
       response = await this.fetcher('https://api.openai.com/v1/responses', {
         method: 'POST',
         headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: this.defaultModel, input: 'Reply only with OK.', max_output_tokens: 16, store: false }),
-        signal: controller.signal,
+          body: JSON.stringify({
+            model: this.defaultModel,
+            input: 'Reply only with OK.',
+            max_output_tokens: 16,
+            store: false,
+            ...(this.reasoningEffort === 'auto'
+              ? {}
+              : {
+                  reasoning: {
+                    effort: this.reasoningEffort,
+                  },
+                }),
+          }),        signal: controller.signal,
       })
       if (!response.ok) body = await response.json().catch(() => null) as OpenAIResponseBody | null
     } catch {
@@ -98,7 +111,40 @@ export class OpenAIProvider implements AIProvider {
     try {
       const response = await this.fetcher('https://api.openai.com/v1/responses', {
         method: 'POST', headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: request.model ?? this.defaultModel, input: request.messages.map((message) => ({ role: message.role, content: message.content })), max_output_tokens: request.maxOutputTokens, store: false, stream: true }),
+        body: JSON.stringify({
+          model:
+            request.model
+            ?? this.defaultModel,
+
+          input:
+            request.messages.map(
+              (message) => ({
+                role:
+                  message.role,
+
+                content:
+                  message.content,
+              }),
+            ),
+
+          max_output_tokens:
+            request.maxOutputTokens,
+
+          store:
+            false,
+
+          stream:
+            true,
+
+          ...(this.reasoningEffort === 'auto'
+            ? {}
+            : {
+                reasoning: {
+                  effort:
+                    this.reasoningEffort,
+                },
+              }),
+        }),
         signal: timeoutController.signal,
       })
       if (!response.ok || !response.body) throw new Error(`OpenAI streaming request failed with status ${response.status}`)
@@ -151,12 +197,37 @@ export class OpenAIProvider implements AIProvider {
       response = await this.fetcher('https://api.openai.com/v1/responses', {
         method: 'POST',
         headers: { Authorization: `Bearer ${this.apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: request.model ?? this.defaultModel,
-          input: request.messages.map((message) => ({ role: message.role, content: message.content })),
-          max_output_tokens: request.maxOutputTokens,
-          store: false,
-        }),
+          body: JSON.stringify({
+            model:
+              request.model
+              ?? this.defaultModel,
+
+            input:
+              request.messages.map(
+                (message) => ({
+                  role:
+                    message.role,
+
+                  content:
+                    message.content,
+                }),
+              ),
+
+            max_output_tokens:
+              request.maxOutputTokens,
+
+            store:
+              false,
+
+            ...(this.reasoningEffort === 'auto'
+              ? {}
+              : {
+                  reasoning: {
+                    effort:
+                      this.reasoningEffort,
+                  },
+                }),
+          }),
         signal: timeoutController.signal,
       })
       body = await response.json() as OpenAIResponseBody

@@ -46,18 +46,20 @@ describe('HomePlannerService', () => {
     expect(repository.messages).toHaveLength(2)
   })
 
-  it('preserves the turn locally when the active provider fails', async () => {
+  it('propagates provider failure without fabricating a local assistant turn', async () => {
     const repository = new MemoryConversationRepository()
     const manager = new AIProviderManager()
     manager.register({ id: 'broken', name: 'Broken', testConnection: async () => {}, sendMessage: async () => { throw new Error('offline') }, getCapabilities: () => ({ streaming: false, usageInformation: false, supportedInput: ['text'] }) })
     manager.select('broken')
     const service = new HomePlannerService({ repository, providerManager: manager, now: () => 300, createId: () => crypto.randomUUID() })
 
-    const messages = await service.sendMessage({ content: 'Minha prova é amanhã' })
+    await expect(
+      service.sendMessage({
+        content: 'Minha prova é amanhã',
+      }),
+    ).rejects.toThrow('offline')
 
-    expect(messages).toHaveLength(2)
-    expect(messages[1]?.modelId).toBe('provider-failure-v1')
-    expect(repository.messages).toHaveLength(2)
+    expect(repository.messages).toHaveLength(0)
   })
 
   it('bounds provider conversation context to four short user messages', async () => { const repository = new MemoryConversationRepository(); for (let index = 0; index < 6; index += 1) repository.messages.push({ id: `u-${index}`, role: 'user', content: `${index}:${'x'.repeat(400)}`, createdAt: index, sequence: index + 1, providerId: null, modelId: null }); let request: any; const manager = new AIProviderManager(); manager.register({ id: 'bounded', name: 'Bounded', testConnection: async () => {}, sendMessage: async (value) => { request = value; return { content: 'ok', providerId: 'bounded', modelId: 'test' } }, getCapabilities: () => ({ streaming: false, usageInformation: false, supportedInput: ['text'] }) }); manager.select('bounded'); const service = new HomePlannerService({ repository, providerManager: manager, now: () => 300, createId: () => crypto.randomUUID() }); const recent = await service.listRecentUserMessages(); expect(recent).toHaveLength(4); expect(recent.every((message) => message.content.length <= 300)).toBe(true); await service.sendMessage({ content: 'nova' }); const history = request.messages.slice(1, -1); expect(history).toHaveLength(4); expect(history.map((message: any) => message.content.slice(0, 2))).toEqual(['2:', '3:', '4:', '5:']) })

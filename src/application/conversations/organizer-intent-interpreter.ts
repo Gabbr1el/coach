@@ -13,8 +13,23 @@ export interface OrganizerInterpretationContext {
   }
 }
 
+export interface OrganizerProviderResult {
+  readonly providerId: string
+  readonly modelId: string
+  readonly conversationReply: string | null
+}
+
+export type OrganizerInterpretation =
+  OrganizerIntent & {
+    readonly providerResult?:
+      OrganizerProviderResult
+  }
+
 export interface OrganizerIntentInterpreter {
-  interpret(content: string, context: OrganizerInterpretationContext): Promise<OrganizerIntent>
+  interpret(
+    content: string,
+    context: OrganizerInterpretationContext,
+  ): Promise<OrganizerInterpretation>
 }
 
 const blankEntities = { subject: null, query: null, dateExpression: null, dateFromExpression: null, dateToExpression: null, eventKind: null, weekday: null, minutes: null, completed: null, target: null, status: null }
@@ -76,21 +91,299 @@ export class LocalOrganizerIntentInterpreter implements OrganizerIntentInterpret
 
 export class ProviderOrganizerIntentInterpreter implements OrganizerIntentInterpreter {
   constructor(private readonly providers: AIProviderManager, private readonly fallback: OrganizerIntentInterpreter = new LocalOrganizerIntentInterpreter()) {}
-  async interpret(content: string, context: OrganizerInterpretationContext): Promise<OrganizerIntent> {
+  async interpret(content: string, context: OrganizerInterpretationContext): Promise<OrganizerInterpretation> {
     const deterministic = await this.fallback.interpret(content, context)
-    const clearTimedEvent = deterministic.capability === 'academic.event.create' && deterministic.mode === 'mutation' && deterministic.missingFields.length === 0 && /\b(?:hoje|amanh[ãa]|depois\s+de\s+amanh[ãa])\b/i.test(content) && /\b(?:[àa]s?\s+)?\d{1,2}(?::\d{2})?\s*(?:h(?:oras?)?|da\s+(?:manh[ãa]|tarde|noite))\b/i.test(content)
-    if (clearTimedEvent) return deterministic
+    const deterministicAcademicCreate =
+      (
+        deterministic.capability === 'academic.event.create'
+        && deterministic.mode === 'mutation'
+        && deterministic.missingFields.length === 0
+        && deterministic.entities.subject !== null
+        && deterministic.entities.eventKind !== null
+        && deterministic.entities.dateExpression !== null
+      )
+      || (
+        deterministic.mode === 'clarification'
+        && deterministic.capability === null
+        && deterministic.entities.subject !== null
+        && deterministic.entities.eventKind !== null
+        && deterministic.missingFields.length > 0
+        && deterministic.missingFields.every((field) => field === 'dateExpression')
+      )
+
+    if (deterministicAcademicCreate) return deterministic
+
     const provider = this.providers.route('planner')
     if (!provider) return deterministic
     try {
       const response = await provider.sendMessage({
         messages: [
-          { role: 'system', content: 'Interpret intent; never execute/write. Return only strict JSON matching OrganizerIntent: mode query|mutation|clarification|conversation, capability from the supplied callable catalog or null, semantic entities limited to subject, query, eventKind (exam|assignment|deadline), dateExpression, dateFromExpression, dateToExpression, weekday, minutes, completed, target and status, confidence 0..1, missingFields string[], summary string. For an unavailable capability return mode conversation, capability null, and target "unsupported:<capability>" exactly. Dates must remain verbatim semantic expressions. Never output timestamps, IDs, ownership, persisted records, PlannerAction payloads, provenance, privacy flags, titles or details. A query mentioning prova, prazo, trabalho or evento is never a create. Statements about knowledge or time already studied are conversation, never planning or ConceptMemory mutations. Use academic.event.cancel for cancellation and academic.event.update for rescheduling. Legacy academic-life aliases remain available only for compatibility.' },
+          { role: 'system', content: 'Interpret intent; never execute/write. Return only strict JSON matching OrganizerIntent: mode query|mutation|clarification|conversation, capability from the supplied callable catalog or null, Return exactly these top-level keys: mode, capability, entities, confidence, missingFields, summary. "entities" MUST be a nested object containing exactly subject, query, eventKind, dateExpression, dateFromExpression, dateToExpression, weekday, minutes, completed, target and status. Inside entities, include only relevant non-null entity keys; omit unknown entity keys. The Coach fills omitted known entity keys with null. confidence, missingFields and summary are TOP-LEVEL siblings of entities and MUST NEVER be placed inside entities. When mode is conversation, summary MUST be the short, natural, user-facing reply in Brazilian Portuguese; answer the user there instead of merely describing the intent. For query, mutation or clarification, summary is only a terse description and is never authoritative. Example conversation shape: {"mode":"conversation","capability":null,"entities":{},"confidence":0.9,"missingFields":[],"summary":"Oi! Como posso ajudar com seus estudos?"}. For an unavailable capability return mode conversation, capability null, and target "unsupported:<capability>" exactly. Dates must remain verbatim semantic expressions. Never output timestamps, IDs, ownership, persisted records, PlannerAction payloads, provenance, privacy flags, titles or details. A query mentioning prova, prazo, trabalho or evento is never a create. Statements about knowledge or time already studied are conversation, never planning or ConceptMemory mutations. Use academic.event.cancel for cancellation and academic.event.update for rescheduling. Legacy academic-life aliases remain available only for compatibility.' },
           { role: 'user', content: JSON.stringify({ message: content, capabilities: ORGANIZER_CAPABILITY_CATALOG, unavailableCapabilities: ORGANIZER_UNAVAILABLE_CAPABILITIES, currentDate: context.currentDate, timezone: context.timezone, conversation: context.conversation ?? null }) },
         ],
-        maxOutputTokens: 700,
+        maxOutputTokens: 320,
+
+        responseFormat:
+          'json_object',
       })
-      return organizerIntentSchema.parse(extractJsonDocument(response.content))
+      const extracted =
+        extractJsonDocument(
+          response.content,
+        )
+
+      const normalizedExtracted =
+        (() => {
+          if (
+            !extracted
+            || typeof extracted !== 'object'
+            || Array.isArray(extracted)
+          ) {
+            return extracted
+          }
+
+          const candidate =
+            extracted as Record<
+              string,
+              unknown
+            >
+
+          const entityKeys = [
+            'subject',
+            'query',
+            'eventKind',
+            'dateExpression',
+            'dateFromExpression',
+            'dateToExpression',
+            'weekday',
+            'minutes',
+            'completed',
+            'target',
+            'status',
+          ] as const
+
+          const metadataKeys = [
+            'confidence',
+            'missingFields',
+            'summary',
+          ] as const
+
+          const allowedTopLevelKeys =
+            new Set<string>([
+              'mode',
+              'capability',
+              'entities',
+              ...metadataKeys,
+              ...entityKeys,
+            ])
+
+          /*
+           * Só aceitamos as duas variações estruturais
+           * conhecidas do provider.
+           *
+           * Qualquer chave desconhecida continua indo
+           * intacta para o schema strict e será rejeitada.
+           */
+          if (
+            Object.keys(candidate)
+              .some(
+                (key) =>
+                  !allowedTopLevelKeys
+                    .has(key),
+              )
+          ) {
+            return extracted
+          }
+
+          const rawEntities =
+            candidate.entities
+
+          if (
+            rawEntities !== undefined
+            && (
+              rawEntities === null
+              || typeof rawEntities !== 'object'
+              || Array.isArray(rawEntities)
+            )
+          ) {
+            return extracted
+          }
+
+          const nested =
+            (
+              rawEntities
+              ?? {}
+            ) as Record<
+              string,
+              unknown
+            >
+
+          const allowedNestedKeys =
+            new Set<string>([
+              ...entityKeys,
+              ...metadataKeys,
+            ])
+
+          if (
+            Object.keys(nested)
+              .some(
+                (key) =>
+                  !allowedNestedKeys
+                    .has(key),
+              )
+          ) {
+            return extracted
+          }
+
+          /*
+           * Não tentamos resolver valores duplicados
+           * vindos de dois níveis diferentes.
+           * Ambiguidade continua sendo rejeitada.
+           */
+          if (
+            entityKeys.some(
+              (key) =>
+                key in candidate
+                && key in nested,
+            )
+            || metadataKeys.some(
+              (key) =>
+                key in candidate
+                && key in nested,
+            )
+          ) {
+            return extracted
+          }
+
+          const entities:
+            Record<string, unknown> = {
+              ...blankEntities,
+            }
+
+          for (
+            const key
+            of entityKeys
+          ) {
+            if (key in nested) {
+              entities[key] =
+                nested[key]
+            } else if (key in candidate) {
+              entities[key] =
+                candidate[key]
+            }
+          }
+
+          const normalized:
+            Record<string, unknown> =
+              Object.fromEntries(
+                Object.entries(candidate)
+                  .filter(
+                    ([key]) =>
+                      key !== 'entities'
+                      && !entityKeys.includes(
+                        key as
+                          typeof entityKeys[number],
+                      ),
+                  ),
+              )
+
+          /*
+           * Corrige especificamente o segundo formato
+           * observado:
+           *
+           * entities: {
+           *   confidence,
+           *   missingFields,
+           *   summary
+           * }
+           */
+          for (
+            const key
+            of metadataKeys
+          ) {
+            if (
+              !(key in normalized)
+              && key in nested
+            ) {
+              normalized[key] =
+                nested[key]
+            }
+          }
+
+          normalized.entities =
+            entities
+
+          return normalized
+        })()
+
+      const parsed =
+        organizerIntentSchema.safeParse(
+          normalizedExtracted,
+        )
+
+      if (!parsed.success) {
+        console.error(
+          '[Coach Organizer structured intent invalid]',
+          {
+            providerId:
+              response.providerId,
+
+            modelId:
+              response.modelId,
+
+            responsePreview:
+              response.content.slice(
+                0,
+                1500,
+              ),
+
+            issues:
+              parsed.error.issues.map(
+                (issue) => ({
+                  path:
+                    issue.path.join('.'),
+
+                  code:
+                    issue.code,
+
+                  message:
+                    issue.message,
+                }),
+              ),
+          },
+        )
+
+        throw new Error(
+          'Organizer provider returned an invalid structured intent',
+          {
+            cause:
+              parsed.error,
+          },
+        )
+      }
+
+      const conversationReply =
+        (
+          parsed.data.mode === 'conversation'
+          && parsed.data.capability === null
+          && parsed.data.entities.target === null
+          && parsed.data.missingFields.length === 0
+        )
+          ? parsed.data.summary.trim()
+          : null
+
+      return {
+        ...parsed.data,
+
+        providerResult: {
+          providerId:
+            response.providerId,
+
+          modelId:
+            response.modelId,
+
+          conversationReply,
+        },
+      }
     } catch (error) {
       if (error instanceof Error && (error.name === 'ZodError' || /JSON|capability|intent/i.test(error.message))) throw new Error('Organizer provider returned an invalid structured intent', { cause: error })
       return deterministic

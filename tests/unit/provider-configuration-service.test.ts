@@ -86,13 +86,58 @@ const openAIProvider = () => provider()
 const compatibleProvider = () => provider()
 
 describe('ProviderConfigurationService', () => {
-  it('activates local OmniRoute on startup without secure storage', async () => {
-    const manager = new AIProviderManager()
-    const service = new ProviderConfigurationService(new MemoryConfigurationRepository(), new MemoryVault(false), manager, () => provider(), () => provider())
+  it('does not create an implicit OmniRoute account when secure storage is unavailable', async () => {
+    const manager =
+      new AIProviderManager()
+
+    const service =
+      new ProviderConfigurationService(
+        new MemoryConfigurationRepository(),
+        new MemoryVault(false),
+        manager,
+        () => provider(),
+        () => provider(),
+      )
+
     await service.initialize()
-    expect(await service.getStatus()).toMatchObject({ configured: true, connected: false, connectionState: 'unchecked', quota: 'unknown', providerName: 'OmniRoute local', model: 'codex/gpt-5.6-sol', sessionOnly: true })
+
+    expect(
+      await service.getStatus(),
+    ).toMatchObject({
+      configured:
+        false,
+
+      connected:
+        false,
+
+      connectionState:
+        'not-configured',
+
+      quota:
+        'unknown',
+
+      providerId:
+        null,
+
+      providerName:
+        null,
+
+      model:
+        null,
+
+      sessionOnly:
+        false,
+    })
+
+    expect(
+      manager.getActive(),
+    ).toBeNull()
+
+    expect(
+      await service.listAccounts(),
+    ).toEqual([])
   })
-  it('restores a persisted OmniRoute identity when secure storage is unavailable', async () => {
+  it('keeps persisted OmniRoute metadata without creating a session fallback when secure storage is unavailable', async () => {
     const repository =
       new MemoryConfigurationRepository()
 
@@ -153,6 +198,15 @@ describe('ProviderConfigurationService', () => {
     expect(
       await service.getStatus(),
     ).toMatchObject({
+      configured:
+        true,
+
+      connected:
+        false,
+
+      connectionState:
+        'unreachable',
+
       providerId:
         'omniroute',
 
@@ -163,15 +217,14 @@ describe('ProviderConfigurationService', () => {
         'custom/model',
 
       sessionOnly:
-        true,
+        false,
     })
 
     expect(
-      manager.getActive()?.id,
-    ).toBe('omniroute')
+      manager.getActive(),
+    ).toBeNull()
   })
-
-  it('keeps compatibility with legacy local OmniRoute entries stored as openai-compatible', async () => {
+  it('does not reinterpret a legacy openai-compatible account as OmniRoute without its credential', async () => {
     const repository =
       new MemoryConfigurationRepository()
 
@@ -232,8 +285,17 @@ describe('ProviderConfigurationService', () => {
     expect(
       await service.getStatus(),
     ).toMatchObject({
+      configured:
+        true,
+
+      connected:
+        false,
+
+      connectionState:
+        'unreachable',
+
       providerId:
-        'omniroute',
+        'openai-compatible',
 
       providerName:
         'OmniRoute legado',
@@ -242,14 +304,13 @@ describe('ProviderConfigurationService', () => {
         'legacy/model',
 
       sessionOnly:
-        true,
+        false,
     })
 
     expect(
-      manager.getActive()?.id,
-    ).toBe('omniroute')
+      manager.getActive(),
+    ).toBeNull()
   })
-
   it('tests, stores and selects a provider without putting the key in metadata', async () => {
     const repository = new MemoryConfigurationRepository()
     const vault = new MemoryVault()
@@ -258,13 +319,13 @@ describe('ProviderConfigurationService', () => {
 
     const status = await service.configureOpenAI('Principal', 'secret-key-value-that-is-long-enough', 'gpt-test', 'secure-vault')
 
-    expect(status).toMatchObject({ configured: true, connected: true, connectionState: 'connected', quota: 'available' })
+    expect(status).toMatchObject({ configured: true, connected: true, connectionState: 'connected', quota: 'unknown' })
     expect(vault.value).toBe('secret-key-value-that-is-long-enough')
     expect(JSON.stringify(repository.configuration)).not.toContain('secret-key-value-that-is-long-enough')
     expect(manager.getActive()?.id).toBe('openai')
   })
 
-  it('keeps configuration distinct from failed connectivity and quota state', async () => {
+  it('selects an account immediately without probing connectivity or quota', async () => {
     const repository = new MemoryConfigurationRepository()
     repository.configuration = { id: '00000000-0000-4000-8000-000000000010', providerId: 'openai', displayName: 'OpenAI', label: 'Principal', baseUrl: null, model: 'gpt-test', secretReference: 'secret', isActive: true, createdAt: 1, updatedAt: 1 }
     const vault = new MemoryVault()
@@ -273,9 +334,36 @@ describe('ProviderConfigurationService', () => {
     const quotaError = Object.assign(new Error('quota'), { code: 'INSUFFICIENT_QUOTA' })
     const service = new ProviderConfigurationService(repository, vault, manager, () => provider(async () => { throw quotaError }), compatibleProvider)
 
-    await expect(service.selectAccount(repository.configuration!.id)).rejects.toBe(quotaError)
+    const status =
+      await service.selectAccount(
+        repository.configuration!.id,
+      )
 
-    expect(await service.getStatus()).toMatchObject({ configured: true, connected: false, connectionState: 'connected', quota: 'exhausted', activeAccountId: repository.configuration!.id })
+    /*
+     * Trocar a IA atual não deve depender
+     * de conectividade, quota ou geração.
+     *
+     * O Health Monitor fará essa verificação
+     * separadamente depois da seleção.
+     */
+    expect(status).toMatchObject({
+      configured: true,
+      connected: false,
+      connectionState: 'unchecked',
+      quota: 'unknown',
+      activeAccountId:
+        repository.configuration!.id,
+    })
+
+    expect(
+      await service.getStatus(),
+    ).toMatchObject({
+      configured: true,
+      connectionState: 'unchecked',
+      quota: 'unknown',
+      activeAccountId:
+        repository.configuration!.id,
+    })
   })
 
   it('fails closed when secure storage is unavailable', async () => {
@@ -312,6 +400,102 @@ describe('ProviderConfigurationService', () => {
 
     expect(status).toMatchObject({ configured: true, providerId: 'omniroute', providerName: 'OmniRoute', sessionOnly: true })
     expect(repository.configurations).toEqual([])
+  })
+
+  it('discovers the first model for an unauthenticated compatible endpoint', async () => {
+    const repository =
+      new MemoryConfigurationRepository()
+
+    const manager =
+      new AIProviderManager()
+
+    const created:
+      Array<{
+        apiKey: string
+        model: string
+      }> = []
+
+    const compatibleFactory = (
+      connectorId:
+        | 'openai-compatible'
+        | 'omniroute',
+      name: string,
+      _baseUrl: string,
+      apiKey: string,
+      model: string,
+    ): AIProvider => {
+      created.push({
+        apiKey,
+        model,
+      })
+
+      return {
+        ...provider(),
+        id:
+          connectorId,
+        name,
+        listModels:
+          async () => [
+            'route/first-model',
+            'route/second-model',
+          ],
+      }
+    }
+
+    const service =
+      new ProviderConfigurationService(
+        repository,
+        new MemoryVault(false),
+        manager,
+        openAIProvider,
+        compatibleFactory,
+      )
+
+    const status =
+      await service.configureCompatible(
+        'openai-compatible',
+        'Endpoint próprio',
+        'https://route.example/v1',
+        '',
+        '',
+        'session',
+      )
+
+    expect(status).toMatchObject({
+      configured:
+        true,
+      connected:
+        true,
+      providerId:
+        'openai-compatible',
+      model:
+        'route/first-model',
+      sessionOnly:
+        true,
+    })
+
+    expect(created).toEqual([
+      {
+        apiKey: '',
+        model: '',
+      },
+      {
+        apiKey: '',
+        model:
+          'route/first-model',
+      },
+    ])
+
+    expect(
+      await service.listAccounts(),
+    ).toEqual([
+      expect.objectContaining({
+        providerId:
+          'openai-compatible',
+        model:
+          'route/first-model',
+      }),
+    ])
   })
 
   it('removes the active provider before a credential deletion failure', async () => {

@@ -21,8 +21,8 @@ export const MAX_PROVIDER_ACCOUNTS = 10
  * model = 'codex/gpt-5.6-sol'
  */
 export const providerConnectorIds = [
-  'openai',
-  'gemini',
+  'openai',  'gemini',
+  'github-copilot',
   'anthropic',
   'omniroute',
   'openai-compatible',
@@ -59,6 +59,8 @@ export type ProviderAuthKind =
  *
  * "auto" significa que o Coach/provider decide.
  */
+  | 'oauth'
+
 export const reasoningEfforts = [
   'auto',
   'low',

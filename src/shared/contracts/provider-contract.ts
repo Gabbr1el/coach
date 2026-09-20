@@ -79,13 +79,11 @@ export const configureCompatibleInputSchema = z
     apiKey:
       z.string()
         .trim()
-        .min(1)
         .max(512),
 
     model:
       z.string()
         .trim()
-        .min(1)
         .max(150),
 
     persistence:
@@ -96,10 +94,28 @@ export const configureCompatibleInputSchema = z
         .default('session'),
   })
   .strict()
+  .superRefine(
+    (input, context) => {
+      if (
+        input.connectorId === 'omniroute'
+        && !input.apiKey
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['apiKey'],
+          message:
+            'OmniRoute token is required',
+        })
+      }
+    },
+  )
 
 export const providerAccountIdSchema =
   z.uuid()
 
+
+export const githubCopilotOAuthFlowIdSchema =
+  z.uuid()
 export const setProviderAccountEnabledInputSchema =
   z.object({
     accountId:
@@ -176,6 +192,37 @@ export type ProviderQuotaState =
   | 'available'
   | 'exhausted'
 
+export type ProviderRuntimeIssue =
+  | 'available'
+  | 'usage-limit'
+  | 'temporarily-unavailable'
+  | 'model-unavailable'
+  | 'reauth-required'
+
+
+export interface ProviderAccountHealthSnapshot {
+  readonly accountId:
+    string
+
+  readonly checkedAt:
+    number
+
+  readonly connectionState:
+    ProviderConnectionState
+
+  /**
+   * null significa:
+   *
+   * - a conectividade foi verificada;
+   * - o modelo ainda aparece no catálogo;
+   * - mas não houve uma geração real suficiente
+   *   para afirmar quota/disponibilidade de resposta.
+   */
+  readonly runtimeIssue:
+    ProviderRuntimeIssue | null
+}
+
+
 export interface ProviderStatus {
   readonly configured: boolean
   readonly connected: boolean
@@ -238,6 +285,23 @@ export interface ProviderAccountSummary {
     string | null
 }
 
+export interface GitHubCopilotOAuthAuthorization {
+  readonly flowId: string
+  readonly userCode: string
+  readonly verificationUri: string
+  readonly expiresAt: number
+}
+
+export type BeginGitHubCopilotOAuthResult =
+  | {
+      readonly ok: true
+      readonly authorization: GitHubCopilotOAuthAuthorization
+    }
+  | {
+      readonly ok: false
+      readonly code: ProviderConnectionErrorCode
+    }
+
 export interface ProviderApi {
   getStatus():
     Promise<ProviderStatus>
@@ -245,6 +309,29 @@ export interface ProviderApi {
   listAccounts():
     Promise<
       ProviderAccountSummary[]
+    >
+
+  listAvailableModels(
+    accountId: string,
+  ):
+    Promise<readonly string[]>
+
+  refreshHealth():
+    Promise<
+      ProviderAccountHealthSnapshot[]
+    >
+
+  /**
+   * Executa um heartbeat funcional da IA ativa.
+   *
+   * Diferente de refreshHealth(), esta verificação
+   * realmente pede uma resposta estruturada ao modelo.
+   *
+   * Não persiste conversa nem executa ações do Coach.
+   */
+  checkActiveFunctionalHealth():
+    Promise<
+      ProviderAccountHealthSnapshot | null
     >
 
   configureOpenAI(
@@ -258,6 +345,18 @@ export interface ProviderApi {
       ConfigureCompatibleInput,
   ):
     Promise<ConfigureProviderResult>
+
+  connectGeminiOAuth():
+    Promise<ConfigureProviderResult>
+
+  beginGitHubCopilotOAuth():
+    Promise<BeginGitHubCopilotOAuthResult>
+
+  completeGitHubCopilotOAuth(
+    flowId: string,
+  ):
+    Promise<ConfigureProviderResult>
+
 
   selectAccount(
     accountId: string,
@@ -294,6 +393,8 @@ export type ProviderConnectionErrorCode =
   | 'ACCOUNT_DISABLED'
   | 'ACCOUNT_NOT_FOUND'
   | 'ACCOUNT_LIMIT_REACHED'
+  | 'OAUTH_CONFIGURATION_MISSING'
+  | 'AUTH_CANCELLED'
   | 'UNKNOWN'
 
 export type ConfigureProviderResult =

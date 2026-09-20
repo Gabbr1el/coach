@@ -1,7 +1,7 @@
 import type { AcademicMutationResult, AcademicOverview, StudyScheduleItem, WeeklyPlan, WeeklyPlanItem, WorkspacePriority } from '../../shared/contracts/planning-contract'
 import { normalizeSubject } from '../workspaces/subject-normalizer'
 import { academicEventPhase } from './academic-time'
-import { distributeWeeklyPlan, shiftDateKey, weekStartKey, weekdayForDateKey, zonedDateKey, type ExistingWeeklyItem, type WeeklyPlanningReview, type WeeklyPlanningTopic } from './weekly-planner'
+import { distributeWeeklyPlan, shiftDateKey, weekStartForDateKey, weekStartKey, weekdayForDateKey, zonedDateKey, type ExistingWeeklyItem, type WeeklyPlanningReview, type WeeklyPlanningTopic } from './weekly-planner'
 
 export interface HomeTurnTimeContext {
   readonly currentTime: number
@@ -159,28 +159,353 @@ export class PlanningService {
     if (!found) return this.replanWeek(timezone)
     return this.presentWeeklyPlan(found.id, weekStart, timezone, found.revision, found.generatedAt, found.items, now)
   }
+  getWeeklyPlanWindow(
+    anchorDate?: string,
+    timezone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+  ): WeeklyPlan {
+    timezone =
+      this.repository
+        .getCanonicalPlanningTimezone?.(
+          timezone,
+        )
+      ?? timezone
+
+    if (!this.repository.findWeeklyPlan) {
+      throw new Error(
+        'Weekly planning persistence is unavailable',
+      )
+    }
+
+    const now =
+      this.now()
+
+    const today =
+      zonedDateKey(
+        now,
+        timezone,
+      )
+
+    const start =
+      anchorDate
+      ?? today
+
+    const currentWeekStart =
+      weekStartForDateKey(
+        today,
+      )
+
+    const requestedWeekStarts =
+      [
+        ...new Set(
+          Array.from(
+            {
+              length:
+                7,
+            },
+            (_, offset) =>
+              weekStartForDateKey(
+                shiftDateKey(
+                  start,
+                  offset,
+                ),
+              ),
+          ),
+        ),
+      ]
+
+    const plans =
+      new Map<
+        string,
+        {
+          id: string
+          revision: number
+          generatedAt: number
+          items: ExistingWeeklyItem[]
+        }
+      >()
+
+    for (
+      const weekStart
+      of requestedWeekStarts
+    ) {
+      let found =
+        this.repository
+          .findWeeklyPlan!(
+            weekStart,
+            timezone,
+          )
+
+      /*
+       * Semanas históricas nunca são inventadas.
+       *
+       * A semana atual e semanas futuras podem ser
+       * materializadas deterministicamente para permitir
+       * que domingo já enxergue a segunda-feira seguinte.
+       *
+       * Ao virar o dia, uma semana gerada ontem é
+       * recalculada antes de ser apresentada como atual.
+       */
+      const needsCurrentRefresh =
+        weekStart
+          === currentWeekStart
+        && (
+          !found
+          || zonedDateKey(
+            found.generatedAt,
+            timezone,
+          ) < today
+        )
+
+      if (
+        needsCurrentRefresh
+        || (
+          !found
+          && weekStart
+            > currentWeekStart
+        )
+      ) {
+        this.replanWeekStarting(
+          weekStart,
+          timezone,
+          now,
+        )
+
+        found =
+          this.repository
+            .findWeeklyPlan!(
+              weekStart,
+              timezone,
+            )
+      }
+
+      if (found) {
+        plans.set(
+          weekStart,
+          found,
+        )
+      }
+    }
+
+    const activeNames =
+      new Map(
+        (
+          this.repository
+            .listWorkspaces?.()
+          ?? []
+        ).map(
+          (item) => [
+            item.id,
+            item.name,
+          ],
+        ),
+      )
+
+    const weeklyAvailability =
+      new Map(
+        (
+          this.repository
+            .listWeeklyAvailability?.(
+              now,
+            )
+          ?? []
+        ).map(
+          (item) => [
+            item.weekday,
+            item.minutes,
+          ],
+        ),
+      )
+
+    const dayBudgets =
+      new Map<
+        string,
+        number
+      >()
+
+    for (
+      const weekStart
+      of requestedWeekStarts
+    ) {
+      for (
+        const budget
+        of (
+          this.repository
+            .listTodayBudgets?.(
+              weekStart,
+              timezone,
+            )
+          ?? []
+        )
+      ) {
+        dayBudgets.set(
+          budget.dateKey,
+          budget.minutes,
+        )
+      }
+    }
+
+    const days =
+      Array.from(
+        {
+          length:
+            7,
+        },
+        (_, offset) => {
+          const dateKey =
+            shiftDateKey(
+              start,
+              offset,
+            )
+
+          const sourcePlan =
+            plans.get(
+              weekStartForDateKey(
+                dateKey,
+              ),
+            )
+
+          const dayItems:
+            WeeklyPlanItem[] =
+              (
+                sourcePlan
+                  ?.items
+                  .filter(
+                    (item) =>
+                      item.dateKey
+                        === dateKey,
+                  )
+                ?? []
+              ).map(
+                ({
+                  sourceKey: _,
+                  workspaceName:
+                    persistedWorkspaceName,
+                  ...item
+                }) => {
+                  const activeName =
+                    activeNames.get(
+                      item.workspaceId,
+                    )
+
+                  return {
+                    ...item,
+
+                    workspaceName:
+                      activeName
+                      ?? persistedWorkspaceName
+                      ?? 'Workspace removido',
+
+                    workspaceAvailable:
+                      Boolean(
+                        activeName,
+                      ),
+                  }
+                },
+              )
+
+          const availableMinutes =
+            dayBudgets.get(
+              dateKey,
+            )
+            ?? weeklyAvailability.get(
+              weekdayForDateKey(
+                dateKey,
+              ),
+            )
+            ?? 120
+
+          const scheduledMinutes =
+            dayItems
+              .filter(
+                (item) =>
+                  item.workspaceAvailable
+                    !== false,
+              )
+              .reduce(
+                (
+                  sum,
+                  item,
+                ) =>
+                  sum
+                  + item.durationMinutes,
+                0,
+              )
+
+          return {
+            dateKey,
+
+            weekday:
+              weekdayForDateKey(
+                dateKey,
+              ),
+
+            availableMinutes,
+            scheduledMinutes,
+
+            status:
+              dateKey < today
+                ? 'past' as const
+                : dateKey === today
+                  ? 'today' as const
+                  : 'future' as const,
+
+            items:
+              dayItems,
+          }
+        },
+      )
+
+    const persisted =
+      [
+        ...plans.values(),
+      ]
+
+    return {
+      id:
+        `window:${start}:${timezone}`,
+
+      weekStart:
+        start,
+
+      timezone,
+
+      revision:
+        Math.max(
+          0,
+          ...persisted.map(
+            (plan) =>
+              plan.revision,
+          ),
+        ),
+
+      generatedAt:
+        Math.max(
+          0,
+          ...persisted.map(
+            (plan) =>
+              plan.generatedAt,
+          ),
+        ),
+
+      days,
+    }
+  }
+
   peekWeeklyPlan(timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): WeeklyPlan | null {
     timezone = this.repository.getCanonicalPlanningTimezone?.(timezone) ?? timezone
     const now = this.now(); const weekStart = weekStartKey(now, timezone); const found = this.repository.findWeeklyPlan?.(weekStart, timezone)
     return found ? this.presentWeeklyPlan(found.id, weekStart, timezone, found.revision, found.generatedAt, found.items, now) : null
   }
-  listReviewNeeds(): WeeklyPlanningReview[] { return this.repository.listWeeklyPlanningReviews?.(this.now()) ?? [] }
+  listReviewNeeds(): WeeklyPlanningReview[] {
+    return this.repository.listWeeklyPlanningReviews?.(this.now()) ?? []
+  }
+
   replanWeek(timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): WeeklyPlan {
     this.repository.setCanonicalPlanningTimezone?.(timezone, this.now())
-    if (!this.repository.findWeeklyPlan || !this.repository.listWeeklyPlanningTopics || !this.repository.listWeeklyAvailability || !this.repository.saveWeeklyPlan) throw new Error('Weekly planning persistence is unavailable')
-    const now = this.now(); const today = zonedDateKey(now, timezone); const weekStart = weekStartKey(now, timezone); const existing = this.repository.findWeeklyPlan(weekStart, timezone)
-    const availability = new Map(this.repository.listWeeklyAvailability(now).map((item) => [item.weekday, item.minutes]))
-    const dayBudgets = new Map((this.repository.listTodayBudgets?.(weekStart, timezone) ?? []).map((item) => [item.dateKey, item.minutes]))
-    const topics = this.repository.listWeeklyPlanningTopics(now)
-    const previous = existing?.items ?? this.repository.listLegacyDailyItems?.(today) ?? []
-    const reviews = this.repository.listWeeklyPlanningReviews?.(now) ?? []
-    const items = distributeWeeklyPlan({ weekStart, today, timezone, now, availability, dayBudgets, topics, reviews, existing: previous, createId: () => crypto.randomUUID() })
-    const id = existing?.id ?? crypto.randomUUID(); const revision = (existing?.revision ?? 0) + 1
-    this.repository.saveWeeklyPlan({ id, weekStart, timezone, revision, generatedAt: now, items })
-    const persisted = this.repository.findWeeklyPlan(weekStart, timezone)
-    if (!persisted || persisted.revision !== revision) throw new Error('Weekly plan was not persisted')
-    return this.presentWeeklyPlan(persisted.id, weekStart, timezone, revision, persisted.generatedAt, persisted.items, now)
+    const now = this.now()
+    return this.replanWeekStarting(weekStartKey(now, timezone), timezone, now)
   }
+
   replanWorkspace(workspaceId: string, timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): WeeklyPlan {
     timezone = this.repository.getCanonicalPlanningTimezone?.(timezone) ?? timezone
     if (!this.repository.findWeeklyPlan || !this.repository.listWeeklyPlanningTopics || !this.repository.listWeeklyAvailability || !this.repository.saveWeeklyPlan) throw new Error('Weekly planning persistence is unavailable')
@@ -206,12 +531,341 @@ export class PlanningService {
     return this.getWeeklyPlan(timezone)
   }
   getTodayPlan(workspaceId: string, timezone = Intl.DateTimeFormat().resolvedOptions().timeZone): import('../../shared/contracts/study-workspace-contract').StudyPlanItem[] { const plan = this.getWeeklyPlan(timezone); const today = zonedDateKey(this.now(), plan.timezone); const items = plan.days.find((day) => day.dateKey === today)?.items.filter((item) => item.workspaceId === workspaceId) ?? []; const hasActive = items.some((item) => item.status === 'in_progress'); const firstPending = items.find((item) => item.status === 'pending')?.id; return items.map((item) => ({ id: item.id, title: item.title, durationMinutes: item.durationMinutes, position: item.position, status: item.status === 'in_progress' || (!hasActive && item.id === firstPending) ? 'active' : item.status, moduleId: item.moduleId ?? undefined, topicId: item.topicId ?? undefined, activityType: item.activityType, scheduledStartMinutes: item.scheduledStartMinutes })) }
+  private replanWeekStarting(
+    weekStart: string,
+    timezone: string,
+    now: number,
+  ): WeeklyPlan {
+    if (
+      !this.repository.findWeeklyPlan
+      || !this.repository.listWeeklyPlanningTopics
+      || !this.repository.listWeeklyAvailability
+      || !this.repository.saveWeeklyPlan
+    ) {
+      throw new Error(
+        'Weekly planning persistence is unavailable',
+      )
+    }
+
+    const actualToday =
+      zonedDateKey(
+        now,
+        timezone,
+      )
+
+    const planningToday =
+      weekStart > actualToday
+        ? weekStart
+        : actualToday
+
+    const existing =
+      this.repository
+        .findWeeklyPlan(
+          weekStart,
+          timezone,
+        )
+
+    const availability =
+      new Map(
+        this.repository
+          .listWeeklyAvailability(
+            now,
+          )
+          .map(
+            (item) => [
+              item.weekday,
+              item.minutes,
+            ],
+          ),
+      )
+
+    const dayBudgets =
+      new Map(
+        (
+          this.repository
+            .listTodayBudgets?.(
+              weekStart,
+              timezone,
+            )
+          ?? []
+        ).map(
+          (item) => [
+            item.dateKey,
+            item.minutes,
+          ],
+        ),
+      )
+
+    const topics =
+      this.repository
+        .listWeeklyPlanningTopics(
+          now,
+        )
+
+    const currentWeekStart =
+      weekStartForDateKey(
+        actualToday,
+      )
+
+    const previous =
+      existing?.items
+      ?? (
+        weekStart
+          === currentWeekStart
+          ? (
+              this.repository
+                .listLegacyDailyItems?.(
+                  actualToday,
+                )
+              ?? []
+            )
+          : []
+      )
+
+    const reviews =
+      this.repository
+        .listWeeklyPlanningReviews?.(
+          now,
+        )
+      ?? []
+
+    const items =
+      distributeWeeklyPlan({
+        weekStart,
+
+        today:
+          planningToday,
+
+        timezone,
+        now,
+        availability,
+        dayBudgets,
+        topics,
+        reviews,
+
+        existing:
+          previous,
+
+        createId:
+          () =>
+            crypto.randomUUID(),
+      })
+
+    const id =
+      existing?.id
+      ?? crypto.randomUUID()
+
+    const revision =
+      (
+        existing?.revision
+        ?? 0
+      )
+      + 1
+
+    this.repository
+      .saveWeeklyPlan({
+        id,
+        weekStart,
+        timezone,
+        revision,
+
+        generatedAt:
+          now,
+
+        items,
+      })
+
+    const persisted =
+      this.repository
+        .findWeeklyPlan(
+          weekStart,
+          timezone,
+        )
+
+    if (
+      !persisted
+      || persisted.revision
+        !== revision
+    ) {
+      throw new Error(
+        'Weekly plan was not persisted',
+      )
+    }
+
+    return this.presentWeeklyPlan(
+      persisted.id,
+      weekStart,
+      timezone,
+      revision,
+      persisted.generatedAt,
+      persisted.items,
+      now,
+    )
+  }
+
   private presentWeeklyPlan(id: string, weekStart: string, timezone: string, revision: number, generatedAt: number, items: ExistingWeeklyItem[], now: number): WeeklyPlan {
-    const today = zonedDateKey(now, timezone)
-    const names = new Map((this.repository.listWorkspaces?.() ?? []).map((item) => [item.id, item.name]))
-    const weeklyAvailability = new Map((this.repository.listWeeklyAvailability?.(now) ?? []).map((item) => [item.weekday, item.minutes])); const dayBudgets = new Map((this.repository.listTodayBudgets?.(weekStart, timezone) ?? []).map((item) => [item.dateKey, item.minutes]))
-    const days = Array.from({ length: 7 }, (_, offset) => { const dateKey = shiftDateKey(weekStart, offset); const dayItems: WeeklyPlanItem[] = items.filter((item) => item.dateKey === dateKey && names.has(item.workspaceId)).map(({ sourceKey: _, workspaceName: _workspaceName, ...item }) => ({ ...item, workspaceName: names.get(item.workspaceId)! })); const availableMinutes = dayBudgets.get(dateKey) ?? weeklyAvailability.get(weekdayForDateKey(dateKey)) ?? 120; return { dateKey, weekday: weekdayForDateKey(dateKey), availableMinutes, scheduledMinutes: dayItems.reduce((sum, item) => sum + item.durationMinutes, 0), status: dateKey < today ? 'past' as const : dateKey === today ? 'today' as const : 'future' as const, items: dayItems } })
-    return { id, weekStart, timezone, revision, generatedAt, days }
+    const today =
+      zonedDateKey(
+        now,
+        timezone,
+      )
+
+    const names =
+      new Map(
+        (
+          this.repository
+            .listWorkspaces?.()
+          ?? []
+        ).map(
+          (item) => [
+            item.id,
+            item.name,
+          ],
+        ),
+      )
+
+    const weeklyAvailability =
+      new Map(
+        (
+          this.repository
+            .listWeeklyAvailability?.(
+              now,
+            )
+          ?? []
+        ).map(
+          (item) => [
+            item.weekday,
+            item.minutes,
+          ],
+        ),
+      )
+
+    const dayBudgets =
+      new Map(
+        (
+          this.repository
+            .listTodayBudgets?.(
+              weekStart,
+              timezone,
+            )
+          ?? []
+        ).map(
+          (item) => [
+            item.dateKey,
+            item.minutes,
+          ],
+        ),
+      )
+
+    const days =
+      Array.from(
+        {
+          length:
+            7,
+        },
+        (_, offset) => {
+          const dateKey =
+            shiftDateKey(
+              weekStart,
+              offset,
+            )
+
+          const dayItems:
+            WeeklyPlanItem[] =
+              items
+                .filter(
+                  (item) =>
+                    item.dateKey
+                      === dateKey,
+                )
+                .map(
+                  ({
+                    sourceKey: _,
+                    workspaceName:
+                      persistedWorkspaceName,
+                    ...item
+                  }) => {
+                    const activeName =
+                      names.get(
+                        item.workspaceId,
+                      )
+
+                    return {
+                      ...item,
+
+                      workspaceName:
+                        activeName
+                        ?? persistedWorkspaceName
+                        ?? 'Workspace removido',
+
+                      workspaceAvailable:
+                        Boolean(
+                          activeName,
+                        ),
+                    }
+                  },
+                )
+
+          const availableMinutes =
+            dayBudgets.get(
+              dateKey,
+            )
+            ?? weeklyAvailability.get(
+              weekdayForDateKey(
+                dateKey,
+              ),
+            )
+            ?? 120
+
+          const scheduledMinutes =
+            dayItems
+              .filter(
+                (item) =>
+                  item.workspaceAvailable
+                    !== false,
+              )
+              .reduce(
+                (
+                  sum,
+                  item,
+                ) =>
+                  sum
+                  + item.durationMinutes,
+                0,
+              )
+
+          return {
+            dateKey,
+
+            weekday:
+              weekdayForDateKey(
+                dateKey,
+              ),
+
+            availableMinutes,
+            scheduledMinutes,
+
+            status:
+              dateKey < today
+                ? 'past' as const
+                : dateKey === today
+                  ? 'today' as const
+                  : 'future' as const,
+
+            items:
+              dayItems,
+          }
+        },
+      )
+
+    return {
+      id,
+      weekStart,
+      timezone,
+      revision,
+      generatedAt,
+      days,
+    }
   }
   listPriorities(): WorkspacePriority[] {
     const now = this.now(); const priorities = new Map<string, WorkspacePriority>()

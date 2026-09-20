@@ -2,7 +2,7 @@ import { ipcMain } from 'electron'
 import type { HomePlannerService } from '../../application/conversations/home-planner-service'
 import type { HomeOrganizerService } from '../../application/conversations/home-organizer-service'
 import type { WorkspaceCoachService } from '../../application/conversations/workspace-coach-service'
-import { cancelHomeStreamInputSchema, cancelWorkspaceStreamInputSchema, sendHomeMessageInputSchema, streamHomeMessageInputSchema, streamWorkspaceMessageInputSchema, workspaceConversationInputSchema, type HomeStreamEvent } from '../../shared/contracts/conversation-contract'
+import { cancelHomeStreamInputSchema, cancelWorkspaceStreamInputSchema, sendHomeMessageInputSchema, streamHomeMessageInputSchema, streamWorkspaceMessageInputSchema, workspaceConversationInputSchema, type ConversationStreamErrorCode, type HomeStreamEvent } from '../../shared/contracts/conversation-contract'
 import { CONVERSATION_CHANNELS } from '../../shared/contracts/conversation-channels'
 import { assertTrustedSender } from './trusted-sender'
 import type { WorkspaceActionService } from '../../application/workspaces/workspace-action-service'
@@ -11,6 +11,30 @@ import { interactiveCodeStateSchema, parseInteractiveValidation, type Interactiv
 import { studyLessonContentSchema } from '../../shared/contracts/study-lesson-contract'
 import type { PerformanceTimelineStore } from '../telemetry/performance-timeline'
 import { assertExerciseAccess } from '../curricular-access'
+
+function conversationStreamErrorCode(
+  error: unknown,
+): ConversationStreamErrorCode {
+  if (
+    error instanceof Error
+    && 'code' in error
+    && typeof error.code === 'string'
+  ) {
+    switch (error.code) {
+      case 'INSUFFICIENT_QUOTA':
+      case 'MODEL_UNAVAILABLE':
+      case 'RATE_LIMITED':
+      case 'INVALID_CREDENTIAL':
+      case 'ACCESS_RESTRICTED':
+      case 'NETWORK_UNAVAILABLE':
+      case 'REQUEST_TIMEOUT':
+        return error.code
+    }
+  }
+
+  return 'PROVIDER_UNAVAILABLE'
+}
+
 
 export function registerConversationHandlers(service: HomePlannerService, workspaceService: WorkspaceCoachService, organizer: HomeOrganizerService, workspaceActions?: WorkspaceActionService, database?: CoachDatabase, timelines?: PerformanceTimelineStore): void {
   const activeStreams = new Map<string, { controller: AbortController; senderId: number; threadKey: string }>()
@@ -46,6 +70,39 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
     send({ requestId: input.requestId, type: 'started', state: 'sending' })
     try {
       const turn = await organizer.organize(input)
+
+      /*
+       * "failed" significa que o fluxo do Coach não conseguiu
+       * produzir uma resposta funcional.
+       *
+       * Não tratamos isso como completed, porque completed
+       * faria a UI marcar a IA como "Funcionando".
+       */
+      if (
+        turn.result.outcome === 'failed'
+      ) {
+        send({
+          requestId:
+            input.requestId,
+
+          type:
+            'error',
+
+          /*
+           * O provider respondeu ao fluxo, mas o
+           * Organizer não conseguiu produzir uma
+           * resposta funcional validada.
+           *
+           * Isso não significa que a conexão com
+           * o provider caiu.
+           */
+          code:
+            'REQUEST_FAILED',
+        })
+
+        return
+      }
+
       if (controller.signal.aborted) throw new DOMException('Request cancelled', 'AbortError')
       const chunkSize = 48
       for (let offset = 0; offset < turn.result.message.length; offset += chunkSize) {
@@ -57,7 +114,7 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
     } catch (error) {
       send(controller.signal.aborted
         ? { requestId: input.requestId, type: 'cancelled' }
-        : { requestId: input.requestId, type: 'error', code: 'PROVIDER_UNAVAILABLE' })
+        : { requestId: input.requestId, type: 'error', code: conversationStreamErrorCode(error) })
     } finally {
       activeStreams.delete(input.requestId)
       homeStreamActive = false
@@ -132,8 +189,8 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
         if (stage !== 'executing') timeline?.mark(stage, details)
       })) send({ requestId: input.requestId, type: 'text-delta', content })
       send({ requestId: input.requestId, type: 'completed', messages: await workspaceService.listMessages(input.workspaceId), ...(metadata ? { metadata } : {}) })
-    } catch {
-      send(controller.signal.aborted ? { requestId: input.requestId, type: 'cancelled' } : { requestId: input.requestId, type: 'error', code: 'PROVIDER_UNAVAILABLE' })
+    } catch (error) {
+      send(controller.signal.aborted ? { requestId: input.requestId, type: 'cancelled' } : { requestId: input.requestId, type: 'error', code: conversationStreamErrorCode(error) })
     } finally {
       activeStreams.delete(input.requestId)
       event.sender.removeListener('destroyed', destroyed)

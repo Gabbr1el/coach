@@ -23,8 +23,127 @@ function currentClock(now: () => number): HomeTurnClock {
 
 function normalized(value: string): string { return value.trim().toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g, '') }
 function confirmationText(content: string): boolean { return /^(autorizo|confirmo|sim)$/i.test(content.trim()) }
+function workspacePreparationRejectionText(
+  content: string,
+): boolean {
+  return /^(?:n[aã]o|n[aã]o quero|n[aã]o precisa|n[aã]o crie|deixa pra l[aá]|deixe pra l[aá]|cancela|cancelar)$/i
+    .test(
+      content.trim(),
+    )
+}
+
+function workspacePreparationConfirmationText(
+  content: string,
+): boolean {
+  return /^(?:sim|quero|pode|pode criar|crie|prepare)$/i
+    .test(
+      content.trim(),
+    )
+}
+
 function mentionsProposal(content: string): boolean { return /cad[eê]\s+a\s+proposta|qual\s+(?:é\s+)?a\s+proposta/i.test(content) }
-function isPedagogicalQuery(content: string): boolean { return /\b(?:o que (?:é|e)|como funciona|me explica|explique|me dê um exercício|me de um exercicio|exercício de|exercicio de|qual a diferença|qual a diferenca)\b/i.test(content) }
+interface LearningRequestParts {
+  readonly subject: string
+  readonly organizerContent: string
+}
+
+function learningRequestParts(content: string): LearningRequestParts | null {
+  const match =
+    /\b(?:quero|gostaria\s+de|preciso)\s+(?:aprender|entender|estudar|praticar)\s+(.+?)(?=[,.;!?]|$)/i
+      .exec(content)
+
+  const subject = match?.[1]?.trim() ?? null
+  if (!match || !subject) return null
+
+  const semantic =
+    normalized(subject)
+      .replace(/\b(?:hoje|amanha|agora|manha|tarde|noite|por|durante|mais)\b/g, ' ')
+      .replace(/\b\d+(?:[.,]\d+)?\s*(?:h|hora|horas|min|minuto|minutos)?\b/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+  if (!/[a-z]/i.test(semantic)) return null
+
+  const before = content.slice(0, match.index)
+  const after = content.slice(match.index + match[0].length)
+
+  const organizerContent =
+    `${before} ${after}`
+      .replace(/\s+/g, ' ')
+      .replace(/[\s,;:.!?-]*(?:e|tambem|também)\s*$/i, '')
+      .replace(/^[\s,;:.!?-]*(?:e|tambem|também)\s*/i, '')
+      .replace(/^[\s,;:.!?-]+|[\s,;:.!?-]+$/g, '')
+      .trim()
+
+  return { subject, organizerContent }
+}
+
+function learningRequestSubject(content: string): string | null {
+  return learningRequestParts(content)?.subject ?? null
+}
+
+function subjectKey(value: string): string {
+  return normalized(value).replace(/[^a-z0-9]+/g, '')
+}
+
+function exactWorkspaceForSubject(
+  subject: string,
+  workspaces: Array<{ id: string; name: string }>,
+) {
+  const key = subjectKey(subject)
+  return workspaces.find((workspace) => subjectKey(workspace.name) === key) ?? null
+}
+
+function learningMessage(
+  subject: string,
+  workspaces: Array<{ id: string; name: string }>,
+): { ids: string[]; message: string } {
+  const workspace = exactWorkspaceForSubject(subject, workspaces)
+
+  return workspace
+    ? {
+        ids: [workspace.id],
+        message: `Para estudar ${subject}, vamos usar seu Workspace de ${workspace.name}.`,
+      }
+    : {
+        ids: [],
+        message: `Você ainda não tem um Workspace de ${subject}. Quer criar um?`,
+      }
+}
+
+function containsWorkspaceName(
+  content: string,
+  workspaceName: string,
+): boolean {
+  const searchable =
+    ` ${normalized(content)
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()} `
+
+  const name =
+    normalized(workspaceName)
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+  return Boolean(name)
+    && searchable.includes(
+      ` ${name} `,
+    )
+}
+
+function isPedagogicalQuery(
+  content: string,
+): boolean {
+  return (
+    /\b(?:o que (?:é|e)|como funciona|me explica|explique|me dê um exercício|me de um exercicio|exercício de|exercicio de|qual a diferença|qual a diferenca)\b/i
+      .test(content)
+    || learningRequestSubject(
+      content,
+    ) !== null
+  )
+}
 function isEventReference(content: string): boolean { return /\b(?:isso|esse trabalho|essa prova|a prova|o trabalho|mude para|remarque para|cancele isso|cancele esse|cancele essa)\b/i.test(content) }
 function isGenericEventReference(content: string): boolean { return /\b(?:isso|cancele isso)\b/i.test(content) && !/\b(?:prova|exame|trabalho|atividade|prazo|deadline)\b/i.test(content) }
 function explicitSubject(content: string): string | null { return /(?:prova|exame|trabalho|atividade|prazo)\s+(?:de|da|do)\s+(.+?)(?=\s+(?:foi\b|mudou\b|passou\b|no\s+dia|dia\s+\d|em\s+\d|para\s+(?:o\s+)?dia|amanh|hoje)|[,.;]|$)/i.exec(content)?.[1]?.trim() ?? null }
@@ -39,63 +158,595 @@ export class HomeOrganizerService {
 
   async organize(input: SendHomeMessageInput): Promise<{ messages: ConversationMessage[]; result: HomeOrganizerResult }> {
     const content = input.content.trim(); const clock = this.clock?.() ?? currentClock(this.now); const pendingActions = this.actions.listPending(); const userMessageId = this.conversation.createMessageId()
-    if (isPedagogicalQuery(content)) { const workspaces = await this.listWorkspaces(); const named = workspaces.find((workspace) => normalized(content).includes(normalized(workspace.name))); return this.persist(content, named ? { outcome: 'needs_decision', operations: [], actions: [], affectedWorkspaceIds: [named.id], message: `Essa é uma dúvida de conteúdo. Vamos trabalhar isso no seu Workspace de ${named.name}.` } : { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: 'Essa é uma dúvida de conteúdo e o HOME não ministra aulas. Escolha um Workspace adequado ou prepare um novo Workspace para estudar esse tema.' }, undefined, userMessageId) }
+    const learningRequest = learningRequestParts(content)
+    const organizerContent = learningRequest?.organizerContent || content
+    if (isPedagogicalQuery(content) && !learningRequest?.organizerContent) {
+      const workspaces = await this.listWorkspaces()
+      const requestedSubject = learningRequest?.subject ?? learningRequestSubject(content)
+      const named = requestedSubject
+        ? exactWorkspaceForSubject(requestedSubject, workspaces)
+        : workspaces.find((workspace) => containsWorkspaceName(content, workspace.name))
+
+      if (
+        requestedSubject
+        && !named
+        && this.states
+      ) {
+        const current =
+          this.states.load(
+            this.conversation.threadId,
+          )
+
+        this.states.save(
+          this.conversation.threadId,
+          {
+            ...current,
+
+            pendingWorkspacePreparation: {
+              subject:
+                requestedSubject,
+
+              originalMessageId:
+                userMessageId,
+
+              originalCreatedAt:
+                clock.currentTime,
+            },
+
+            updatedAt:
+              clock.currentTime,
+          },
+        )
+      }
+
+      return this.persist(
+        content,
+        named
+          ? {
+              outcome: 'needs_decision',
+              operations: [],
+              actions: [],
+              affectedWorkspaceIds: [named.id],
+              message: `Esse é um pedido de estudo. Vamos trabalhar isso no seu Workspace de ${named.name}.`,
+            }
+          : {
+              outcome: 'needs_information',
+              operations: [],
+              actions: [],
+              affectedWorkspaceIds: [],
+              message: requestedSubject
+                ? `Você ainda não tem um Workspace de ${requestedSubject}. Quer criar um?`
+                : 'Esse é um pedido de estudo e o HOME não ministra aulas. Escolha um Workspace adequado ou prepare um novo Workspace.',
+            },
+        undefined,
+        userMessageId,
+      )
+    }
+
+    if (
+      workspacePreparationConfirmationText(
+        content,
+      )
+    ) {
+      const workspaces =
+        await this.listWorkspaces()
+
+      const academicLife =
+        this.listAcademicLife()
+          .filter(
+            (item) =>
+              item.status === 'active'
+              && item.replacedById === null
+              && item.shareWithAi,
+          )
+
+      let confirmationState =
+        this.revalidate(
+          this.states
+            ?.load(
+              this.conversation.threadId,
+            )
+          ?? emptyOrganizerConversationState(),
+          workspaces,
+          academicLife,
+          clock.currentTime,
+        )
+
+      const preparation =
+        confirmationState
+          .pendingWorkspacePreparation
+
+      if (preparation) {
+        const existing =
+          exactWorkspaceForSubject(
+            preparation.subject,
+            workspaces,
+          )
+
+        if (existing) {
+          confirmationState = {
+            ...confirmationState,
+            pendingWorkspacePreparation:
+              null,
+            updatedAt:
+              clock.currentTime,
+          }
+
+          this.states?.save(
+            this.conversation.threadId,
+            confirmationState,
+          )
+
+          return this.persist(
+            content,
+            {
+              outcome:
+                'informational',
+              operations:
+                [],
+              actions:
+                [],
+              affectedWorkspaceIds:
+                [existing.id],
+              message:
+                `O Workspace de ${existing.name} já existe. Podemos continuar os estudos por ele.`,
+            },
+            undefined,
+            userMessageId,
+          )
+        }
+
+        const action =
+          this.actions.propose({
+            type:
+              'workspace.prepare',
+
+            payload: {
+              name:
+                preparation.subject,
+
+              objective:
+                `Preparação acadêmica em ${preparation.subject}`,
+            },
+
+            label:
+              `Preparar Workspace de ${preparation.subject}`,
+
+            /*
+             * A ação nasce da RESPOSTA "quero",
+             * e não da mensagem que também continha a prova.
+             *
+             * Assim ela não vira irmã da futura ação
+             * academic-life.save e nenhuma invalida a outra.
+             */
+            originMessageId:
+              userMessageId,
+
+            contextVersion:
+              clock.currentTime,
+
+            idempotencyScope:
+              `organizer:workspace-prepare:${preparation.subject}:${userMessageId}`,
+          })
+
+        confirmationState = {
+          ...confirmationState,
+          pendingWorkspacePreparation:
+            null,
+          updatedAt:
+            clock.currentTime,
+        }
+
+        this.states?.save(
+          this.conversation.threadId,
+          confirmationState,
+        )
+
+        return this.persist(
+          content,
+          {
+            outcome:
+              'needs_decision',
+            operations:
+              [],
+            actions:
+              [action],
+            affectedWorkspaceIds:
+              [],
+            message:
+              `Posso preparar o Workspace de ${preparation.subject}. Confirme pelo botão; ele ainda não foi criado.`,
+          },
+          undefined,
+          userMessageId,
+        )
+      }
+    }
+
+    if (
+      workspacePreparationRejectionText(
+        content,
+      )
+    ) {
+      const workspaces =
+        await this.listWorkspaces()
+
+      const academicLife =
+        this.listAcademicLife()
+          .filter(
+            (item) =>
+              item.status === 'active'
+              && item.replacedById === null
+              && item.shareWithAi,
+          )
+
+      let rejectionState =
+        this.revalidate(
+          this.states
+            ?.load(
+              this.conversation.threadId,
+            )
+          ?? emptyOrganizerConversationState(),
+          workspaces,
+          academicLife,
+          clock.currentTime,
+        )
+
+      const preparation =
+        rejectionState
+          .pendingWorkspacePreparation
+
+      if (preparation) {
+        /*
+         * Recusar a criação do Workspace não resolve,
+         * rejeita nem apaga uma intenção acadêmica
+         * independente que ainda esteja pendente.
+         */
+        rejectionState = {
+          ...rejectionState,
+          pendingWorkspacePreparation:
+            null,
+          updatedAt:
+            clock.currentTime,
+        }
+
+        this.states?.save(
+          this.conversation.threadId,
+          rejectionState,
+        )
+
+        const pendingExam =
+          rejectionState.pending
+          && rejectionState.pending.capability
+            === 'academic.event.create'
+          && rejectionState.pending.entities.eventKind
+            === 'exam'
+          && rejectionState.pending.entities.subject
+          && rejectionState.pending.missingFields.includes(
+            'dateExpression',
+          )
+            ? rejectionState.pending
+            : null
+
+        const examReminder =
+          pendingExam
+            ? ` A prova de ${pendingExam.entities.subject} continua pendente; qual é a data?`
+            : ''
+
+        return this.persist(
+          content,
+          {
+            outcome:
+              pendingExam
+                ? 'needs_information'
+                : 'informational',
+
+            operations:
+              [],
+
+            actions:
+              [],
+
+            affectedWorkspaceIds:
+              [],
+
+            message:
+              `Certo, não vou preparar o Workspace de ${preparation.subject}.${examReminder}`,
+          },
+          undefined,
+          userMessageId,
+        )
+      }
+    }
+
     if (confirmationText(content)) return this.persist(content, { outcome: 'informational', operations: [], actions: [], affectedWorkspaceIds: [], message: pendingActions.length ? 'Há uma decisão pendente, mas ela só pode ser executada pelo botão ligado à mensagem original.' : 'Não há nenhuma ação aguardando confirmação. Quando uma decisão for necessária, ela aparecerá aqui com um botão próprio.' }, undefined, userMessageId)
     if (mentionsProposal(content)) return this.persist(content, { outcome: 'informational', operations: [], actions: pendingActions, affectedWorkspaceIds: [], message: pendingActions.length ? 'As decisões pendentes continuam disponíveis nos botões da mensagem que as originou.' : 'Não há nenhuma proposta pendente no estado real do Coach.' }, undefined, userMessageId)
 
     try {
       const workspaces = await this.listWorkspaces(); const academicLife = this.listAcademicLife().filter((item) => item.status === 'active' && item.replacedById === null && item.shareWithAi); const recentUserMessages = await this.conversation.listRecentUserMessages(4)
       let state = this.revalidate(this.states?.load(this.conversation.threadId) ?? emptyOrganizerConversationState(), workspaces, academicLife, clock.currentTime)
-      const fragmentWithoutPending = !state.pending && this.isStandaloneSlotFragment(content)
+
+      if (learningRequest) {
+        const learningWorkspace =
+          exactWorkspaceForSubject(
+            learningRequest.subject,
+            workspaces,
+          )
+
+        const nextWorkspacePreparation =
+          learningWorkspace
+            ? null
+            : {
+                subject:
+                  learningRequest.subject,
+
+                originalMessageId:
+                  userMessageId,
+
+                originalCreatedAt:
+                  clock.currentTime,
+              }
+
+        if (
+          JSON.stringify(
+            state.pendingWorkspacePreparation,
+          )
+          !== JSON.stringify(
+            nextWorkspacePreparation,
+          )
+        ) {
+          state = {
+            ...state,
+            pendingWorkspacePreparation:
+              nextWorkspacePreparation,
+            updatedAt:
+              clock.currentTime,
+          }
+
+          this.states?.save(
+            this.conversation.threadId,
+            state,
+          )
+        }
+      }
+
+      const fragmentWithoutPending = !state.pending && this.isStandaloneSlotFragment(organizerContent)
       if (fragmentWithoutPending) return this.persist(content, { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: 'Entendi o fragmento, mas não há um pedido pendente válido para completá-lo. Diga também qual evento ou matéria você quer organizar.' }, undefined, userMessageId)
       const interpretationContext = (pending: OrganizerConversationState['pending']) => ({ ...clock, conversation: { focus: { academicEvent: Boolean(state.focusedAcademicEventId), workspace: Boolean(state.focusedWorkspaceId), subject: state.focusedSubject }, pending: pending ? { capability: pending.capability, entities: pending.entities, missingFields: pending.missingFields } : null, recentUserMessages } })
-      let intent = await this.interpreter.interpret(content, interpretationContext(state.pending))
-      let semanticContent = content; let originMessageId = userMessageId; let executionClock = clock
-      if (state.pending && this.isPendingContinuation(content, intent, state.pending.missingFields)) {
-        const merged = this.mergePending(state.pending.entities, intent.entities, content, state.pending.missingFields)
+      let intent = await this.interpreter.interpret(organizerContent, interpretationContext(state.pending))
+      let semanticContent = organizerContent; let originMessageId = userMessageId; let executionClock = clock
+      if (state.pending && this.isPendingContinuation(organizerContent, intent, state.pending.missingFields)) {
+        const merged = this.mergePending(state.pending.entities, intent.entities, organizerContent, state.pending.missingFields)
         const remaining = state.pending.missingFields.filter((field) => merged[field as keyof OrganizerEntities] === null)
         intent = { mode: remaining.length ? 'clarification' : 'mutation', capability: remaining.length ? null : state.pending.capability, entities: merged, confidence: intent.confidence, missingFields: remaining, summary: remaining.length ? 'Ainda faltam dados.' : 'Completar intenção pendente.' }
-        semanticContent = `${state.pending.originalText} ${content}`; originMessageId = state.pending.originalMessageId
+        semanticContent = `${state.pending.originalText} ${organizerContent}`; originMessageId = state.pending.originalMessageId
         executionClock = { currentTime: clock.currentTime, currentDate: state.pending.originalCurrentDate, timezone: state.pending.originalTimezone }
       } else {
         if (state.pending) {
           state = { ...state, pending: null, updatedAt: clock.currentTime }
           this.states?.save(this.conversation.threadId, state)
-          intent = await this.interpreter.interpret(content, interpretationContext(null))
+          intent = await this.interpreter.interpret(organizerContent, interpretationContext(null))
         }
-        if (isEventReference(content) && !explicitSubject(content)) {
+        if (isEventReference(organizerContent) && !explicitSubject(organizerContent)) {
         if (!state.focusedAcademicEventId) return this.persist(content, { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: /cancel/i.test(content) ? 'Entendi um cancelamento, mas não há um evento em foco revalidado. Nenhuma criação foi proposta.' : 'Preciso que você identifique o evento com mais precisão.' }, undefined, userMessageId)
-        intent = this.resolveReferences(intent, content, state, academicLife, workspaces)
+        intent = this.resolveReferences(intent, organizerContent, state, academicLife, workspaces)
         }
       }
 
-      if (intent.mode === 'clarification' && intent.missingFields.length && this.pendingCapability(intent, content)) {
-        const capability = this.pendingCapability(intent, content)!
-        state = { ...state, pending: { capability, entities: intent.entities, missingFields: intent.missingFields, originalMessageId: userMessageId, originalText: content, originalCreatedAt: clock.currentTime, originalCurrentDate: clock.currentDate, originalTimezone: clock.timezone }, updatedAt: clock.currentTime }
+      if (intent.mode === 'clarification' && intent.missingFields.length && this.pendingCapability(intent, organizerContent)) {
+        const capability = this.pendingCapability(intent, organizerContent)!
+        state = { ...state, pending: { capability, entities: intent.entities, missingFields: intent.missingFields, originalMessageId: userMessageId, originalText: organizerContent, originalCreatedAt: clock.currentTime, originalCurrentDate: clock.currentDate, originalTimezone: clock.timezone }, updatedAt: clock.currentTime }
         this.states?.save(this.conversation.threadId, state)
       }
 
       const plan = this.planning.peekWeeklyPlan(clock.timezone); const overview = this.planning.getAcademicOverview(); const deadlines = overview.events; const reviewNeeds = this.planning.listReviewNeeds()
-      const referencedEvent = !explicitSubject(content) && isEventReference(content) && intent.entities.target ? academicLife.find((item) => item.status === 'active' && item.replacedById === null && normalized(item.title) === normalized(intent.entities.target!)) : null
-      const execution = this.executor.execute(intent, { content, originContent: semanticContent, originMessageId, ...executionClock, version: clock.currentTime, workspaces, academicLife, deadlines, availability: overview.availability, reviewNeeds, plan, focusedAcademicEventId: referencedEvent?.id ?? null })
+      const referencedEvent = !explicitSubject(organizerContent) && isEventReference(organizerContent) && intent.entities.target ? academicLife.find((item) => item.status === 'active' && item.replacedById === null && normalized(item.title) === normalized(intent.entities.target!)) : null
+      const execution = this.executor.execute(intent, { content: organizerContent, originContent: semanticContent, originMessageId, ...executionClock, version: clock.currentTime, workspaces, academicLife, deadlines, availability: overview.availability, reviewNeeds, plan, focusedAcademicEventId: referencedEvent?.id ?? null })
       if (execution) {
         if (execution.result.actions.length) { state = { ...state, pending: null, updatedAt: clock.currentTime }; this.states?.save(this.conversation.threadId, state) }
-        return this.persist(content, execution.result, execution.assistantId, userMessageId)
+        return this.persist(
+          content,
+          learningRequest
+            ? {
+                ...execution.result,
+                affectedWorkspaceIds: [
+                  ...new Set([
+                    ...execution.result.affectedWorkspaceIds,
+                    ...learningMessage(learningRequest.subject, workspaces).ids,
+                  ]),
+                ],
+                message:
+                  state.pending
+                  && state.pending.capability === 'academic.event.create'
+                  && state.pending.entities.eventKind === 'exam'
+                  && state.pending.entities.subject
+                  && state.pending.missingFields.includes('dateExpression')
+                    ? `Entendi duas coisas. Prova de ${state.pending.entities.subject}: ainda preciso da data para registrar. ${learningMessage(learningRequest.subject, workspaces).message}`
+                    : `${execution.result.message} ${learningMessage(learningRequest.subject, workspaces).message}`,
+              }
+            : execution.result,
+          execution.assistantId,
+          userMessageId,
+        )
       }
-      const messages = await this.conversation.sendMessageWithAuthority({ content }, { ...clock, state: { focus: { hasAcademicEvent: Boolean(state.focusedAcademicEventId), hasWorkspace: Boolean(state.focusedWorkspaceId), subject: state.focusedSubject }, pending: state.pending ? { capability: state.pending.capability, missingFields: state.pending.missingFields } : null, pendingActions: pendingActions.length }, operationResult: null, constraints: ['Não invente cronograma, duração, conteúdo, Workspace ou operação.', 'Não mencione proposta sem actionId real.'] })
-      return { messages, result: { outcome: 'informational', operations: [], actions: [], affectedWorkspaceIds: [], message: messages.at(-1)?.content ?? '' } }
-    } catch {
-      return this.persist(content, { outcome: 'failed', operations: [], actions: [], affectedWorkspaceIds: [], message: 'Não consegui interpretar ou validar esse pedido com segurança. Nenhuma mudança foi confirmada.' }, undefined, userMessageId)
+      if (learningRequest) {
+        const learning = learningMessage(learningRequest.subject, workspaces)
+        return this.persist(
+          content,
+          {
+            outcome: learning.ids.length ? 'needs_decision' : 'needs_information',
+            operations: [],
+            actions: [],
+            affectedWorkspaceIds: learning.ids,
+            message: learning.message,
+          },
+          undefined,
+          userMessageId,
+        )
+      }
+
+      const providerReply =
+        intent.providerResult
+          ?.conversationReply
+          ?.trim()
+        ?? ''
+
+      if (providerReply) {
+        const messages =
+          await this.conversation
+            .saveAuthoritativeTurn(
+              content,
+              providerReply,
+              undefined,
+              userMessageId,
+              intent.providerResult!
+                .providerId,
+              intent.providerResult!
+                .modelId,
+            )
+
+        return {
+          messages,
+          result: {
+            outcome:
+              'informational',
+            operations:
+              [],
+            actions:
+              [],
+            affectedWorkspaceIds:
+              [],
+            message:
+              providerReply,
+          },
+        }
+      }
+
+      const messages =
+        await this.conversation
+          .sendMessageWithAuthority(
+            {
+              content,
+            },
+            {
+              ...clock,
+
+              state: {
+                focus: {
+                  hasAcademicEvent:
+                    Boolean(
+                      state.focusedAcademicEventId,
+                    ),
+
+                  hasWorkspace:
+                    Boolean(
+                      state.focusedWorkspaceId,
+                    ),
+
+                  subject:
+                    state.focusedSubject,
+                },
+
+                pending:
+                  state.pending
+                    ? {
+                        capability:
+                          state.pending.capability,
+
+                        missingFields:
+                          state.pending.missingFields,
+                      }
+                    : null,
+
+                pendingActions:
+                  pendingActions.length,
+              },
+
+              operationResult:
+                null,
+
+              constraints: [
+                'Não invente cronograma, duração, conteúdo, Workspace ou operação.',
+                'Não mencione proposta sem actionId real.',
+              ],
+            },
+          )
+
+      return {
+        messages,
+
+        result: {
+          outcome:
+            'informational',
+
+          operations:
+            [],
+
+          actions:
+            [],
+
+          affectedWorkspaceIds:
+            [],
+
+          message:
+            messages.at(-1)?.content
+            ?? '',
+        },
+      }
+    } catch (error) {
+      /*
+       * TEMPORÁRIO durante a validação do fluxo.
+       * Remover antes do commit.
+       */
+      console.error(
+        '[Coach Organizer flow failed]',
+        {
+          name:
+            error instanceof Error
+              ? error.name
+              : 'UnknownError',
+
+          message:
+            error instanceof Error
+              ? error.message
+              : String(error),
+        },
+      )
+
+      return this.persist(
+        content,
+        {
+          outcome:
+            'failed',
+          operations:
+            [],
+          actions:
+            [],
+          affectedWorkspaceIds:
+            [],
+          message:
+            'Não consegui interpretar ou validar esse pedido com segurança. Nenhuma mudança foi confirmada.',
+        },
+        undefined,
+        userMessageId,
+      )
     }
   }
 
-  onPlannerActionResolved(action: PlannerAction): void {
-    if (action.status === 'rejected') {
+  onPlannerActionResolved(
+    action: PlannerAction,
+  ): void {
+    if (
+      action.status === 'rejected'
+    ) {
       if (!this.states) return
-      const current = this.states.load(this.conversation.threadId)
+
+      const current =
+        this.states.load(
+          this.conversation.threadId,
+        )
       const activeEvents = new Set(this.listAcademicLife().filter((item) => item.status === 'active' && item.replacedById === null).map((item) => item.id))
       const focusedAcademicEventId = current.focusedAcademicEventId && activeEvents.has(current.focusedAcademicEventId) ? current.focusedAcademicEventId : null
-      this.states.save(this.conversation.threadId, { ...current, pending: null, focusedAcademicEventId, focusedSubject: focusedAcademicEventId ? current.focusedSubject : null, recentResolvedAcademicEventIds: current.recentResolvedAcademicEventIds.filter((id) => activeEvents.has(id)), updatedAt: action.resolvedAt ?? this.now() })
+      this.states.save(this.conversation.threadId, { ...current, pending: action.type === 'workspace.prepare' ? current.pending : null, focusedAcademicEventId, focusedSubject: focusedAcademicEventId ? current.focusedSubject : null, recentResolvedAcademicEventIds: current.recentResolvedAcademicEventIds.filter((id) => activeEvents.has(id)), updatedAt: action.resolvedAt ?? this.now() })
       return
     }
     if (action.status !== 'applied') return

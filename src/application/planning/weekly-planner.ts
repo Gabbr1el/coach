@@ -2,7 +2,7 @@ import type { WeeklyPlanItem, WeeklyPlanItemStatus } from '../../shared/contract
 
 export interface WeeklyPlanningTopic { workspaceId: string; workspaceName: string; moduleId: string; modulePosition: number; topicId: string; topic: string; progress: 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED'; evidenceCount: number; masteryEstimate: number | null; confidence: 'low' | 'medium' | 'high'; needsReview: boolean; difficultyLevel: 'low' | 'medium' | 'high'; conceptMemory: { performance: 'unknown' | 'struggling' | 'developing' | 'secure'; retention: 'unknown' | 'fragile' | 'developing' | 'durable'; confidence: 'low' | 'medium' | 'high'; nextReviewAt: number | null } | null; dueAt: number | null; deadlineTitle: string | null; deadlineEstimatedMinutes?: number | null }
 export interface WeeklyPlanningReview { workspaceId: string; workspaceName: string; conceptId: string; conceptName: string; nextReviewAt: number | null; retention: 'unknown' | 'fragile' | 'developing' | 'durable'; performance: 'unknown' | 'struggling' | 'developing' | 'secure'; dueAt: number | null }
-export interface ExistingWeeklyItem extends Omit<WeeklyPlanItem, 'workspaceName'> { sourceKey: string; workspaceName?: string }
+export interface ExistingWeeklyItem extends Omit<WeeklyPlanItem, 'workspaceName' | 'workspaceAvailable'> { sourceKey: string; workspaceName?: string; workspaceArchived?: boolean }
 export interface WeeklyPlanDraftItem { id: string; sourceKey: string; workspaceId: string; workspaceName: string; dateKey: string; title: string; durationMinutes: number; position: number; status: WeeklyPlanItemStatus; moduleId: string | null; topicId: string | null; activityType: 'introduction' | 'review' | 'exercise'; scheduledStartMinutes: number; reason: string }
 
 const DAY = 86_400_000
@@ -13,7 +13,8 @@ export function zonedDateKey(value: number, timezone: string): string {
 }
 export function shiftDateKey(dateKey: string, days: number): string { const [year, month, day] = dateKey.split('-').map(Number); return new Date(Date.UTC(year!, month! - 1, day! + days)).toISOString().slice(0, 10) }
 export function weekdayForDateKey(dateKey: string): number { return new Date(`${dateKey}T12:00:00Z`).getUTCDay() }
-export function weekStartKey(value: number, timezone: string): string { const today = zonedDateKey(value, timezone); const weekday = weekdayForDateKey(today); return shiftDateKey(today, -(weekday === 0 ? 6 : weekday - 1)) }
+export function weekStartForDateKey(dateKey: string): string { const weekday = weekdayForDateKey(dateKey); return shiftDateKey(dateKey, -(weekday === 0 ? 6 : weekday - 1)) }
+export function weekStartKey(value: number, timezone: string): string { return weekStartForDateKey(zonedDateKey(value, timezone)) }
 
 function activityTypes(topic: WeeklyPlanningTopic): Array<'introduction' | 'review' | 'exercise'> {
   if (topic.conceptMemory) return topic.evidenceCount > 0 || topic.conceptMemory.performance !== 'unknown' ? ['exercise'] : ['introduction', 'exercise']
@@ -50,13 +51,37 @@ function reason(topic: WeeklyPlanningTopic): string {
 
 export function distributeWeeklyPlan(input: { weekStart: string; today: string; timezone: string; now: number; availability: Map<number, number>; dayBudgets?: Map<string, number>; topics: WeeklyPlanningTopic[]; reviews?: WeeklyPlanningReview[]; existing: ExistingWeeklyItem[]; createId(): string }): WeeklyPlanDraftItem[] {
   const activeWorkspaceIds = new Set(input.topics.map((topic) => topic.workspaceId))
-  const preserved = input.existing.filter((item) => activeWorkspaceIds.has(item.workspaceId) && (item.dateKey < input.today || item.status !== 'pending'))
+
+  const preserved = input.existing.filter((item) => {
+    if (item.workspaceArchived === true && item.workspaceName?.trim()) return true
+    if (!activeWorkspaceIds.has(item.workspaceId)) return false
+    return item.dateKey < input.today || item.status !== 'pending'
+  })
+
   const preservedKeys = new Set(preserved.map((item) => item.sourceKey))
-  const reusable = new Map(input.existing.filter((item) => item.status === 'pending' && item.dateKey >= input.today).map((item) => [item.sourceKey, item]))
+  const reusable = new Map(
+    input.existing
+      .filter((item) =>
+        activeWorkspaceIds.has(item.workspaceId)
+        && item.status === 'pending'
+        && item.dateKey >= input.today
+      )
+      .map((item) => [item.sourceKey, item]),
+  )
+
   const generated: WeeklyPlanDraftItem[] = []
   const candidates = input.topics.filter((topic) => topic.progress !== 'COMPLETED').sort((a, b) => priority(b, input.now) - priority(a, input.now) || a.workspaceId.localeCompare(b.workspaceId) || a.modulePosition - b.modulePosition || a.topicId.localeCompare(b.topicId))
   const dayUsage = new Map<string, number>()
-  for (const item of preserved) dayUsage.set(item.dateKey, (dayUsage.get(item.dateKey) ?? 0) + item.durationMinutes)
+
+  for (const item of preserved) {
+    if (!activeWorkspaceIds.has(item.workspaceId)) continue
+
+    dayUsage.set(
+      item.dateKey,
+      (dayUsage.get(item.dateKey) ?? 0)
+        + item.durationMinutes,
+    )
+  }
   for (const topic of candidates) for (const activityType of activityTypes(topic)) {
     const sourceKey = `${topic.workspaceId}:${topic.topicId}:${activityType}`
     if (preservedKeys.has(sourceKey) || generated.some((item) => item.sourceKey === sourceKey)) continue
@@ -87,7 +112,13 @@ export function distributeWeeklyPlan(input: { weekStart: string; today: string; 
     dayUsage.set(selected.dateKey, (dayUsage.get(selected.dateKey) ?? 0) + selected.duration)
   }
   const names = new Map(input.topics.map((topic) => [topic.workspaceId, topic.workspaceName]))
-  const combined: WeeklyPlanDraftItem[] = [...preserved.map((item) => ({ ...item, workspaceName: names.get(item.workspaceId)! })), ...generated]
+  const combined: WeeklyPlanDraftItem[] = [
+    ...preserved.map((item) => ({
+      ...item,
+      workspaceName: names.get(item.workspaceId) ?? item.workspaceName!,
+    })),
+    ...generated,
+  ]
   for (let offset = 0; offset < 7; offset++) {
     const dateKey = shiftDateKey(input.weekStart, offset); let start = 18 * 60; let position = 1
     for (const item of combined.filter((entry) => entry.dateKey === dateKey).sort((a, b) => { const historyOrder = Number(a.status !== 'pending') - Number(b.status !== 'pending'); const rank = { introduction: 0, review: 1, exercise: 2 }; return -historyOrder || (a.status !== 'pending' && b.status !== 'pending' ? a.position - b.position : 0) || a.workspaceId.localeCompare(b.workspaceId) || (a.topicId ?? '').localeCompare(b.topicId ?? '') || rank[a.activityType] - rank[b.activityType] })) { item.position = position++; item.scheduledStartMinutes = start; start += item.durationMinutes }

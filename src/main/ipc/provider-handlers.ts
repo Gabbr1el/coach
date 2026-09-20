@@ -1,10 +1,20 @@
 import {
+  app,
   ipcMain,
+  shell,
 } from 'electron'
+
+import {
+  join,
+} from 'node:path'
 
 import type {
   ProviderConfigurationService,
 } from '../../application/ai/provider-configuration-service'
+
+import {
+  authorizeGoogleGeminiOAuth,
+} from '../providers/google-gemini-oauth'
 
 import {
   OpenAICompatibleProviderError,
@@ -15,12 +25,26 @@ import {
 } from '../providers/openai-provider'
 
 import {
+  GeminiProviderError,
+} from '../providers/gemini-provider'
+
+import {
+  GitHubCopilotProviderError,
+} from '../providers/github-copilot-provider'
+
+import {
+  GitHubCopilotOAuthDeviceFlow,
+  GitHubCopilotOAuthError,
+} from '../providers/github-copilot-oauth'
+
+import {
   PROVIDER_CHANNELS,
 } from '../../shared/contracts/provider-channels'
 
 import {
   configureCompatibleInputSchema,
   configureOpenAIInputSchema,
+  githubCopilotOAuthFlowIdSchema,
   providerAccountIdSchema,
   setProviderAccountEnabledInputSchema,
   updateProviderAccountInputSchema,
@@ -83,6 +107,9 @@ export function registerProviderHandlers(
   service:
     ProviderConfigurationService,
 ): void {
+  const githubCopilotOAuth =
+    new GitHubCopilotOAuthDeviceFlow()
+
   ipcMain.handle(
     PROVIDER_CHANNELS.getStatus,
     (event) => {
@@ -98,6 +125,21 @@ export function registerProviderHandlers(
       assertTrustedSender(event)
 
       return service.listAccounts()
+    },
+  )
+
+  ipcMain.handle(
+    PROVIDER_CHANNELS.listAvailableModels,
+    (
+      event,
+      payload: unknown,
+    ) => {
+      assertTrustedSender(event)
+
+      return service.listAvailableModels(
+        providerAccountIdSchema
+          .parse(payload),
+      )
     },
   )
 
@@ -239,6 +281,322 @@ export function registerProviderHandlers(
       }
     },
   )
+
+
+  ipcMain.handle(
+    PROVIDER_CHANNELS.connectGeminiOAuth,
+    async (
+      event,
+    ) => {
+      try {
+        assertTrustedSender(event)
+
+        const configuredPath =
+          process.env
+            .COACH_GOOGLE_OAUTH_CLIENT_CONFIG
+            ?.trim()
+
+        const clientConfigPath =
+          configuredPath
+          || join(
+            app.getAppPath(),
+            '.coach-dev',
+            'google-oauth-client.json',
+          )
+
+        const authorization =
+          await authorizeGoogleGeminiOAuth({
+            clientConfigPath,
+
+            openExternal:
+              (url) =>
+                shell.openExternal(
+                  url,
+                ),
+          })
+
+        return {
+          ok:
+            true,
+
+          status:
+            await service
+              .configureGeminiOAuth(
+                authorization.credential,
+                authorization.identityLabel,
+              ),
+        } as const
+      } catch (error) {
+        /*
+         * GeminiProvider já classifica respostas HTTP
+         * da API. Preserve esse código em vez de
+         * transformar tudo em UNKNOWN.
+         */
+        if (
+          error
+          instanceof GeminiProviderError
+        ) {
+          console.error(
+            '[Gemini OAuth] provider error',
+            {
+              name:
+                error.name,
+
+              code:
+                error.code,
+
+              message:
+                error.message,
+            },
+          )
+
+
+          return {
+            ok:
+              false,
+
+            code:
+              error.code === 'REQUEST_TIMEOUT'
+                ? 'NETWORK_UNAVAILABLE'
+                : error.code,
+          } as const
+        }
+
+        const common =
+          providerErrorCode(error)
+
+        if (common) {
+          return {
+            ok:
+              false,
+
+            code:
+              common,
+          } as const
+        }
+
+        const message =
+          error instanceof Error
+            ? error.message
+            : ''
+
+        if (
+          message.includes(
+            'cancelada ou recusada',
+          )
+        ) {
+          return {
+            ok:
+              false,
+
+            code:
+              'AUTH_CANCELLED',
+          } as const
+        }
+
+        if (
+          message.includes(
+            'configuração OAuth',
+          )
+          || message.includes(
+            'credencial válida do tipo Desktop',
+          )
+        ) {
+          return {
+            ok:
+              false,
+
+            code:
+              'OAUTH_CONFIGURATION_MISSING',
+          } as const
+        }
+
+        if (
+          message.includes(
+            'refresh token',
+          )
+          || message.includes(
+            'access token',
+          )
+        ) {
+          return {
+            ok:
+              false,
+
+            code:
+              'INVALID_CREDENTIAL',
+          } as const
+        }
+
+        if (
+          message.includes(
+            'No Gemini generation model',
+          )
+          || message.includes(
+            'model',
+          )
+        ) {
+          return {
+            ok:
+              false,
+
+            code:
+              'MODEL_UNAVAILABLE',
+          } as const
+        }
+
+        return {
+          ok:
+            false,
+
+          code:
+            'UNKNOWN',
+        } as const
+      }
+    },
+  )
+
+  ipcMain.handle(
+    PROVIDER_CHANNELS.beginGitHubCopilotOAuth,
+    async (event) => {
+      try {
+        assertTrustedSender(event)
+
+        const clientId =
+          process.env
+            .COACH_GITHUB_OAUTH_CLIENT_ID
+            ?.trim()
+          || "Iv23lid7hkdJCeL7QYMo"
+
+        if (!clientId) {
+          return {
+            ok: false,
+            code:
+              'OAUTH_CONFIGURATION_MISSING',
+          } as const
+        }
+
+        const authorization =
+          await githubCopilotOAuth.begin(
+            clientId,
+          )
+
+        await shell.openExternal(
+          authorization.verificationUri,
+        )
+
+        return {
+          ok: true,
+          authorization,
+        } as const
+      } catch (error) {
+        if (
+          error
+          instanceof GitHubCopilotOAuthError
+        ) {
+          return {
+            ok: false,
+            code: error.code,
+          } as const
+        }
+
+        return {
+          ok: false,
+          code: 'UNKNOWN',
+        } as const
+      }
+    },
+  )
+
+  ipcMain.handle(
+    PROVIDER_CHANNELS.completeGitHubCopilotOAuth,
+    async (
+      event,
+      payload: unknown,
+    ) => {
+      try {
+        assertTrustedSender(event)
+
+        const flowId =
+          githubCopilotOAuthFlowIdSchema
+            .parse(payload)
+
+        const authorization =
+          await githubCopilotOAuth
+            .complete(flowId)
+
+        return {
+          ok: true,
+          status:
+            await service
+              .configureGitHubCopilotOAuth(
+                authorization.credential,
+                authorization.identityLabel,
+              ),
+        } as const
+      } catch (error) {
+        if (
+          error
+          instanceof GitHubCopilotOAuthError
+          || error
+            instanceof GitHubCopilotProviderError
+        ) {
+          return {
+            ok: false,
+            code: error.code,
+          } as const
+        }
+
+        const common =
+          providerErrorCode(error)
+
+        if (common) {
+          return {
+            ok: false,
+            code: common,
+          } as const
+        }
+
+        if (
+          error instanceof Error
+          && /GitHub Copilot.*model|model discovery/i
+            .test(error.message)
+        ) {
+          return {
+            ok: false,
+            code: 'MODEL_UNAVAILABLE',
+          } as const
+        }
+
+        return {
+          ok: false,
+          code: 'UNKNOWN',
+        } as const
+      }
+    },
+  )
+
+
+  ipcMain.handle(
+    PROVIDER_CHANNELS.refreshHealth,
+    (event) => {
+      assertTrustedSender(event)
+
+      return service.refreshHealth()
+    },
+  )
+
+
+  ipcMain.handle(
+    PROVIDER_CHANNELS.checkActiveFunctionalHealth,
+    (event) => {
+      assertTrustedSender(event)
+
+      return service
+        .checkActiveFunctionalHealth()
+    },
+  )
+
 
   ipcMain.handle(
     PROVIDER_CHANNELS.selectAccount,

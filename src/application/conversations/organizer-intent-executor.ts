@@ -49,7 +49,44 @@ function isInterrogativeOrQuery(content: string): boolean { const value = normal
 function isCancellation(content: string): boolean { return /\b(?:cancelar|cancele|cancela|cancelado|cancelada|cancelaram|foi cancelad[ao]|adiar|adie|remover|remova|excluir|exclua|apagar|apague)\b/i.test(content) }
 function isLearningClaim(content: string): boolean { return /\b(?:sei|domino|aprendi|estudei|pratiquei|revisei)\b/i.test(content) && !/\b(?:plano|planej|dispon|reorganize|recalcule|marcar|registre|crie|cancele)\b/i.test(content) }
 function formatDate(value: number, timezone: string): string { return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'long', timeZone: timezone }).format(value) }
-function estimatedEffort(content: string): number | null { return /\b(?:prova|exame|trabalho|atividade|prazo|deadline)\b/i.test(content) ? minutesFrom(content) : null }
+function estimatedEffort(
+  content: string,
+): number | null {
+  if (
+    !/\b(?:prova|exame|trabalho|atividade|prazo|deadline)\b/i
+      .test(content)
+  ) {
+    return null
+  }
+
+  /*
+   * Horários de evento não são duração de estudo.
+   *
+   * Exemplos removidos daqui:
+   *   "amanhã às 18h"
+   *   "hoje as 14:30"
+   *   "às 18 horas"
+   *   "5 da tarde"
+   *
+   * Durações explícitas continuam válidas:
+   *   "e 5 horas"
+   *   "120 minutos"
+   */
+  const withoutClockTimes =
+    content
+      .replace(
+        /(?:^|\s)(?:às|as|a)\s+\d{1,2}(?::\d{2})?\s*(?:h(?:oras?)?)?(?=\s|[,.;!?]|$)/gi,
+        ' ',
+      )
+      .replace(
+        /\b\d{1,2}(?::\d{2})?\s+da\s+(?:manhã|manha|tarde|noite)\b/gi,
+        ' ',
+      )
+
+  return minutesFrom(
+    withoutClockTimes,
+  )
+}
 
 export class OrganizerIntentExecutor {
   constructor(private readonly actions: PlannerActionService) {}

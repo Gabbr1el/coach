@@ -30,7 +30,7 @@ function WorkspaceRow({ workspace, priority, onOpen, onArchive, onRetry }: { wor
   const ready = !workspace.provisioning || workspace.provisioning.legacyState === 'legacy_accessible' || workspace.provisioning.readinessState === 'USABLE' || workspace.provisioning.readinessState === 'FULLY_PROVISIONED'
   const canRetry = provisioning?.status === 'waiting_for_provider' || (provisioning?.status === 'failed_retryable' && !permanentFailure)
   const detail = provisioning && !ready ? provisioning.errorMessage ?? provisioning.eta?.label ?? 'Calculando estimativa' : provisioning?.errorMessage ?? (provisioning?.backgroundPending ? `Próxima unidade em segundo plano · ${provisioning.backgroundPending} pendente(s)` : priority?.reason || workspace.objective || 'Sem objetivo definido')
-  return <article className="group grid grid-cols-[minmax(0,1fr)_76px_34px] items-center gap-3 border-b border-[#202229] px-1 py-4 sm:grid-cols-[minmax(0,1fr)_110px_110px_34px]"><div className="min-w-0"><button disabled={!ready} onClick={() => onOpen(workspace.id)} className="min-w-0 text-left disabled:cursor-wait disabled:opacity-70"><strong className="block truncate text-[13px] text-[#eceef2]">{workspace.name}</strong><span className="mt-1 block truncate text-[11px] text-[#626773]">{detail}</span></button>{canRetry && <button type="button" onClick={() => onRetry(workspace.id)} className="mt-1 text-[10px] font-bold text-[#8c7cff] hover:text-white">Tentar agora</button>}</div><span className={`text-[11px] font-semibold ${stage ? 'text-[#8c7cff]' : priority?.level === 'urgent' ? 'text-[#e27e82]' : priority?.level === 'attention' ? 'text-[#e8b96d]' : 'text-[#72d7aa]'}`}>{status}</span><span className="hidden text-right text-[11px] text-[#747986] sm:block">{workspace.lastOpenedAt ? new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(workspace.lastOpenedAt) : 'Novo'}</span><button onClick={() => onArchive(workspace.id)} className="grid size-8 place-items-center rounded-md text-[#626773] opacity-100 hover:bg-[#22252e] hover:text-white lg:opacity-0 lg:focus-visible:opacity-100 lg:group-hover:opacity-100" aria-label={`Arquivar ${workspace.name}`}><MoreHorizontal size={16} /></button></article>
+  return <article className="group grid grid-cols-[minmax(0,1fr)_76px_34px] items-center gap-3 border-b border-[#202229] px-1 py-4 sm:grid-cols-[minmax(0,1fr)_110px_110px_34px]"><div className="min-w-0"><button disabled={!ready} onClick={() => onOpen(workspace.id)} className="min-w-0 text-left disabled:cursor-wait disabled:opacity-70"><strong className="block truncate text-[13px] text-[#eceef2]">{workspace.name}</strong><span className="mt-1 block truncate text-[11px] text-[#626773]">{detail}</span></button>{canRetry && <button type="button" onClick={() => onRetry(workspace.id)} className="mt-1 text-[10px] font-bold text-[#8c7cff] hover:text-white">Tentar agora</button>}</div><span className={`text-[11px] font-semibold ${stage ? 'text-[#8c7cff]' : priority?.level === 'urgent' ? 'text-[#ef8d93]' : priority?.level === 'attention' ? 'text-[#e8b96d]' : 'text-[#72d7aa]'}`}>{status}</span><span className="hidden text-right text-[11px] text-[#747986] sm:block">{workspace.lastOpenedAt ? new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(workspace.lastOpenedAt) : 'Novo'}</span><button onClick={() => onArchive(workspace.id)} className="grid size-8 place-items-center rounded-md text-[#626773] opacity-100 hover:bg-[#22252e] hover:text-white lg:opacity-0 lg:focus-visible:opacity-100 lg:group-hover:opacity-100" aria-label={`Arquivar ${workspace.name}`}><MoreHorizontal size={16} /></button></article>
 }
 
 function GlobalReport({ report, onOpen }: { report: GlobalReportOverview | null; onOpen(id: string): void }) {
@@ -39,27 +39,857 @@ function GlobalReport({ report, onOpen }: { report: GlobalReportOverview | null;
   return <div className="mx-auto w-full max-w-6xl"><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#626773]">Relatórios</p><h1 className="mt-2 text-3xl font-semibold text-white">Panorama geral</h1><p className="mt-3 text-sm text-[#747986]">Resultados consolidados de todos os seus Workspaces.</p><div className="mt-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{metrics.map(([label, value]) => <div key={String(label)} className="rounded-lg border border-[#242730] bg-[#111217] p-4"><strong className="text-2xl text-white">{value}</strong><span className="mt-2 block text-[10px] uppercase tracking-wider text-[#626773]">{label}</span></div>)}</div><div className="mt-8 border-t border-[#292c35]">{report?.workspaces.map((item) => <button key={item.workspaceId} onClick={() => onOpen(item.workspaceId)} className="grid w-full grid-cols-[minmax(0,1fr)_70px] gap-4 border-b border-[#202229] py-4 text-left sm:grid-cols-[minmax(0,1fr)_90px_90px]"><span className="truncate text-xs font-semibold text-white">{item.workspaceName}</span><span className="hidden text-right text-[11px] text-[#9297a3] sm:block">{item.sessionCount} sessões</span><span className="text-right text-[11px] text-[#72d7aa]">{item.successRate === null ? 'Não avaliado' : `${item.successRate}%`}</span></button>)}</div></div>
 }
 
-function DayColumn({ day, selected, onSelect }: { day: WeeklyPlanDay; selected: boolean; onSelect(): void }) {
-  const date = new Date(`${day.dateKey}T12:00:00Z`)
-  const load = day.availableMinutes ? Math.min(100, Math.round(day.scheduledMinutes / day.availableMinutes * 100)) : 0
-  return <button type="button" onClick={onSelect} aria-pressed={selected} className={`min-w-[150px] rounded-xl border p-3 text-left sm:min-w-0 ${selected ? 'border-[#8c7cff] bg-[#181622]' : day.status === 'today' ? 'border-[#72d7aa]/70 bg-[#14201b]' : 'border-[#242730] bg-[#0d0e12] hover:border-[#3b3f4b]'}`}><div className="flex items-start justify-between gap-2"><div><strong className="block text-xs capitalize text-white">{weekday.format(date).replace('.', '')}</strong><span className="text-[10px] text-[#747986]">{shortDate.format(date)}{day.status === 'today' ? ' · hoje' : ''}</span></div><span className="text-[9px] text-[#9297a3]">{day.scheduledMinutes}/{day.availableMinutes} min</span></div><div className="mt-3 h-1 overflow-hidden rounded-full bg-[#292c35]"><i className="block h-full rounded-full bg-[#8c7cff]" style={{ width: `${load}%` }} /></div><div className="mt-3 space-y-1.5">{day.items.slice(0, 2).map((item) => <div key={item.id} className="rounded-md bg-[#1b1d24] px-2 py-1.5"><p className="truncate text-[10px] font-semibold text-[#eceef2]">{item.workspaceName}</p><p className="truncate text-[9px] text-[#747986]">{item.title}</p></div>)}{day.items.length === 0 && <p className="py-2 text-[10px] text-[#626773]">Sem blocos planejados</p>}{day.items.length > 2 && <p className="text-[9px] text-[#747986]">+ {day.items.length - 2} bloco(s)</p>}</div></button>
+function dateKeyOffset(
+  dateKey: string,
+  days: number,
+): string {
+  const [
+    year,
+    month,
+    day,
+  ] =
+    dateKey
+      .split('-')
+      .map(Number)
+
+  return new Date(
+    Date.UTC(
+      year!,
+      month! - 1,
+      day! + days,
+    ),
+  )
+    .toISOString()
+    .slice(
+      0,
+      10,
+    )
 }
 
-function WeekBoard({ weeklyPlan, onOpen }: { weeklyPlan: WeeklyPlan | null; onOpen(id: string): void }) {
-  const initial = weeklyPlan?.days.find((day) => day.status === 'today')?.dateKey ?? weeklyPlan?.days[0]?.dateKey ?? ''
-  const [selectedDate, setSelectedDate] = useState(initial)
-  useEffect(() => { if (weeklyPlan && !weeklyPlan.days.some((day) => day.dateKey === selectedDate)) setSelectedDate(initial) }, [weeklyPlan?.id, weeklyPlan?.revision, initial, selectedDate])
-  const selected = weeklyPlan?.days.find((day) => day.dateKey === selectedDate) ?? weeklyPlan?.days.find((day) => day.status === 'today') ?? weeklyPlan?.days[0]
-  if (!weeklyPlan) return <section className="rounded-2xl border border-dashed border-[#30333c] bg-[#111217] p-6"><p className="text-sm font-semibold text-white">Sua semana ainda está sendo preparada.</p><p className="mt-2 text-xs text-[#747986]">Defina disponibilidade e prazos na Visão Acadêmica para formar o plano semanal.</p></section>
-  const totalMinutes = weeklyPlan.days.reduce((sum, day) => sum + day.scheduledMinutes, 0)
-  return <section aria-labelledby="week-heading" className="rounded-2xl border border-[#242730] bg-[#111217] p-4 sm:p-5"><header className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#72d7aa]">Fonte de estudo da semana</p><h2 id="week-heading" className="mt-1 text-xl font-semibold text-white">Sua semana, dia por dia</h2><p className="mt-1 text-xs text-[#747986]">Plano salvo · revisão {weeklyPlan.revision}. Selecione um dia para ver cada próximo passo.</p></div><div className="text-right"><strong className="block text-lg text-white">{totalMinutes} min</strong><span className="text-[10px] text-[#626773]">planejados · {weeklyPlan.timezone}</span></div></header><div className="coach-horizontal-scroll mt-4 flex gap-2 overflow-x-auto pb-2 sm:grid sm:grid-cols-2 xl:grid-cols-7">{weeklyPlan.days.map((day) => <DayColumn key={day.dateKey} day={day} selected={day.dateKey === selected?.dateKey} onSelect={() => setSelectedDate(day.dateKey)} />)}</div>{selected && <div className="mt-4 rounded-xl border border-[#2b2e38] bg-[#0c0d11] p-4"><div className="flex items-center justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#8c7cff]">{selected.status === 'today' ? 'Próxima ação de hoje' : `Plano de ${weekday.format(new Date(`${selected.dateKey}T12:00:00Z`))}`}</p><p className="mt-1 text-xs text-[#747986]">{selected.items.length} bloco(s) em ordem · {selected.scheduledMinutes} minutos</p></div></div><div className="mt-3 grid gap-2 lg:grid-cols-2">{selected.items.map((item, index) => <button key={item.id} type="button" onClick={() => onOpen(item.workspaceId)} className="group flex items-center gap-3 rounded-lg border border-[#242730] bg-[#15161c] p-3 text-left hover:border-[#8c7cff]/60"><span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#252833] text-[10px] font-bold text-white">{index + 1}</span><span className="min-w-0 flex-1"><strong className="block truncate text-xs text-white">{item.title}</strong><span className="mt-1 block truncate text-[10px] text-[#747986]">{item.workspaceName} · {item.durationMinutes} min · {item.reason}</span></span><ChevronRight size={14} className="shrink-0 text-[#626773] group-hover:text-[#8c7cff]" /></button>)}{selected.items.length === 0 && <p className="text-xs text-[#626773]">Nenhuma atividade autoritativa para este dia. O Organizador pode ajudar a registrar disponibilidade ou prazos.</p>}</div></div>}</section>
+function currentDateKey(
+  timezone: string,
+): string {
+  const parts =
+    new Intl.DateTimeFormat(
+      'en-CA',
+      {
+        timeZone:
+          timezone,
+
+        year:
+          'numeric',
+
+        month:
+          '2-digit',
+
+        day:
+          '2-digit',
+      },
+    )
+      .formatToParts(
+        Date.now(),
+      )
+
+  const part =
+    (
+      type:
+        Intl.DateTimeFormatPartTypes,
+    ) =>
+      parts.find(
+        (entry) =>
+          entry.type === type,
+      )?.value
+      ?? ''
+
+  return `${part('year')}-${part('month')}-${part('day')}`
 }
 
-function OrganizerPanel({ messages, streamedContent, plannerActions, plannerInput, plannerBusy, plannerError, providerLabel, providerConnected, conversationRef, followLatest, onPlannerInput, onSubmit, onResolveAction }: { messages: ConversationMessage[]; streamedContent: string; plannerActions: PlannerAction[]; plannerInput: string; plannerBusy: boolean; plannerError: string | null; providerLabel: string; providerConnected: boolean; conversationRef: React.RefObject<HTMLDivElement | null>; followLatest: React.MutableRefObject<boolean>; onPlannerInput(value: string): void; onSubmit(): void; onResolveAction(id: string, decision: 'apply' | 'reject'): void }) {
-  return <aside data-organizer-state={streamedContent ? 'stream' : messages.length ? 'history' : 'zero'} aria-labelledby="organizer-heading" className="flex h-full min-h-0 max-h-[calc(100dvh-12rem)] flex-col overflow-hidden rounded-2xl border border-[#2d3040] bg-[#111217]"><header className="shrink-0 border-b border-[#242730] px-4 py-4"><div className="flex items-center justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#8c7cff]">Organizador</p><h2 id="organizer-heading" className="mt-1 text-sm font-semibold text-white">Ajuste contexto e prioridades</h2></div><span className={`flex items-center gap-2 text-[10px] ${providerConnected ? 'text-[#72d7aa]' : 'font-semibold text-[#e27e82]'}`}><i className={`size-1.5 rounded-full ${providerConnected ? 'bg-[#72d7aa]' : 'bg-[#e27e82]'}`} />{providerLabel}</span></div><p className="mt-2 text-[11px] leading-5 text-[#747986]">Converse sobre prazos e disponibilidade. Alterações sensíveis aparecem para sua confirmação.</p></header><div ref={conversationRef} onScroll={() => { const pane = conversationRef.current; if (pane) followLatest.current = isNearChatBottom(pane) }} className="coach-scroll-pane min-h-0 flex-1 space-y-3 px-4 py-4" role="log" aria-live="polite" aria-label="Conversa com o organizador">{messages.map((message) => <ChatMessage key={message.id} message={message} dark />)}{plannerBusy && !streamedContent && <div className="flex gap-1 px-2 py-3" aria-label="Coach está formulando"><span className="size-1.5 animate-bounce rounded-full bg-[#8c7cff]" /><span className="size-1.5 animate-bounce rounded-full bg-[#8c7cff] [animation-delay:120ms]" /><span className="size-1.5 animate-bounce rounded-full bg-[#8c7cff] [animation-delay:240ms]" /></div>}{streamedContent && <ChatMessage message={{ role: 'assistant', content: streamedContent }} dark streamed />}{!messages.length && !streamedContent && <div className="rounded-lg border border-dashed border-[#30333c] p-3 text-xs leading-5 text-[#747986]"><Sparkles size={15} className="mb-2 text-[#8c7cff]" />Ex.: “Tenho 45 minutos livres na quinta” ou “A prova de Cálculo é dia 18”.</div>}</div>{plannerActions.length > 0 && <section aria-label="Ações aguardando decisão" className="border-t border-[#242730] bg-[#171820] p-3"><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#e8b96d]">Revise antes de aplicar</p>{plannerActions.map((action) => <article key={action.id} className="mt-2 rounded-lg border border-[#36313f] bg-[#111217] p-3"><strong className="text-xs text-white">{action.label}</strong><p className="mt-1 text-[10px] leading-4 text-[#747986]">Confira os dados desta ação antes de alterar seu plano.</p><div className="mt-2 flex gap-2"><button disabled={plannerBusy} onClick={() => onResolveAction(action.id, 'apply')} className="rounded-md bg-[#8c7cff] px-3 py-1.5 text-[10px] font-bold text-[#0c0d10]">Aplicar</button><button disabled={plannerBusy} onClick={() => onResolveAction(action.id, 'reject')} className="rounded-md border border-[#30333c] px-3 py-1.5 text-[10px] font-bold text-[#9297a3]">Descartar</button></div></article>)}</section>}<ChatComposer id="organizer-message" value={plannerInput} busy={plannerBusy} placeholder="Conte uma mudança de prazo, prioridade ou disponibilidade…" label="Mensagem para o organizador" sendLabel="Enviar ao organizador" accentClass="focus-within:border-[#8c7cff]" onChange={onPlannerInput} onSend={onSubmit} />{plannerError && <p role="alert" className="shrink-0 px-3 pb-3 text-[10px] text-[#e99ca1]">{plannerError}</p>}</aside>
+
+function monthStartKey(
+  dateKey: string,
+): string {
+  return `${dateKey.slice(0, 7)}-01`
 }
 
-export function HomeScreen({ section, loading, error, report, weeklyPlan, academicLife, workspaces, priorities, messages, streamedContent, plannerActions, plannerInput, plannerBusy, plannerError, providerLabel, providerConnected, aiConnection, onSection, onSettings, onCreate, onOpen, onArchive, onRetryProvisioning, onPlannerInput, onPlannerSend, onResolveAction, onRefreshAcademicLife }: { section: HomeSection; loading: boolean; error: string | null; report: GlobalReportOverview | null; schedule: import('../../shared/contracts/planning-contract').StudyScheduleItem[]; weeklyPlan: WeeklyPlan | null; academicOverview: AcademicOverview | null; academicLife: AcademicLifeProjection | null; workspaces: WorkspaceSummary[]; priorities: WorkspacePriority[]; messages: ConversationMessage[]; streamedContent: string; plannerActions: PlannerAction[]; plannerInput: string; plannerBusy: boolean; plannerError: string | null; providerLabel: string; providerConnected: boolean; aiConnection: AIConnectionPageProps; onSection(section: HomeSection): void; onSettings(): void; onCreate(): void; onOpen(id: string): void; onArchive(id: string): void; onRetryProvisioning(id: string): void; onPlannerInput(value: string): void; onPlannerSend(): void; onResolveAction(id: string, decision: 'apply' | 'reject'): void; onRefreshAcademicLife(affectsPlanning: boolean): void | Promise<void> }) {
+function monthOffset(
+  dateKey: string,
+  amount: number,
+): string {
+  const [
+    year,
+    month,
+  ] =
+    dateKey
+      .split('-')
+      .map(Number)
+
+  return new Date(
+    Date.UTC(
+      year!,
+      month! - 1 + amount,
+      1,
+    ),
+  )
+    .toISOString()
+    .slice(0, 10)
+}
+
+function planRangeLabel(
+  start: string,
+): string {
+  const formatter =
+    new Intl.DateTimeFormat(
+      'pt-BR',
+      {
+        day: '2-digit',
+        month: 'short',
+        timeZone: 'UTC',
+      },
+    )
+
+  const first =
+    formatter.format(
+      new Date(
+        `${start}T12:00:00Z`,
+      ),
+    )
+
+  const last =
+    formatter.format(
+      new Date(
+        `${dateKeyOffset(start, 6)}T12:00:00Z`,
+      ),
+    )
+
+  return `${first} – ${last}`
+}
+
+function MonthCalendar({
+  anchor,
+  today,
+  onSelect,
+}: {
+  anchor: string
+  today: string
+  onSelect(dateKey: string): void
+}) {
+  const [
+    visibleMonth,
+    setVisibleMonth,
+  ] =
+    useState(
+      monthStartKey(anchor),
+    )
+
+  useEffect(
+    () => {
+      setVisibleMonth(
+        monthStartKey(anchor),
+      )
+    },
+    [
+      anchor,
+    ],
+  )
+
+  const monthDate =
+    new Date(
+      `${visibleMonth}T12:00:00Z`,
+    )
+
+  const firstWeekday =
+    (
+      monthDate.getUTCDay()
+      + 6
+    ) % 7
+
+  const gridStart =
+    dateKeyOffset(
+      visibleMonth,
+      -firstWeekday,
+    )
+
+  const days =
+    Array.from(
+      {
+        length:
+          42,
+      },
+      (
+        _,
+        index,
+      ) =>
+        dateKeyOffset(
+          gridStart,
+          index,
+        ),
+    )
+
+  const monthLabel =
+    new Intl.DateTimeFormat(
+      'pt-BR',
+      {
+        month:
+          'long',
+
+        year:
+          'numeric',
+
+        timeZone:
+          'UTC',
+      },
+    )
+      .format(
+        monthDate,
+      )
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Calendário"
+      className="absolute left-0 top-11 z-40 w-[300px] rounded-xl border border-[#30333c] bg-[#15161c] p-3 shadow-2xl"
+    >
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          aria-label="Mês anterior"
+          onClick={() =>
+            setVisibleMonth(
+              monthOffset(
+                visibleMonth,
+                -1,
+              ),
+            )
+          }
+          className="grid size-8 place-items-center rounded-md text-[#9297a3] hover:bg-[#242630] hover:text-white"
+        >
+          ←
+        </button>
+
+        <strong className="text-xs capitalize text-white">
+          {monthLabel}
+        </strong>
+
+        <button
+          type="button"
+          aria-label="Próximo mês"
+          onClick={() =>
+            setVisibleMonth(
+              monthOffset(
+                visibleMonth,
+                1,
+              ),
+            )
+          }
+          className="grid size-8 place-items-center rounded-md text-[#9297a3] hover:bg-[#242630] hover:text-white"
+        >
+          →
+        </button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-7 text-center text-[9px] font-bold uppercase text-[#626773]">
+        {[
+          'Seg',
+          'Ter',
+          'Qua',
+          'Qui',
+          'Sex',
+          'Sáb',
+          'Dom',
+        ].map(
+          (label) => (
+            <span key={label}>
+              {label}
+            </span>
+          ),
+        )}
+      </div>
+
+      <div className="mt-1 grid grid-cols-7 gap-1">
+        {days.map(
+          (dateKey) => {
+            const selected =
+              dateKey === anchor
+
+            const isToday =
+              dateKey === today
+
+            const outside =
+              dateKey.slice(
+                0,
+                7,
+              )
+              !== visibleMonth.slice(
+                0,
+                7,
+              )
+
+            return (
+              <button
+                key={dateKey}
+                type="button"
+                aria-pressed={selected}
+                onClick={() =>
+                  onSelect(
+                    dateKey,
+                  )
+                }
+                className={`grid aspect-square place-items-center rounded-md text-[10px] transition-colors ${
+                  selected
+                    ? 'bg-[#8c7cff] font-bold text-[#0c0d10]'
+                    : isToday
+                      ? 'border border-[#72d7aa]/70 font-semibold text-[#72d7aa]'
+                      : outside
+                        ? 'text-[#454953] hover:bg-[#202229]'
+                        : 'text-[#c7cad1] hover:bg-[#252833]'
+                }`}
+              >
+                {Number(
+                  dateKey.slice(
+                    8,
+                  ),
+                )}
+              </button>
+            )
+          },
+        )}
+      </div>
+
+      <div className="mt-3 border-t border-[#292c35] pt-3">
+        <button
+          type="button"
+          onClick={() =>
+            onSelect(
+              today,
+            )
+          }
+          className="w-full rounded-md py-2 text-[10px] font-bold text-[#72d7aa] hover:bg-[#20251f]"
+        >
+          Ir para hoje
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function DayColumn({
+  day,
+  selected,
+  onSelect,
+}: {
+  day: WeeklyPlanDay
+  selected: boolean
+  onSelect(): void
+}) {
+  const date =
+    new Date(
+      `${day.dateKey}T12:00:00Z`,
+    )
+
+  const load =
+    day.availableMinutes
+      ? Math.min(
+          100,
+          Math.round(
+            day.scheduledMinutes
+            / day.availableMinutes
+            * 100,
+          ),
+        )
+      : 0
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={`min-w-[150px] rounded-xl border p-3 text-left sm:min-w-0 ${
+        selected
+          ? 'border-[#8c7cff] bg-[#181622]'
+          : day.status === 'today'
+            ? 'border-[#72d7aa]/70 bg-[#14201b]'
+            : 'border-[#242730] bg-[#0d0e12] hover:border-[#3b3f4b]'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <strong className="block text-xs capitalize text-white">
+            {weekday.format(date).replace('.', '')}
+          </strong>
+
+          <span className="text-[10px] text-[#747986]">
+            {shortDate.format(date)}
+            {day.status === 'today' ? ' · hoje' : ''}
+          </span>
+        </div>
+
+        <span className="text-[9px] text-[#9297a3]">
+          {day.scheduledMinutes}/{day.availableMinutes} min
+        </span>
+      </div>
+
+      <div className="mt-3 h-1 overflow-hidden rounded-full bg-[#292c35]">
+        <i
+          className="block h-full rounded-full bg-[#8c7cff]"
+          style={{
+            width:
+              `${load}%`,
+          }}
+        />
+      </div>
+
+      <div className="mt-3 space-y-1.5">
+        {day.items
+          .slice(0, 2)
+          .map(
+            (item) => (
+              <div
+                key={item.id}
+                className="rounded-md bg-[#1b1d24] px-2 py-1.5"
+              >
+                <p className="truncate text-[10px] font-semibold text-[#eceef2]">
+                  {item.workspaceName}
+                </p>
+
+                <p className="truncate text-[9px] text-[#747986]">
+                  {item.title}
+                </p>
+
+                {item.workspaceAvailable === false && (
+                  <p className="mt-1 text-[9px] font-semibold text-[#e8b96d]">
+                    Workspace removido
+                  </p>
+                )}
+              </div>
+            ),
+          )}
+
+        {day.items.length === 0 && (
+          <p className="py-2 text-[10px] text-[#626773]">
+            Sem blocos planejados
+          </p>
+        )}
+
+        {day.items.length > 2 && (
+          <p className="text-[9px] text-[#747986]">
+            + {day.items.length - 2} bloco(s)
+          </p>
+        )}
+      </div>
+    </button>
+  )
+}
+
+function WeekBoard({
+  weeklyPlan,
+  onOpen,
+  onNavigate,
+}: {
+  weeklyPlan: WeeklyPlan | null
+  onOpen(id: string): void
+  onNavigate(dateKey?: string): void
+}) {
+  const initial =
+    weeklyPlan
+      ?.days[0]
+      ?.dateKey
+    ?? ''
+
+  const [
+    selectedDate,
+    setSelectedDate,
+  ] =
+    useState(initial)
+
+  const [
+    calendarOpen,
+    setCalendarOpen,
+  ] =
+    useState(false)
+
+  useEffect(
+    () => {
+      if (
+        weeklyPlan
+        && !weeklyPlan.days.some(
+          (day) =>
+            day.dateKey === selectedDate,
+        )
+      ) {
+        setSelectedDate(
+          initial,
+        )
+      }
+    },
+    [
+      weeklyPlan?.id,
+      weeklyPlan?.revision,
+      initial,
+      selectedDate,
+    ],
+  )
+
+  /*
+   * Se a HOME está no modo padrão ("hoje" à esquerda),
+   * a troca de data local reposiciona automaticamente
+   * a janela. Se o usuário está consultando história,
+   * não arrancamos a navegação dele.
+   */
+  useEffect(
+    () => {
+      if (
+        !weeklyPlan
+        || weeklyPlan
+          .days[0]
+          ?.status !== 'today'
+      ) {
+        return
+      }
+
+      const visibleToday =
+        weeklyPlan
+          .days[0]
+          ?.dateKey
+
+      const timer =
+        window.setInterval(
+          () => {
+            const actualToday =
+              currentDateKey(
+                weeklyPlan.timezone,
+              )
+
+            if (
+              visibleToday
+              && actualToday
+                !== visibleToday
+            ) {
+              onNavigate()
+            }
+          },
+          60_000,
+        )
+
+      return () => {
+        window.clearInterval(
+          timer,
+        )
+      }
+    },
+    [
+      weeklyPlan?.id,
+      weeklyPlan?.weekStart,
+      weeklyPlan?.timezone,
+      onNavigate,
+    ],
+  )
+
+  const selected =
+    weeklyPlan
+      ?.days
+      .find(
+        (day) =>
+          day.dateKey
+            === selectedDate,
+      )
+    ?? weeklyPlan
+      ?.days[0]
+
+  if (!weeklyPlan) {
+    return (
+      <section className="rounded-2xl border border-dashed border-[#30333c] bg-[#111217] p-6">
+        <p className="text-sm font-semibold text-white">
+          Sua semana ainda está sendo preparada.
+        </p>
+
+        <p className="mt-2 text-xs text-[#747986]">
+          Defina disponibilidade e prazos na Visão Acadêmica para formar o plano semanal.
+        </p>
+      </section>
+    )
+  }
+
+  const anchor =
+    weeklyPlan
+      .days[0]
+      ?.dateKey
+    ?? weeklyPlan.weekStart
+
+  const today =
+    currentDateKey(
+      weeklyPlan.timezone,
+    )
+
+  const totalMinutes =
+    weeklyPlan.days.reduce(
+      (
+        sum,
+        day,
+      ) =>
+        sum
+        + day.scheduledMinutes,
+      0,
+    )
+
+  return (
+    <section
+      aria-labelledby="week-heading"
+      className="rounded-2xl border border-[#242730] bg-[#111217] p-4 sm:p-5"
+    >
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#72d7aa]">
+            Fonte de estudo da semana
+          </p>
+
+          <h2
+            id="week-heading"
+            className="mt-1 text-xl font-semibold text-white"
+          >
+            Sua semana, dia por dia
+          </h2>
+
+          <p className="mt-1 text-xs text-[#747986]">
+            Plano salvo · revisão {weeklyPlan.revision}. Selecione um dia para ver cada próximo passo.
+          </p>
+        </div>
+
+        <div className="text-right">
+          <strong className="block text-lg text-white">
+            {totalMinutes} min
+          </strong>
+
+          <span className="text-[10px] text-[#626773]">
+            planejados · {weeklyPlan.timezone}
+          </span>
+        </div>
+      </header>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        {anchor !== today && (
+          <button
+            type="button"
+            onClick={() => {
+              setCalendarOpen(false)
+              onNavigate()
+            }}
+            className="h-9 rounded-lg border border-[#30333c] px-3 text-[10px] font-bold text-[#72d7aa] hover:border-[#72d7aa]/70"
+          >
+            Hoje
+          </button>
+        )}
+
+        <button
+          type="button"
+          aria-label="Ver dia anterior"
+          onClick={() => {
+            setCalendarOpen(false)
+
+            onNavigate(
+              dateKeyOffset(
+                anchor,
+                -1,
+              ),
+            )
+          }}
+          className="grid size-9 place-items-center rounded-lg border border-[#30333c] bg-[#15161c] text-sm text-white hover:border-[#8c7cff]"
+        >
+          ←
+        </button>
+
+        <div className="relative">
+          <button
+            type="button"
+            aria-label="Escolher data no calendário"
+            aria-expanded={calendarOpen}
+            onClick={() =>
+              setCalendarOpen(
+                (current) =>
+                  !current,
+              )
+            }
+            className="flex h-9 min-w-[170px] items-center justify-center gap-2 rounded-lg border border-[#30333c] bg-[#15161c] px-3 text-[10px] font-semibold text-[#c7cad1] hover:border-[#8c7cff]"
+          >
+            <span>
+              {planRangeLabel(anchor)}
+            </span>
+
+            <span
+              aria-hidden="true"
+              className="text-[#626773]"
+            >
+              ▾
+            </span>
+          </button>
+
+          {calendarOpen && (
+            <MonthCalendar
+              anchor={anchor}
+              today={today}
+              onSelect={(dateKey) => {
+                setCalendarOpen(false)
+                onNavigate(dateKey)
+              }}
+            />
+          )}
+        </div>
+
+        <button
+          type="button"
+          aria-label="Ver próximo dia"
+          onClick={() => {
+            setCalendarOpen(false)
+
+            onNavigate(
+              dateKeyOffset(
+                anchor,
+                1,
+              ),
+            )
+          }}
+          className="grid size-9 place-items-center rounded-lg border border-[#30333c] bg-[#15161c] text-sm text-white hover:border-[#8c7cff]"
+        >
+          →
+        </button>
+      </div>
+
+      <div className="coach-horizontal-scroll mt-4 flex gap-2 overflow-x-auto pb-2 sm:grid sm:grid-cols-2 xl:grid-cols-7">
+        {weeklyPlan.days.map(
+          (day) => (
+            <DayColumn
+              key={day.dateKey}
+              day={day}
+              selected={
+                day.dateKey
+                  === selected
+                    ?.dateKey
+              }
+              onSelect={() =>
+                setSelectedDate(
+                  day.dateKey,
+                )
+              }
+            />
+          ),
+        )}
+      </div>
+
+      {selected && (
+        <div className="mt-4 rounded-xl border border-[#2b2e38] bg-[#0c0d11] p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#8c7cff]">
+                {selected.status === 'today'
+                  ? 'Próxima ação de hoje'
+                  : `Plano de ${weekday.format(
+                      new Date(
+                        `${selected.dateKey}T12:00:00Z`,
+                      ),
+                    )}`}
+              </p>
+
+              <p className="mt-1 text-xs text-[#747986]">
+                {selected.items.length} bloco(s) em ordem · {selected.scheduledMinutes} minutos
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-2 lg:grid-cols-2">
+            {selected.items.map(
+              (
+                item,
+                index,
+              ) => {
+                const available =
+                  item.workspaceAvailable
+                    !== false
+
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    disabled={!available}
+                    onClick={() => {
+                      if (available) {
+                        onOpen(
+                          item.workspaceId,
+                        )
+                      }
+                    }}
+                    className={`group flex items-center gap-3 rounded-lg border p-3 text-left ${
+                      available
+                        ? 'border-[#242730] bg-[#15161c] hover:border-[#8c7cff]/60'
+                        : 'cursor-default border-[#302d2a] bg-[#121316] opacity-80'
+                    }`}
+                  >
+                    <span className="grid size-7 shrink-0 place-items-center rounded-full bg-[#252833] text-[10px] font-bold text-white">
+                      {index + 1}
+                    </span>
+
+                    <span className="min-w-0 flex-1">
+                      <strong className="block truncate text-xs text-white">
+                        {item.title}
+                      </strong>
+
+                      <span className="mt-1 block truncate text-[10px] text-[#747986]">
+                        {item.workspaceName} · {item.durationMinutes} min · {item.reason}
+                      </span>
+
+                      {!available && (
+                        <span className="mt-1 block text-[9px] font-semibold text-[#e8b96d]">
+                          Workspace removido · histórico preservado
+                        </span>
+                      )}
+                    </span>
+
+                    {available ? (
+                      <ChevronRight
+                        size={14}
+                        className="shrink-0 text-[#626773] group-hover:text-[#8c7cff]"
+                      />
+                    ) : (
+                      <span className="shrink-0 text-[9px] font-bold uppercase text-[#626773]">
+                        Histórico
+                      </span>
+                    )}
+                  </button>
+                )
+              },
+            )}
+
+            {selected.items.length === 0 && (
+              <p className="text-xs text-[#626773]">
+                Nenhuma atividade autoritativa para este dia. O Organizador pode ajudar a registrar disponibilidade ou prazos.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function OrganizerPanel({ messages, streamedContent, plannerActions, plannerInput, plannerBusy, plannerError, providerLabel, providerConnected, providerUnavailable, conversationRef, followLatest, onPlannerInput, onSubmit, onResolveAction }: { messages: ConversationMessage[]; streamedContent: string; plannerActions: PlannerAction[]; plannerInput: string; plannerBusy: boolean; plannerError: string | null; providerLabel: string; providerConnected: boolean; providerUnavailable: boolean; conversationRef: React.RefObject<HTMLDivElement | null>; followLatest: React.MutableRefObject<boolean>; onPlannerInput(value: string): void; onSubmit(): void; onResolveAction(id: string, decision: 'apply' | 'reject'): void }) {
+  return <aside data-organizer-state={streamedContent ? 'stream' : messages.length ? 'history' : 'zero'} aria-labelledby="organizer-heading" className="flex h-full min-h-0 max-h-[calc(100dvh-12rem)] flex-col overflow-hidden rounded-2xl border border-[#2d3040] bg-[#111217]"><header className="shrink-0 border-b border-[#242730] px-4 py-4"><div className="flex items-center justify-between gap-3"><div><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#8c7cff]">Organizador</p><h2 id="organizer-heading" className="mt-1 text-sm font-semibold text-white">Ajuste contexto e prioridades</h2></div><span className={`flex items-center gap-2 text-[10px] transition-colors duration-300 ease-out ${
+      providerLabel.includes('Conectando...')
+        ? 'font-semibold text-[#82bdd8]'
+        : providerConnected
+          ? 'text-[#72d7aa]'
+          : providerUnavailable
+            ? 'font-semibold text-[#e8b96d]'
+            : 'font-semibold text-[#ef8d93]'
+    }`}><i className={`size-1.5 rounded-full transition-colors duration-300 ease-out ${
+      providerLabel.includes('Conectando...')
+        ? 'animate-pulse bg-[#82bdd8]'
+        : providerConnected
+          ? 'bg-[#72d7aa]'
+          : providerUnavailable
+            ? 'bg-[#e8b96d]'
+            : 'bg-[#ef8d93]'
+    }`} />{providerLabel}</span></div><p className="mt-2 text-[11px] leading-5 text-[#747986]">Converse sobre prazos e disponibilidade. Alterações sensíveis aparecem para sua confirmação.</p></header><div ref={conversationRef} onScroll={() => { const pane = conversationRef.current; if (pane) followLatest.current = isNearChatBottom(pane) }} className="coach-scroll-pane min-h-0 flex-1 space-y-3 px-4 py-4" role="log" aria-live="polite" aria-label="Conversa com o organizador">{messages.map((message) => <ChatMessage key={message.id} message={message} dark />)}{plannerBusy && !streamedContent && <div className="flex gap-1 px-2 py-3" aria-label="Coach está formulando"><span className="coach-typing-dot size-1.5 rounded-full bg-[#8c7cff]" /><span className="coach-typing-dot size-1.5 rounded-full bg-[#8c7cff]" /><span className="coach-typing-dot size-1.5 rounded-full bg-[#8c7cff]" /></div>}{streamedContent && <ChatMessage message={{ role: 'assistant', content: streamedContent }} dark streamed />}{!messages.length && !streamedContent && <div className="rounded-lg border border-dashed border-[#30333c] p-3 text-xs leading-5 text-[#747986]"><Sparkles size={15} className="mb-2 text-[#8c7cff]" />Ex.: “Tenho 45 minutos livres na quinta” ou “A prova de Cálculo é dia 18”.</div>}</div>{plannerActions.length > 0 && <section aria-label="Ações aguardando decisão" className="border-t border-[#242730] bg-[#171820] p-3"><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#e8b96d]">Revise antes de aplicar</p>{plannerActions.map((action) => <article key={action.id} className="mt-2 rounded-lg border border-[#36313f] bg-[#111217] p-3"><strong className="text-xs text-white">{action.label}</strong><p className="mt-1 text-[10px] leading-4 text-[#747986]">Confira os dados desta ação antes de alterar seu plano.</p><div className="mt-2 flex gap-2"><button disabled={plannerBusy} onClick={() => onResolveAction(action.id, 'apply')} className="rounded-md bg-[#8c7cff] px-3 py-1.5 text-[10px] font-bold text-[#0c0d10]">Aplicar</button><button disabled={plannerBusy} onClick={() => onResolveAction(action.id, 'reject')} className="rounded-md border border-[#30333c] px-3 py-1.5 text-[10px] font-bold text-[#9297a3]">Descartar</button></div></article>)}</section>}<ChatComposer id="organizer-message" value={plannerInput} busy={plannerBusy} placeholder="Conte uma mudança de prazo, prioridade ou disponibilidade…" label="Mensagem para o organizador" sendLabel="Enviar ao organizador" accentClass="focus-within:border-[#8c7cff]" onChange={onPlannerInput} onSend={onSubmit} />{plannerError && <p role="alert" className="shrink-0 px-3 pb-3 text-[10px] text-[#e99ca1]">{plannerError}</p>}</aside>
+}
+
+export function HomeScreen({ section, loading, error, report, weeklyPlan, academicLife, workspaces, priorities, messages, streamedContent, plannerActions, plannerInput, plannerBusy, plannerError, providerLabel, providerConnected, providerUnavailable, aiConnection, onSection, onSettings, onCreate, onOpen, onArchive, onRetryProvisioning, onPlanNavigate, onPlannerInput, onPlannerSend, onResolveAction, onRefreshAcademicLife }: { section: HomeSection; loading: boolean; error: string | null; report: GlobalReportOverview | null; schedule: import('../../shared/contracts/planning-contract').StudyScheduleItem[]; weeklyPlan: WeeklyPlan | null; academicOverview: AcademicOverview | null; academicLife: AcademicLifeProjection | null; workspaces: WorkspaceSummary[]; priorities: WorkspacePriority[]; messages: ConversationMessage[]; streamedContent: string; plannerActions: PlannerAction[]; plannerInput: string; plannerBusy: boolean; plannerError: string | null; providerLabel: string; providerConnected: boolean; providerUnavailable: boolean; aiConnection: AIConnectionPageProps; onSection(section: HomeSection): void; onSettings(): void; onCreate(): void; onOpen(id: string): void; onArchive(id: string): void; onRetryProvisioning(id: string): void; onPlanNavigate(dateKey?: string): void; onPlannerInput(value: string): void; onPlannerSend(): void; onResolveAction(id: string, decision: 'apply' | 'reject'): void; onRefreshAcademicLife(affectsPlanning: boolean): void | Promise<void> }) {
   const conversationRef = useRef<HTMLDivElement>(null)
   const followLatest = useRef(true)
   const previousSection = useRef(section)
@@ -72,6 +902,6 @@ export function HomeScreen({ section, loading, error, report, weeklyPlan, academ
   else if (section === 'workspaces') content = <div className="mx-auto w-full max-w-6xl"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#626773]">Biblioteca</p><h1 className="mt-2 text-3xl font-semibold text-white">Seus Workspaces</h1></div><button onClick={onCreate} className="flex items-center gap-2 rounded-lg bg-[#8c7cff] px-4 py-2.5 text-xs font-bold text-[#0c0d10]"><Plus size={15} />Novo Workspace</button></div><div className="mt-8 border-t border-[#292c35]">{workspaces.map((workspace) => <WorkspaceRow key={workspace.id} workspace={workspace} priority={priorities.find((item) => item.workspaceId === workspace.id)} onOpen={onOpen} onArchive={onArchive} onRetry={onRetryProvisioning} />)}</div></div>
   else if (section === 'reports') content = <GlobalReport report={report} onOpen={onOpen} />
   else if (section === 'ai') content = <AIConnectionPage {...aiConnection} />
-  else content = <div className="mx-auto flex h-full min-h-0 w-full max-w-[1420px] flex-col"><header className="flex shrink-0 flex-wrap items-end justify-between gap-4"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#626773]">Planejamento ativo</p><h1 className="mt-2 text-[28px] font-semibold tracking-tight text-white sm:text-[34px]">Sua semana de estudo</h1><p className="mt-2 max-w-2xl text-sm text-[#747986]">Navegue pelo plano salvo, entenda o próximo passo e use o Organizador apenas quando algo mudar.</p></div><button onClick={onCreate} className="flex items-center gap-2 rounded-lg border border-[#343743] bg-[#15161c] px-4 py-2.5 text-xs font-bold text-white hover:border-[#8c7cff]"><Plus size={15} />Novo Workspace</button></header><div className="mt-6 grid min-h-0 flex-1 items-stretch gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(300px,340px)]"><div className="coach-scroll-pane min-h-0 min-w-0 pr-1"><WeekBoard weeklyPlan={weeklyPlan} onOpen={onOpen} />{priorityContext.length > 0 && <section aria-labelledby="attention-heading" className="mt-4 rounded-xl border border-[#242730] bg-[#111217] p-4"><div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#e8b96d]">Contexto de prioridade</p><h2 id="attention-heading" className="mt-1 text-sm font-semibold text-white">O que merece atenção</h2></div><Clock3 size={16} className="text-[#626773]" /></div><div className="mt-3 grid gap-2 md:grid-cols-3">{priorityContext.flatMap((priority) => { const workspace = workspaces.find((item) => item.id === priority.workspaceId); return workspace ? [<button key={priority.workspaceId} onClick={() => onOpen(priority.workspaceId)} className="rounded-lg border border-[#292c35] bg-[#0d0e12] p-3 text-left hover:border-[#e8b96d]/60"><strong className="block truncate text-xs text-white">{workspace.name}</strong><span className="mt-1 line-clamp-2 text-[10px] leading-4 text-[#747986]">{priority.reason}</span><span className="mt-2 block text-[9px] font-bold uppercase text-[#e8b96d]">{priority.level === 'urgent' ? 'Urgente' : 'Atenção'} · abrir contexto</span></button>] : [] })}</div></section>}</div><OrganizerPanel messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerBusy} plannerError={plannerError} providerLabel={providerLabel} providerConnected={providerConnected} conversationRef={conversationRef} followLatest={followLatest} onPlannerInput={onPlannerInput} onSubmit={submit} onResolveAction={onResolveAction} /></div></div>
+  else content = <div className="mx-auto flex h-full min-h-0 w-full max-w-[1420px] flex-col"><header className="flex shrink-0 flex-wrap items-end justify-between gap-4"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#626773]">Planejamento ativo</p><h1 className="mt-2 text-[28px] font-semibold tracking-tight text-white sm:text-[34px]">Sua semana de estudo</h1><p className="mt-2 max-w-2xl text-sm text-[#747986]">Navegue pelo plano salvo, entenda o próximo passo e use o Organizador apenas quando algo mudar.</p></div><button onClick={onCreate} className="flex items-center gap-2 rounded-lg border border-[#343743] bg-[#15161c] px-4 py-2.5 text-xs font-bold text-white hover:border-[#8c7cff]"><Plus size={15} />Novo Workspace</button></header><div className="mt-6 grid min-h-0 flex-1 items-stretch gap-5 2xl:grid-cols-[minmax(0,1fr)_minmax(300px,340px)]"><div className="coach-scroll-pane min-h-0 min-w-0 pr-1"><WeekBoard weeklyPlan={weeklyPlan} onOpen={onOpen} onNavigate={onPlanNavigate} />{priorityContext.length > 0 && <section aria-labelledby="attention-heading" className="mt-4 rounded-xl border border-[#242730] bg-[#111217] p-4"><div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#e8b96d]">Contexto de prioridade</p><h2 id="attention-heading" className="mt-1 text-sm font-semibold text-white">O que merece atenção</h2></div><Clock3 size={16} className="text-[#626773]" /></div><div className="mt-3 grid gap-2 md:grid-cols-3">{priorityContext.flatMap((priority) => { const workspace = workspaces.find((item) => item.id === priority.workspaceId); return workspace ? [<button key={priority.workspaceId} onClick={() => onOpen(priority.workspaceId)} className="rounded-lg border border-[#292c35] bg-[#0d0e12] p-3 text-left hover:border-[#e8b96d]/60"><strong className="block truncate text-xs text-white">{workspace.name}</strong><span className="mt-1 line-clamp-2 text-[10px] leading-4 text-[#747986]">{priority.reason}</span><span className="mt-2 block text-[9px] font-bold uppercase text-[#e8b96d]">{priority.level === 'urgent' ? 'Urgente' : 'Atenção'} · abrir contexto</span></button>] : [] })}</div></section>}</div><OrganizerPanel messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerBusy} plannerError={plannerError} providerLabel={providerLabel} providerConnected={providerConnected} providerUnavailable={providerUnavailable} conversationRef={conversationRef} followLatest={followLatest} onPlannerInput={onPlannerInput} onSubmit={submit} onResolveAction={onResolveAction} /></div></div>
   return <main className="coach-app-shell flex bg-[#090a0d] text-[#f4f5f7]"><Rail active={section} onSection={onSection} onSettings={onSettings} /><div className="coach-scroll-pane min-h-0 min-w-0 flex-1 p-4 sm:p-6 lg:p-8">{error ? <div className="coach-enter mx-auto mt-12 max-w-xl rounded-lg border border-[#55353a] bg-[#211417] p-5 text-sm text-[#e99ca1]">{error}</div> : <div key={section} className="coach-enter min-h-full">{loading && <div className="mb-3 text-[10px] text-[#626773]">Sincronizando dados…</div>}{content}</div>}</div></main>
 }

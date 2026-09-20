@@ -3,7 +3,12 @@ import { BookOpen, CalendarDays, MoreHorizontal, Plus, Send, Sparkles, X } from 
 import type { ApplicationInfo } from '../../shared/contracts/application-contract'
 import type { CreateWorkspaceInput, Workspace, WorkspaceSummary } from '../../shared/contracts/workspace-contract'
 import type { ConversationMessage } from '../../shared/contracts/conversation-contract'
-import type { ProviderAccountSummary, ProviderStatus } from '../../shared/contracts/provider-contract'
+import type {
+  ProviderAccountHealthSnapshot,
+  ProviderAccountSummary,
+  ProviderRuntimeIssue,
+  ProviderStatus,
+} from '../../shared/contracts/provider-contract'
 import type { DailyStudyReport, StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
 import type { GlobalReportOverview } from '../../shared/contracts/report-contract'
 import type { LearningPathState, Roadmap, RoadmapModule, RoadmapRebuildPreview } from '../../shared/contracts/roadmap-contract'
@@ -160,6 +165,322 @@ function WorkspaceCreationScreen({ open, submitting, initial, onClose, onSubmit 
   )
 }
 
+type AIAvailabilityProblem =
+  | ProviderRuntimeIssue
+  | 'no-ai'
+
+type ProviderLastActivity = {
+  readonly outcome:
+    | 'success'
+    | 'failure'
+
+  readonly at: number
+  readonly code: string | null
+  readonly detail: string
+  readonly model: string
+}
+
+
+const PROVIDER_LAST_ACTIVITY_STORAGE_KEY =
+  'coach.provider-last-activity.v1'
+
+
+function providerActivityDetailFromStreamCode(
+  code: string,
+): string {
+  switch (code) {
+    case 'INSUFFICIENT_QUOTA':
+      return 'O provedor informou que o limite de uso ou a cota disponível foi atingido.'
+
+    case 'MODEL_UNAVAILABLE':
+      return 'O serviço continua configurado, mas o modelo usado nesta tentativa não estava disponível.'
+
+    case 'INVALID_CREDENTIAL':
+      return 'A credencial desta IA foi recusada pelo serviço.'
+
+    case 'ACCESS_RESTRICTED':
+      return 'O serviço recusou o acesso desta conta, modelo ou região.'
+
+    case 'RATE_LIMITED':
+      return 'O serviço recebeu a solicitação, mas aplicou um limite temporário de requisições.'
+
+    case 'NETWORK_UNAVAILABLE':
+      return 'A solicitação não conseguiu manter comunicação com o serviço de IA.'
+
+    case 'REQUEST_TIMEOUT':
+      return 'A IA demorou mais do que o limite permitido para concluir esta solicitação.'
+
+    case 'PROVIDER_UNAVAILABLE':
+      return 'O Coach não conseguiu concluir uma resposta funcional nesta tentativa. A conexão com o serviço pode continuar ativa.'
+
+    case 'REQUEST_FAILED':
+      return 'A solicitação chegou ao fluxo da IA, mas não foi concluída com uma resposta utilizável.'
+
+    default:
+      return 'A última solicitação não pôde ser concluída.'
+  }
+}
+
+
+function readProviderLastActivities():
+  Record<string, ProviderLastActivity> {
+  try {
+    const raw =
+      window.localStorage.getItem(
+        PROVIDER_LAST_ACTIVITY_STORAGE_KEY,
+      )
+
+    if (!raw) {
+      return {}
+    }
+
+    const parsed: unknown =
+      JSON.parse(raw)
+
+    if (
+      !parsed
+      || typeof parsed !== 'object'
+      || Array.isArray(parsed)
+    ) {
+      return {}
+    }
+
+    const result:
+      Record<string, ProviderLastActivity> = {}
+
+    for (
+      const [accountId, value]
+      of Object.entries(parsed)
+    ) {
+      if (
+        !value
+        || typeof value !== 'object'
+        || Array.isArray(value)
+      ) {
+        continue
+      }
+
+      const candidate =
+        value as Partial<ProviderLastActivity>
+
+      if (
+        (
+          candidate.outcome !== 'success'
+          && candidate.outcome !== 'failure'
+        )
+        || typeof candidate.at !== 'number'
+        || !Number.isFinite(candidate.at)
+        || (
+          candidate.code !== null
+          && candidate.code !== undefined
+          && typeof candidate.code !== 'string'
+        )
+        || typeof candidate.detail !== 'string'
+        || typeof candidate.model !== 'string'
+      ) {
+        continue
+      }
+
+      result[accountId] = {
+        outcome:
+          candidate.outcome,
+
+        at:
+          candidate.at,
+
+        code:
+          candidate.code ?? null,
+
+        detail:
+          candidate.detail,
+
+        model:
+          candidate.model,
+      }
+    }
+
+    return result
+  } catch {
+    return {}
+  }
+}
+
+
+function saveProviderLastActivities(
+  activities:
+    Record<string, ProviderLastActivity>,
+): void {
+  try {
+    window.localStorage.setItem(
+      PROVIDER_LAST_ACTIVITY_STORAGE_KEY,
+      JSON.stringify(activities),
+    )
+  } catch {
+    /*
+     * Diagnóstico não contém credenciais.
+     * Falha de persistência não pode impedir
+     * o uso normal do Coach.
+     */
+  }
+}
+
+
+function providerRuntimeIssueFromStreamCode(
+  code: string,
+): ProviderRuntimeIssue | null {
+  switch (code) {
+    case 'INSUFFICIENT_QUOTA':
+      return 'usage-limit'
+
+    case 'MODEL_UNAVAILABLE':
+      return 'model-unavailable'
+
+    case 'INVALID_CREDENTIAL':
+    case 'ACCESS_RESTRICTED':
+      return 'reauth-required'
+
+    case 'RATE_LIMITED':
+    case 'NETWORK_UNAVAILABLE':
+    case 'REQUEST_TIMEOUT':
+    case 'PROVIDER_UNAVAILABLE':
+      return 'temporarily-unavailable'
+
+    /*
+     * REQUEST_FAILED significa que uma execução
+     * específica não produziu resposta utilizável.
+     *
+     * A conexão do provider continua válida.
+     */
+    case 'REQUEST_FAILED':
+      return null
+
+    default:
+      return null
+  }
+}
+
+
+function aiProblemCopy(
+  problem: AIAvailabilityProblem,
+) {
+  switch (problem) {
+    case 'no-ai':
+      return {
+        title: 'Nenhuma IA disponível',
+        message:
+          'Nenhuma IA está selecionada para responder.',
+      }
+
+    case 'usage-limit':
+      return {
+        title: 'Esta IA não pode responder agora',
+        message:
+          'O limite de uso desta IA foi atingido. Escolha outro modelo ou outra IA.',
+      }
+
+    case 'model-unavailable':
+      return {
+        title: 'Modelo indisponível',
+        message:
+          'O modelo selecionado não está disponível. Escolha outro modelo.',
+      }
+
+    case 'temporarily-unavailable':
+      return {
+        title: 'IA temporariamente indisponível',
+        message:
+          'Esta IA não conseguiu responder neste momento. Tente novamente em alguns instantes.',
+      }
+
+    case 'reauth-required':
+      return {
+        title: 'Reconecte esta conta',
+        message:
+          'Esta conta precisa ser reconectada antes de continuar.',
+      }
+
+    case 'available':
+      return {
+        title: 'IA disponível',
+        message:
+          'Esta IA está respondendo normalmente.',
+      }
+  }
+}
+
+
+function AIProblemDialog({
+  problem,
+  detail,
+  onManage,
+  onClose,
+}: {
+  problem: AIAvailabilityProblem
+  detail?: string | null
+  onManage(): void
+  onClose(): void
+}) {
+  const copy =
+    aiProblemCopy(problem)
+
+  return (
+    <div
+      className="fixed inset-0 z-[150] grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="ai-problem-title"
+    >
+      <section className="w-full max-w-md rounded-2xl border border-[#39313b] bg-[#121318] p-6 shadow-2xl">
+        <div className="mx-auto grid size-11 place-items-center rounded-full bg-[#3a2024] font-bold text-[#ef8d93]">
+          !
+        </div>
+
+        <h2
+          id="ai-problem-title"
+          className="mt-4 text-center text-xl font-semibold text-white"
+        >
+          {copy.title}
+        </h2>
+
+        <p className="mt-3 text-center text-sm leading-6 text-[#9297a3]">
+          {copy.message}
+        </p>
+
+        {detail && (
+          <div className="mt-4 rounded-xl border border-[#3f3525] bg-[#1b1812] px-4 py-3 text-left">
+            <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[#e8b96d]">
+              Última tentativa
+            </span>
+
+            <p className="mt-1 text-xs leading-5 text-[#b7bbc5]">
+              {detail}
+            </p>
+          </div>
+        )}
+
+        <div className="mt-6 flex justify-center gap-3">
+          <button
+            type="button"
+            onClick={onManage}
+            className="rounded-xl bg-[#8c7cff] px-4 py-2.5 text-xs font-bold text-[#0c0d10]"
+          >
+            Ir para Suas IAs
+          </button>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-[#343743] px-4 py-2.5 text-xs font-semibold text-white"
+          >
+            OK
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+
 export function App() {
   const [applicationInfo, setApplicationInfo] = useState<ApplicationInfo | null>(null)
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([])
@@ -181,6 +502,199 @@ export function App() {
   const [plannerError, setPlannerError] = useState<string | null>(null)
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null)
   const [providerAccounts, setProviderAccounts] = useState<ProviderAccountSummary[]>([])
+
+  const [
+    providerRuntimeIssues,
+    setProviderRuntimeIssues,
+  ] = useState<
+    Record<string, ProviderRuntimeIssue>
+  >({})
+
+  const [
+    providerHealthSnapshots,
+    setProviderHealthSnapshots,
+  ] = useState<
+    Record<
+      string,
+      ProviderAccountHealthSnapshot
+    >
+  >({})
+
+  const providerHealthRefreshing =
+    useRef(false)
+
+  const refreshProviderHealth =
+    useCallback(
+      async (): Promise<void> => {
+        if (
+          providerHealthRefreshing.current
+        ) {
+          return
+        }
+
+        providerHealthRefreshing.current =
+          true
+
+        try {
+          const snapshots =
+            await window.coach.provider
+              .refreshHealth()
+
+          const next =
+            Object.fromEntries(
+              snapshots.map(
+                (snapshot) => [
+                  snapshot.accountId,
+                  snapshot,
+                ],
+              ),
+            ) as Record<
+              string,
+              ProviderAccountHealthSnapshot
+            >
+
+          setProviderHealthSnapshots(
+            next,
+          )
+
+          /*
+           * Falhas de conectividade/autenticação/modelo
+           * detectadas pelo health devem aparecer sem
+           * exigir uma tentativa de geração.
+           *
+           * usage-limit é mantido até uma geração real
+           * provar que a cota voltou.
+           */
+          setProviderRuntimeIssues(
+            (current) => {
+              const updated = {
+                ...current,
+              }
+
+              let changed = false
+
+              for (
+                const snapshot
+                of snapshots
+              ) {
+                if (
+                  snapshot.runtimeIssue
+                ) {
+                  if (
+                    updated[
+                      snapshot.accountId
+                    ]
+                    !== snapshot.runtimeIssue
+                  ) {
+                    updated[
+                      snapshot.accountId
+                    ] =
+                      snapshot.runtimeIssue
+
+                    changed = true
+                  }
+
+                  continue
+                }
+
+                /*
+                 * Snapshot de catálogo não apaga falha
+                 * funcional. Somente heartbeat ou uso real
+                 * bem-sucedido pode voltar para available.
+                 */
+              }
+
+              return changed
+                ? updated
+                : current
+            },
+          )
+
+          /*
+           * ProviderStatus representa a IA ativa.
+           * Atualizamos apenas a conectividade usando
+           * o snapshot correspondente.
+           */
+          setProviderStatus(
+            (current) => {
+              if (
+                !current
+                || !current.activeAccountId
+              ) {
+                return current
+              }
+
+              const activeHealth =
+                next[
+                  current.activeAccountId
+                ]
+
+              if (!activeHealth) {
+                return current
+              }
+
+              return {
+                ...current,
+
+                connected:
+                  activeHealth
+                    .connectionState
+                  === 'connected',
+
+                connectionState:
+                  activeHealth
+                    .connectionState,
+              }
+            },
+          )
+        } finally {
+          providerHealthRefreshing.current =
+            false
+        }
+      },
+      [],
+    )
+
+  const [
+    providerConnectingAccountId,
+    setProviderConnectingAccountId,
+  ] = useState<string | null>(null)
+
+
+  /*
+   * Guarda a configuração ativa que já recebeu
+   * a verificação funcional automática desta sessão.
+   *
+   * Não é um heartbeat: cada configuração é verificada
+   * apenas quando precisa ser conhecida.
+   */
+  const providerStartupFunctionalCheckKey =
+    useRef<string | null>(null)
+
+
+
+  const [
+    providerLastActivities,
+    setProviderLastActivities,
+  ] = useState<
+    Record<string, ProviderLastActivity>
+  >(
+    () =>
+      readProviderLastActivities(),
+  )
+
+
+  const [
+    aiProblem,
+    setAIProblem,
+  ] = useState<
+    AIAvailabilityProblem | null
+  >(null)
+
+  const [
+    aiManageRequest,
+    setAIManageRequest,
+  ] = useState(0)
   const [workspaceMessages, setWorkspaceMessages] = useState<ConversationMessage[]>([])
   const [workspaceInput, setWorkspaceInput] = useState('')
   const [workspaceLoading, setWorkspaceLoading] = useState(false)
@@ -256,7 +770,7 @@ export function App() {
   const notesRevision = useRef(0)
 
   const refreshDependentProjections = useCallback(async () => {
-    const snapshot = await refreshAcademicProjections({ replanWeek: () => window.coach.planning.replanWeek(), listWorkspaces: () => window.coach.workspace.list(), listPriorities: () => window.coach.planning.listPriorities(), getSchedule: () => window.coach.planning.getSchedule(), getAcademicOverview: () => window.coach.planning.getAcademicOverview(), getAcademicLife: () => window.coach.academicLife.getProjection(), getReports: () => window.coach.report.getGlobalOverview() })
+    const snapshot = await refreshAcademicProjections({ replanWeek: async () => { await window.coach.planning.replanWeek(); return window.coach.planning.getWeeklyPlan() }, listWorkspaces: () => window.coach.workspace.list(), listPriorities: () => window.coach.planning.listPriorities(), getSchedule: () => window.coach.planning.getSchedule(), getAcademicOverview: () => window.coach.planning.getAcademicOverview(), getAcademicLife: () => window.coach.academicLife.getProjection(), getReports: () => window.coach.report.getGlobalOverview() })
     setWorkspaces(snapshot.workspaces); setPriorities(snapshot.priorities); setSchedule(snapshot.schedule); setWeeklyPlan(snapshot.weeklyPlan); setAcademicOverview(snapshot.academicOverview); setAcademicLife(snapshot.academicLife); setGlobalReport(snapshot.reports)
     return snapshot
   }, [])
@@ -288,52 +802,139 @@ export function App() {
   }, [loadWorkspaces])
 
   useEffect(() => {
+    const shouldMonitorProvider =
+      homeSection === 'home'
+      || homeSection === 'ai'
+      || Boolean(selected)
+
+    if (!shouldMonitorProvider) {
+      return
+    }
+
     let disposed = false
     let checking = false
 
-    const refreshProviderHealth =
+    const probeActiveProvider =
       async () => {
-        if (checking)
+        if (
+          checking
+          || document.hidden
+        ) {
           return
+        }
 
         checking = true
 
         try {
+          /*
+           * getStatus() verifica somente a IA ativa.
+           *
+           * Para OmniRoute, checkAvailability() usa
+           * /v1/models/<modelo> e não gera conteúdo.
+           */
           const status =
             await window.coach.provider
               .getStatus()
 
-          if (!disposed) {
-            setProviderStatus(
-              status,
-            )
+          if (disposed) {
+            return
           }
-        } catch {
+
+          setProviderStatus(status)
+
           /*
-           * Falha isolada no IPC não deve poluir o Planner.
-           * A próxima verificação tenta novamente.
+           * getStatus() é a verificação barata:
+           * não pede uma resposta ao modelo.
+           *
+           * Quando termina, saímos de "Conectando...".
+           * Isso significa apenas "Conectado".
+           * "Funcionando" exige uma utilização real.
            */
+          /*
+           * O probe barato atualiza somente conectividade.
+           *
+           * Se existe uma troca explícita em andamento,
+           * "Conectando..." será encerrado pela verificação
+           * funcional one-shot daquela troca.
+           */
+          /*
+           * IMPORTANTE:
+           *
+           * Um probe HTTP bem-sucedido prova somente
+           * conectividade/autenticação e, no OmniRoute,
+           * presença do modelo no catálogo.
+           *
+           * Ele NÃO pode apagar um runtimeIssue gerado
+           * por uma tentativa real do Coach.
+           *
+           * A falha funcional só volta para verde depois
+           * que uma chamada real completar com sucesso.
+           */
+        } catch {
+          if (disposed) {
+            return
+          }
+
+          /*
+           * Falha no probe da IA ativa:
+           * Home e Workspace mudam imediatamente
+           * para o estado indisponível.
+           */
+          setProviderStatus(
+            (current) =>
+              current
+                ? {
+                    ...current,
+                    connected: false,
+                    connectionState:
+                      'unreachable',
+                  }
+                : current,
+          )
         } finally {
           checking = false
         }
       }
 
+    void probeActiveProvider()
+
     const timer =
       window.setInterval(
         () => {
-          void refreshProviderHealth()
+          void probeActiveProvider()
         },
         5_000,
       )
 
+    const handleVisibilityChange =
+      () => {
+        if (!document.hidden) {
+          void probeActiveProvider()
+        }
+      }
+
+    document.addEventListener(
+      'visibilitychange',
+      handleVisibilityChange,
+    )
+
     return () => {
       disposed = true
 
-      window.clearInterval(
-        timer,
+      window.clearInterval(timer)
+
+      document.removeEventListener(
+        'visibilitychange',
+        handleVisibilityChange,
       )
     }
-  }, [])
+  }, [
+    homeSection,
+    selected?.id,
+    providerStatus?.activeAccountId,
+    providerStatus?.model,
+  ])
+
 
   useEffect(() => { if (!workspaces.some((workspace) => workspace.provisioning && workspace.provisioning.status !== 'ready')) return; const timer = window.setInterval(() => void loadWorkspaces(), 1500); return () => window.clearInterval(timer) }, [workspaces, loadWorkspaces])
 
@@ -508,9 +1109,674 @@ export function App() {
     if (pane && workspaceFollowLatest.current) scrollChatToLatest(pane)
   }, [workspaceMessages, workspaceStreamedContent])
 
+  function activeProviderAccountId():
+    string | null {
+    /*
+     * providerAccounts é atualizado de forma otimista
+     * quando o usuário troca de IA.
+     *
+     * Portanto, isActive representa imediatamente a IA que
+     * a interface considera atual.
+     *
+     * providerStatus fica como fallback para inicialização
+     * ou enquanto a lista ainda não terminou de carregar.
+     */
+    return (
+      providerAccounts.find(
+        (account) =>
+          account.isActive,
+      )?.id
+      ?? providerStatus?.activeAccountId
+      ?? null
+    )
+  }
+
+
+  function activeProviderAccount():
+    ProviderAccountSummary | null {
+    const accountId =
+      activeProviderAccountId()
+
+    if (!accountId) {
+      return null
+    }
+
+    return (
+      providerAccounts.find(
+        (account) =>
+          account.id === accountId,
+      )
+      ?? null
+    )
+  }
+
+
+  function activeProviderRuntimeIssue():
+    ProviderRuntimeIssue | undefined {
+    const accountId =
+      activeProviderAccountId()
+
+    if (!accountId) {
+      return undefined
+    }
+
+    return providerRuntimeIssues[
+      accountId
+    ]
+  }
+
+
+  function activeProviderConnecting():
+    boolean {
+    const account =
+      activeProviderAccount()
+
+    if (
+      !account
+      || !account.model.trim()
+    ) {
+      return false
+    }
+
+    if (
+      providerConnectingAccountId
+      === account.id
+    ) {
+      return true
+    }
+
+    /*
+     * Se já sabemos que o endpoint está inacessível,
+     * não estamos conectando: estamos sem conexão.
+     */
+    if (
+      providerStatus?.connectionState
+      === 'unreachable'
+    ) {
+      return false
+    }
+
+    /*
+     * O probe barato pode confirmar que o gateway,
+     * autenticação e catálogo estão acessíveis.
+     *
+     * Isso sozinho NÃO encerra "Conectando...".
+     * A seleção atual continua nesse estado até existir
+     * um resultado funcional ou um problema conhecido.
+     */
+    const runtimeIssue =
+      activeProviderRuntimeIssue()
+
+    const healthIssue =
+      providerHealthSnapshots[
+        account.id
+      ]?.runtimeIssue
+
+    /*
+     * Ainda não existe resultado suficiente
+     * da verificação de conexão atual.
+     */
+    return (
+      runtimeIssue === undefined
+      && healthIssue == null
+    )
+  }
+
+
+  async function verifyActiveProviderOnce(
+    accountId: string,
+  ): Promise<void> {
+    /*
+     * Uma troca de IA/modelo executa UMA geração funcional.
+     *
+     * Não existe repetição automática.
+     * O pequeno tempo mínimo também garante que o usuário
+     * consiga perceber visualmente "Conectando...".
+     */
+    const startedAt =
+      performance.now()
+
+    try {
+      const snapshot =
+        await window.coach.provider
+          .checkActiveFunctionalHealth()
+
+      if (
+        !snapshot
+        || snapshot.accountId
+          !== accountId
+      ) {
+        setProviderRuntimeIssues(
+          (current) => ({
+            ...current,
+
+            [accountId]:
+              'temporarily-unavailable',
+          }),
+        )
+
+        return
+      }
+
+      const runtimeIssue:
+        ProviderRuntimeIssue =
+          snapshot.runtimeIssue
+          ?? 'temporarily-unavailable'
+
+      const functionalSnapshot:
+        ProviderAccountHealthSnapshot = {
+          ...snapshot,
+
+          runtimeIssue,
+        }
+
+      setProviderHealthSnapshots(
+        (current) => ({
+          ...current,
+
+          [accountId]:
+            functionalSnapshot,
+        }),
+      )
+
+      setProviderRuntimeIssues(
+        (current) => ({
+          ...current,
+
+          [accountId]:
+            runtimeIssue,
+        }),
+      )
+
+      setProviderStatus(
+        (current) => {
+          if (
+            !current
+            || current.activeAccountId
+              !== accountId
+          ) {
+            return current
+          }
+
+          return {
+            ...current,
+
+            connected:
+              functionalSnapshot
+                .connectionState
+                === 'connected',
+
+            connectionState:
+              functionalSnapshot
+                .connectionState,
+
+            quota:
+              runtimeIssue
+                === 'usage-limit'
+                ? 'exhausted'
+                : runtimeIssue
+                    === 'available'
+                  ? 'available'
+                  : 'unknown',
+          }
+        },
+      )
+    } catch {
+      /*
+       * Falha do próprio check também é um problema
+       * funcional. Não inventamos que o gateway caiu.
+       */
+      setProviderRuntimeIssues(
+        (current) => ({
+          ...current,
+
+          [accountId]:
+            'temporarily-unavailable',
+        }),
+      )
+    } finally {
+      const elapsed =
+        performance.now()
+        - startedAt
+
+      const remaining =
+        Math.max(
+          0,
+          700 - elapsed,
+        )
+
+      if (remaining > 0) {
+        await new Promise<void>(
+          (resolve) =>
+            window.setTimeout(
+              resolve,
+              remaining,
+            ),
+        )
+      }
+
+      setProviderConnectingAccountId(
+        (current) =>
+          current === accountId
+            ? null
+            : current,
+      )
+    }
+  }
+
+
+  useEffect(() => {
+    /*
+     * Ao abrir o Coach, a IA que já estava selecionada
+     * também precisa ser validada funcionalmente.
+     *
+     * Sem isso, um modelo quebrado poderia aparecer como
+     * "Conectado" somente porque o gateway responde.
+     */
+    const account =
+      providerAccounts.find(
+        (item) =>
+          item.isActive,
+      )
+      ?? (
+        providerStatus?.activeAccountId
+          ? providerAccounts.find(
+              (item) =>
+                item.id
+                === providerStatus.activeAccountId,
+            )
+          : undefined
+      )
+
+    if (
+      !account
+      || !account.isEnabled
+      || !account.model.trim()
+    ) {
+      return
+    }
+
+    /*
+     * Esperamos renderer e backend concordarem sobre
+     * qual conta/modelo estão ativos.
+     */
+    if (
+      providerStatus?.activeAccountId
+        !== account.id
+      || providerStatus.model
+        !== account.model
+    ) {
+      return
+    }
+
+    const verificationKey =
+      [
+        account.id,
+        account.model,
+        account.reasoningEffort
+          ?? 'auto',
+      ].join('::')
+
+    /*
+     * onSelect/onUpdate já controlam suas próprias
+     * verificações. Não competimos com uma troca
+     * explicitamente em andamento.
+     */
+    if (
+      providerConnectingAccountId
+        === account.id
+    ) {
+      return
+    }
+
+    const runtimeIssue =
+      providerRuntimeIssues[
+        account.id
+      ]
+
+    const healthIssue =
+      providerHealthSnapshots[
+        account.id
+      ]?.runtimeIssue
+
+    /*
+     * Se já existe um resultado funcional conhecido
+     * nesta sessão, não gastamos outra chamada.
+     */
+    if (
+      runtimeIssue !== undefined
+      || healthIssue != null
+    ) {
+      providerStartupFunctionalCheckKey.current =
+        verificationKey
+
+      return
+    }
+
+    if (
+      providerStartupFunctionalCheckKey.current
+        === verificationKey
+    ) {
+      return
+    }
+
+    providerStartupFunctionalCheckKey.current =
+      verificationKey
+
+    setProviderConnectingAccountId(
+      account.id,
+    )
+
+    /*
+     * UMA verificação.
+     *
+     * verifyActiveProviderOnce encerra o estado
+     * Conectando e grava available/problema.
+     */
+    void verifyActiveProviderOnce(
+      account.id,
+    )
+  }, [
+    providerAccounts,
+    providerStatus?.activeAccountId,
+    providerStatus?.model,
+    providerConnectingAccountId,
+    providerRuntimeIssues,
+    providerHealthSnapshots,
+  ])
+
+
+  function activeProviderUnavailable():
+    boolean {
+    const account =
+      activeProviderAccount()
+
+    if (!account) {
+      return false
+    }
+
+    if (activeProviderConnecting()) {
+      return false
+    }
+
+    const issue =
+      activeProviderRuntimeIssue()
+
+    /*
+     * "available" é confirmação de uma chamada
+     * real bem-sucedida.
+     *
+     * Qualquer outro runtime issue deixa a Home
+     * imediatamente em amarelo.
+     */
+    if (
+      issue
+      && issue !== 'available'
+    ) {
+      /*
+       * A conexão do gateway pode continuar viva,
+       * mas qualquer falha funcional conhecida da
+       * IA atual precisa aparecer como problema.
+       */
+      return true
+    }
+
+    if (
+      providerStatus?.connected
+      !== true
+    ) {
+      return true
+    }
+
+    if (!account.model.trim()) {
+      return true
+    }
+
+    return false
+  }
+
+
+  function activeProviderConnected():
+    boolean {
+    const account =
+      activeProviderAccount()
+
+    return Boolean(
+      account
+      && account.model.trim()
+      && providerStatus?.connected
+        === true
+      && !activeProviderConnecting()
+      && !activeProviderUnavailable(),
+    )
+  }
+
+
+  function activeProviderLabel():
+    string {
+    const account =
+      activeProviderAccount()
+
+    if (!account) {
+      return 'IA DESCONECTADA'
+    }
+
+    if (!account.model.trim()) {
+      return account.providerId
+        === 'omniroute'
+        ? 'OmniRoute sem modelo'
+        : `${account.label} sem modelo`
+    }
+
+    if (activeProviderConnecting()) {
+      return `${account.label} · Conectando...`
+    }
+
+    if (activeProviderUnavailable()) {
+      const issue =
+        activeProviderRuntimeIssue()
+
+      if (
+        issue === 'model-unavailable'
+      ) {
+        return `${account.label} · modelo indisponível`
+      }
+
+      if (
+        issue
+          === 'temporarily-unavailable'
+      ) {
+        return `${account.label} · indisponível agora`
+      }
+
+      if (
+        issue === 'reauth-required'
+      ) {
+        return `${account.label} · reconectar`
+      }
+
+      if (
+        issue === 'usage-limit'
+      ) {
+        return `${account.label} · limite de uso`
+      }
+
+      return `${account.label} · não conectada`
+    }
+
+    return account.label
+  }
+
+
+  function recordActiveProviderActivity(
+    outcome:
+      | 'success'
+      | 'failure',
+
+    code: string | null = null,
+  ): void {
+    const account =
+      activeProviderAccount()
+
+    if (!account) {
+      return
+    }
+
+    const activity:
+      ProviderLastActivity = {
+        outcome,
+
+        at:
+          Date.now(),
+
+        code:
+          outcome === 'success'
+            ? 'OK'
+            : code,
+
+        detail:
+          outcome === 'success'
+            ? 'A última solicitação real foi concluída normalmente.'
+            : providerActivityDetailFromStreamCode(
+                code ?? 'UNKNOWN',
+              ),
+
+        model:
+          account.model,
+      }
+
+    setProviderLastActivities(
+      (current) => {
+        const next = {
+          ...current,
+
+          [account.id]:
+            activity,
+        }
+
+        saveProviderLastActivities(
+          next,
+        )
+
+        return next
+      },
+    )
+  }
+
+
+  function activeProviderLastActivity():
+    ProviderLastActivity | null {
+    const accountId =
+      activeProviderAccountId()
+
+    if (!accountId) {
+      return null
+    }
+
+    return (
+      providerLastActivities[
+        accountId
+      ]
+      ?? null
+    )
+  }
+
+
+  function markActiveProviderRuntime(
+    state: ProviderRuntimeIssue,
+  ): void {
+    const accountId =
+      activeProviderAccountId()
+
+    if (!accountId) {
+      return
+    }
+
+    setProviderRuntimeIssues(
+      (current) => ({
+        ...current,
+        [accountId]:
+          state,
+      }),
+    )
+  }
+
+
+  function currentAIProblem():
+    AIAvailabilityProblem | null {
+    const accountId =
+      activeProviderAccountId()
+
+    if (
+      !providerStatus?.configured
+      || !accountId
+    ) {
+      return 'no-ai'
+    }
+
+    if (
+      providerStatus.quota
+      === 'exhausted'
+    ) {
+      return 'usage-limit'
+    }
+
+    if (
+      providerStatus.connectionState
+      === 'unreachable'
+    ) {
+      return 'temporarily-unavailable'
+    }
+
+    return null
+  }
+
+
+  function openAIManagement(): void {
+    const navigate = () => {
+      streamHandle.current?.cancel()
+      streamHandle.current?.dispose()
+      streamHandle.current = null
+
+      setPlannerSending(false)
+      setStreamedContent('')
+      setAIProblem(null)
+
+      workspaceOpenEpoch.current += 1
+      stopWorkspaceStream()
+
+      setSelected(null)
+      setHomeSection('ai')
+
+      setAIManageRequest(
+        (current) =>
+          current + 1,
+      )
+    }
+
+    if (activeExerciseContext) {
+      void activeExerciseContext
+        .flushDraft()
+        .catch(() => {})
+        .finally(navigate)
+
+      return
+    }
+
+    navigate()
+  }
+
   async function sendPlannerMessage() {
     const content = plannerInput.trim()
     if (!content || plannerSending || plannerLoading) return
+
+    const problem =
+      currentAIProblem()
+
+    if (problem) {
+      setAIProblem(problem)
+      return
+    }
     const requestId = crypto.randomUUID()
     const epoch = ++homeRequestEpoch.current
     setPlannerSending(true); setPlannerInput(''); setPlannerError(null); setStreamedContent('')
@@ -520,15 +1786,62 @@ export function App() {
       if (homeRequestEpoch.current !== epoch) return
       if (event.type === 'text-delta') setStreamedContent((current) => current + event.content)
       if (event.type === 'completed') {
+        markActiveProviderRuntime('available')
+        recordActiveProviderActivity(
+          'success',
+        )
         setMessages((current) => reconcileConversationMessages(current, event.messages))
         setPlannerSending(false); setStreamedContent(''); streamHandle.current = null
         void window.coach.plannerAction.listPending().then((actions) => { if (homeRequestEpoch.current === epoch) setPlannerActions(actions) })
         void Promise.all([window.coach.planning.listPriorities(), window.coach.planning.getSchedule(), window.coach.planning.getAcademicOverview(), window.coach.planning.getWeeklyPlan()]).then(([nextPriorities, nextSchedule, overview, nextWeek]) => { if (homeRequestEpoch.current === epoch) { setPriorities(nextPriorities); setSchedule(nextSchedule); setAcademicOverview(overview); setWeeklyPlan(nextWeek) } }).catch(() => { if (homeRequestEpoch.current === epoch) setPlannerError('A ação pode ter sido salva, mas não foi possível atualizar toda a tela. Recarregue para confirmar o estado persistido.') })
       }
       if (event.type === 'cancelled' || event.type === 'error') {
-        setPlannerSending(false); setStreamedContent(''); setPlannerInput(content); streamHandle.current = null
-        setPlannerError(event.type === 'error' ? 'A IA não conseguiu responder. Sua mensagem continua pronta para tentar novamente.' : null)
-        void window.coach.conversation.listHomeMessages().then((loaded) => { if (homeRequestEpoch.current === epoch) setMessages((current) => reconcileConversationMessages(current, loaded)) })
+        setPlannerSending(false)
+        setStreamedContent('')
+        setPlannerInput(content)
+        streamHandle.current = null
+
+        if (event.type === 'error') {
+          const issue =
+            providerRuntimeIssueFromStreamCode(
+              event.code,
+            )
+
+          if (issue) {
+            markActiveProviderRuntime(issue)
+          recordActiveProviderActivity(
+            'failure',
+            event.code,
+          )
+            setAIProblem(issue)
+            setPlannerError(null)
+          } else {
+            setPlannerError(
+              event.code === 'THREAD_BUSY'
+                ? 'A solicitação anterior ainda está em andamento.'
+                : 'A IA não conseguiu responder. Sua mensagem continua pronta para tentar novamente.',
+            )
+          }
+        } else {
+          setPlannerError(null)
+        }
+
+        void window.coach.conversation
+          .listHomeMessages()
+          .then((loaded) => {
+            if (
+              homeRequestEpoch.current
+              === epoch
+            ) {
+              setMessages(
+                (current) =>
+                  reconcileConversationMessages(
+                    current,
+                    loaded,
+                  ),
+              )
+            }
+          })
       }
     })
   }
@@ -625,16 +1938,12 @@ export function App() {
     const content = (contentOverride ?? workspaceInput).trim()
     if (!selected || !content || workspaceSending || workspaceLoading) return
     if (workspacePage === 'studies' && (!studyProgress || !studyModule || !studyProgress.lessonId)) { setWorkspaceError('Aguarde o tópico atual ser carregado antes de conversar com o Coach.'); return }
-    if (!providerStatus?.configured) {
-      setWorkspaceError('Conecte um provedor de IA na Home antes de conversar neste Workspace.')
-      return
-    }
-    if (providerStatus.quota === 'exhausted') {
-      setWorkspaceError('O provedor está acessível, mas a cota disponível foi esgotada.')
-      return
-    }
-    if (providerStatus.connectionState === 'unreachable') {
-      setWorkspaceError('O provedor configurado está indisponível no momento.')
+    const problem =
+      currentAIProblem()
+
+    if (problem) {
+      setWorkspaceError(null)
+      setAIProblem(problem)
       return
     }
     if (workspacePage === 'exercises' && activeExerciseContext) {
@@ -674,6 +1983,10 @@ export function App() {
       if (event.type === 'state' && event.metadata) setWorkspaceContextSummary(`${event.metadata.historyCount ?? 0} mensagens · ${event.metadata.contextResources?.length ?? 0} fontes`)
       if (event.type === 'text-delta') { setWorkspaceSendStage(null); const next = workspaceChat.current.appendPartial(workspaceId, generation, event.content); if (next !== null) setWorkspaceStreamedContent(next) }
       if (event.type === 'completed') {
+        markActiveProviderRuntime('available')
+        recordActiveProviderActivity(
+          'success',
+        )
         setWorkspaceMessages((current) => workspaceChat.current.reconcileCurrent(workspaceId, current, event.messages) ?? current)
         setWorkspaceStreamedContent('')
         setWorkspaceSending(false)
@@ -699,11 +2012,64 @@ export function App() {
       if (event.type === 'error') {
         setWorkspaceSending(false)
         setWorkspaceSendStage(null)
-        workspaceDrafts.current.set(workspaceId, content)
+
+        workspaceDrafts.current.set(
+          workspaceId,
+          content,
+        )
+
         setWorkspaceInput(content)
-        setWorkspaceError('A IA não conseguiu responder. Sua pergunta foi preservada localmente quando possível.')
         workspaceStreamHandle.current = null
-        void window.coach.conversation.listWorkspaceMessages(workspaceId).then((loaded) => { if (isCurrentRequest()) { setWorkspaceMessages((current) => workspaceChat.current.reconcileCurrent(workspaceId, current, loaded) ?? current); workspaceChat.current.clearPartial(workspaceId, generation); setWorkspaceStreamedContent('') } })
+
+        const issue =
+          providerRuntimeIssueFromStreamCode(
+            event.code,
+          )
+
+        if (issue) {
+          markActiveProviderRuntime(issue)
+          recordActiveProviderActivity(
+            'failure',
+            event.code,
+          )
+          setWorkspaceError(null)
+          setAIProblem(issue)
+        } else {
+          setWorkspaceError(
+            event.code === 'THREAD_BUSY'
+              ? 'A solicitação anterior ainda está em andamento.'
+              : 'A IA não conseguiu responder. Sua pergunta foi preservada localmente quando possível.',
+          )
+        }
+
+        void window.coach.conversation
+          .listWorkspaceMessages(
+            workspaceId,
+          )
+          .then((loaded) => {
+            if (!isCurrentRequest()) {
+              return
+            }
+
+            setWorkspaceMessages(
+              (current) =>
+                workspaceChat.current
+                  .reconcileCurrent(
+                    workspaceId,
+                    current,
+                    loaded,
+                  )
+                ?? current,
+            )
+
+            workspaceChat.current
+              .clearPartial(
+                workspaceId,
+                generation,
+              )
+
+            setWorkspaceStreamedContent('')
+          })
       }
     })
   }
@@ -787,7 +2153,7 @@ export function App() {
       })
     }
     return (
-      <WorkspaceShell name={selected.name} objective={selected.objective} page={workspacePage} timerLabel={timerLabel} timerRunning={studyState?.timerStatus === 'running'} finishing={sessionCompleting} coachMessages={workspaceMessages} streamedMessage={workspaceStreamedContent} coachInput={workspaceInput} coachBusy={workspaceSending || workspaceLoading} coachStage={workspaceSendStage} coachContextSummary={workspaceContextSummary} coachError={workspaceError} plannerActions={workspacePlannerActions} conversationRef={workspaceConversationPane} messageEndRef={workspaceMessageEnd} onConversationScroll={() => { const pane = workspaceConversationPane.current; if (pane) workspaceFollowLatest.current = isNearChatBottom(pane) }} onPage={selectPage} onHome={() => { workspaceOpenEpoch.current += 1; stopWorkspaceStream(); void (workspacePage === 'exercises' ? leaveExercises() : Promise.resolve()).then(() => { setSelected(null); setHomeSection('home'); void window.coach.planning.listPriorities().then(setPriorities) }) }} onSettings={() => {
+      <WorkspaceShell name={selected.name} objective={selected.objective} page={workspacePage} timerLabel={timerLabel} timerRunning={studyState?.timerStatus === 'running'} finishing={sessionCompleting} coachMessages={workspaceMessages} streamedMessage={workspaceStreamedContent} coachInput={workspaceInput} coachBusy={workspaceSending || workspaceLoading} coachStage={workspaceSendStage} coachContextSummary={workspaceContextSummary} coachError={workspaceError} providerLabel={activeProviderLabel()} providerConnected={activeProviderConnected()} providerUnavailable={Boolean(activeProviderAccount()) && activeProviderUnavailable()} plannerActions={workspacePlannerActions} conversationRef={workspaceConversationPane} messageEndRef={workspaceMessageEnd} onConversationScroll={() => { const pane = workspaceConversationPane.current; if (pane) workspaceFollowLatest.current = isNearChatBottom(pane) }} onPage={selectPage} onHome={() => { workspaceOpenEpoch.current += 1; stopWorkspaceStream(); void (workspacePage === 'exercises' ? leaveExercises() : Promise.resolve()).then(() => { setSelected(null); setHomeSection('home'); void window.coach.planning.listPriorities().then(setPriorities) }) }} onSettings={() => {
         workspaceOpenEpoch.current += 1
         stopWorkspaceStream()
 
@@ -812,20 +2178,71 @@ export function App() {
         {workspacePage === 'videos' && <div className="coach-scroll-pane h-full p-5 lg:p-8"><div className="mx-auto max-w-5xl"><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Vídeos focados</p><h2 className="mt-2 font-display text-3xl font-black">Aprenda sem sair do contexto</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-coach-muted">Use uma busca direcionada ao objetivo deste Workspace. O Coach mantém a conversa e o plano visíveis sem abrir o feed tradicional.</p><div className="mt-7 rounded-xl border border-coach-line bg-[#111217] p-6"><label className="text-xs font-black uppercase text-coach-muted">Buscar no YouTube</label><div className="mt-3 flex gap-2"><input value={materialQuery} onChange={(event) => setMaterialQuery(event.target.value)} placeholder={`Ex.: ${activePlan?.title ?? selected.name}`} className="min-w-0 flex-1 rounded-xl border border-coach-line bg-coach-paper p-3" /><button onClick={() => { const query = encodeURIComponent(`${materialQuery || activePlan?.title || selected.name} aula`); window.open(`https://www.youtube.com/results?search_query=${query}`, '_blank', 'noopener,noreferrer') }} className="rounded-xl bg-coach-orange px-5 text-sm font-black text-[#0c0d10]">Pesquisar</button></div><p className="mt-3 text-xs text-coach-muted">Links externos abrem somente após sua ação. Nenhum vídeo é enviado automaticamente ao provedor de IA.</p></div></div></div>}
         {workspacePage === 'reports' && <div className="coach-scroll-pane h-full p-5 lg:p-8"><div className="mx-auto max-w-5xl"><p className="text-xs font-black uppercase tracking-[0.18em] text-coach-green">Evolução</p><h2 className="mt-2 font-display text-3xl font-black">Relatórios de aprendizagem</h2><div className="mt-6 grid gap-4 md:grid-cols-2">{sessionHistory.length === 0 && <p className="rounded-lg bg-[#111217] p-5 text-sm text-coach-muted">Comece a estudar para acumular dados neste relatório.</p>}{sessionHistory.map((session) => <article key={session.date} className="rounded-lg border border-coach-line bg-[#111217] p-5"><div className="flex justify-between"><strong>{new Date(`${session.date}T12:00:00`).toLocaleDateString('pt-BR')} · {session.sessionCount} {session.sessionCount === 1 ? 'sessão' : 'sessões'}</strong><span className="rounded-full bg-coach-green/10 px-3 py-1 text-xs font-black text-coach-green">{Math.floor(session.focusSeconds / 60)} min</span></div><div className="mt-5 grid grid-cols-2 gap-3"><div className="rounded-xl bg-coach-paper p-3"><strong className="text-xl">{session.executions ? `${session.executions - session.errors}/${session.executions}` : "Não avaliado"}</strong><span className="block text-[10px] text-coach-muted">Execuções sem erro</span></div><div className="rounded-xl bg-coach-paper p-3"><strong className="text-sm">Ainda não avaliada</strong><span className="block text-[10px] text-coach-muted">Retenção após revisão futura</span></div></div><p className="mt-4 text-xs leading-5 text-coach-muted">{session.recommendation}</p></article>)}</div></div></div>}
         {notesOpen && <div ref={notesDialogRef} className="fixed inset-0 z-20 flex justify-end bg-black/30" role="dialog" aria-modal="true" aria-labelledby="quick-notes-title" onMouseDown={() => setNotesOpen(false)}><section className="flex h-full w-full max-w-md flex-col bg-coach-paper p-6 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}><div className="flex items-center justify-between"><h2 id="quick-notes-title" className="font-display text-2xl font-black">Notas rápidas</h2><button aria-label="Fechar notas" onClick={() => setNotesOpen(false)}><X /></button></div><label htmlFor="quick-notes" className="sr-only">Notas rápidas</label><textarea id="quick-notes" value={studyNotes} onChange={(event) => setStudyNotes(event.target.value)} className="mt-6 min-h-0 flex-1 resize-none rounded-lg border border-coach-line bg-[#111217] p-4" /></section></div>}
+        {aiProblem && (
+          <AIProblemDialog
+            problem={aiProblem}
+            detail={
+              activeProviderLastActivity()
+                ?.outcome === 'failure'
+                ? activeProviderLastActivity()
+                    ?.detail ?? null
+                : null
+            }
+            onManage={openAIManagement}
+            onClose={() =>
+              setAIProblem(null)
+            }
+          />
+        )}
       </WorkspaceShell>
     )
   }
 
   return <>
-    <HomeScreen section={homeSection} loading={loading} error={error} report={globalReport} schedule={schedule} weeklyPlan={weeklyPlan} academicOverview={academicOverview} academicLife={academicLife} workspaces={workspaces} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={providerStatus?.connected === true
-      ? providerAccounts.find((account) => account.isActive)?.label
-        ?? providerStatus.providerName
-        ?? 'IA conectada'
-      : 'IA DESCONECTADA'}
-      providerConnected={providerStatus?.connected === true}
+    {aiProblem && (
+      <AIProblemDialog
+        problem={aiProblem}
+        detail={
+          activeProviderLastActivity()
+            ?.outcome === 'failure'
+            ? activeProviderLastActivity()
+                ?.detail ?? null
+            : null
+        }
+        onManage={openAIManagement}
+        onClose={() =>
+          setAIProblem(null)
+        }
+      />
+    )}
+
+    <HomeScreen section={homeSection} loading={loading} error={error} report={globalReport} schedule={schedule} weeklyPlan={weeklyPlan} academicOverview={academicOverview} academicLife={academicLife} workspaces={workspaces} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={activeProviderLabel()}
+      providerConnected={
+        activeProviderConnected()
+      }
+      providerUnavailable={
+        Boolean(
+          activeProviderAccount(),
+        )
+        && activeProviderUnavailable()
+      }
       aiConnection={{
       status: providerStatus,
       accounts: providerAccounts,
+      runtimeIssues:
+        providerRuntimeIssues,
+      healthSnapshots:
+        providerHealthSnapshots,
+
+      lastActivities:
+        providerLastActivities,
+
+      connectingAccountId:
+        providerConnectingAccountId,
+      onRefreshHealth:
+        refreshProviderHealth,
+      openCurrentRequest:
+        aiManageRequest,
       onConfigured: async (label, apiKey, model, persistence) => {
         const result = await window.coach.provider.configureOpenAI({
           label,
@@ -857,10 +2274,297 @@ export function App() {
         setProviderAccounts(await window.coach.provider.listAccounts())
         return result
       },
+      onBeginGitHubCopilotOAuth: () =>
+        window.coach.provider
+          .beginGitHubCopilotOAuth(),
+
+      onCompleteGitHubCopilotOAuth:
+        async (flowId) => {
+          const result =
+            await window.coach.provider
+              .completeGitHubCopilotOAuth(
+                flowId,
+              )
+
+          setProviderStatus(
+            await window.coach.provider
+              .getStatus(),
+          )
+
+          setProviderAccounts(
+            await window.coach.provider
+              .listAccounts(),
+          )
+
+          return result
+        },
+
+      onConnectGeminiOAuth: async () => {
+        const result =
+          await window.coach.provider
+            .connectGeminiOAuth()
+
+        setProviderStatus(
+          await window.coach.provider
+            .getStatus(),
+        )
+
+        setProviderAccounts(
+          await window.coach.provider
+            .listAccounts(),
+        )
+
+        return result
+      },
+
       onSelect: async (accountId) => {
-        await window.coach.provider.selectAccount(accountId)
-        setProviderStatus(await window.coach.provider.getStatus())
-        setProviderAccounts(await window.coach.provider.listAccounts())
+        const target =
+          providerAccounts.find(
+            (account) =>
+              account.id === accountId,
+          )
+
+        if (!target) {
+          throw new Error(
+            'Provider account not found',
+          )
+        }
+
+        const previousAccounts =
+          providerAccounts
+
+        const previousStatus =
+          providerStatus
+
+        const knownHealth =
+          providerHealthSnapshots[
+            accountId
+          ]
+
+        const previousRuntimeIssue =
+          providerRuntimeIssues[
+            accountId
+          ]
+
+        const previousHealthSnapshot =
+          providerHealthSnapshots[
+            accountId
+          ]
+
+        setProviderConnectingAccountId(
+          accountId,
+        )
+
+        /*
+         * Estado visual da nova seleção começa em Conectando.
+         *
+         * Um resultado antigo desta conta não pode fazer a
+         * seleção nova aparecer imediatamente como verde.
+         */
+        setProviderRuntimeIssues(
+          (current) => {
+            if (!(accountId in current)) {
+              return current
+            }
+
+            const next = {
+              ...current,
+            }
+
+            delete next[
+              accountId
+            ]
+
+            return next
+          },
+        )
+
+        setProviderHealthSnapshots(
+          (current) => {
+            if (!(accountId in current)) {
+              return current
+            }
+
+            const next = {
+              ...current,
+            }
+
+            delete next[
+              accountId
+            ]
+
+            return next
+          },
+        )
+
+        /*
+         * UI otimista:
+         *
+         * a troca visual acontece no mesmo frame,
+         * sem esperar vault, banco ou rede.
+         */
+        setProviderAccounts(
+          (current) =>
+            current.map(
+              (account) => ({
+                ...account,
+
+                isActive:
+                  account.id
+                  === accountId,
+              }),
+            ),
+        )
+
+        setProviderStatus(
+          (current) =>
+            current
+              ? {
+                  ...current,
+
+                  configured:
+                    true,
+
+                  activeAccountId:
+                    accountId,
+
+                  providerId:
+                    target.providerId,
+
+                  providerName:
+                    target.providerName,
+
+                  model:
+                    target.model,
+
+                  sessionOnly:
+                    target.sessionOnly,
+
+                  quota:
+                    'unknown',
+
+                  connected:
+                    knownHealth
+                      ?.connectionState
+                    === 'connected',
+
+                  connectionState:
+                    knownHealth
+                      ?.connectionState
+                    ?? 'unchecked',
+                }
+              : current,
+        )
+
+        try {
+          /*
+           * O backend seleciona a conta sem bloquear
+           * a troca em um health-check prévio.
+           */
+          const status =
+            await window.coach.provider
+              .selectAccount(
+                accountId,
+              )
+
+          setProviderStatus(
+            status,
+          )
+
+          try {
+            setProviderAccounts(
+              await window.coach.provider
+                .listAccounts(),
+            )
+          } catch {
+            /*
+             * A seleção já aconteceu.
+             * Mantemos o estado otimista.
+             */
+          }
+
+          await verifyActiveProviderOnce(
+            accountId,
+          )
+
+          /*
+           * Depois do teste funcional, atualizamos também
+           * a visão leve das demais contas.
+           */
+          void refreshProviderHealth()
+            .catch(() => {})
+        } catch (error) {
+          /*
+           * Falha estrutural:
+           * credencial ausente, conta removida etc.
+           *
+           * Volta ao estado anterior.
+           */
+          setProviderAccounts(
+            previousAccounts,
+          )
+
+          setProviderStatus(
+            previousStatus,
+          )
+
+          setProviderRuntimeIssues(
+            (current) => {
+              const next = {
+                ...current,
+              }
+
+              if (
+                previousRuntimeIssue
+                === undefined
+              ) {
+                delete next[
+                  accountId
+                ]
+              } else {
+                next[
+                  accountId
+                ] =
+                  previousRuntimeIssue
+              }
+
+              return next
+            },
+          )
+
+          setProviderHealthSnapshots(
+            (current) => {
+              const next = {
+                ...current,
+              }
+
+              if (
+                previousHealthSnapshot
+                === undefined
+              ) {
+                delete next[
+                  accountId
+                ]
+              } else {
+                next[
+                  accountId
+                ] =
+                  previousHealthSnapshot
+              }
+
+              return next
+            },
+          )
+
+          setProviderConnectingAccountId(
+            (current) =>
+              current === accountId
+                ? null
+                : current,
+          )
+
+          throw error
+        }
       },
       onSetEnabled: async (
         accountId,
@@ -908,6 +2612,168 @@ export function App() {
           // Mantemos o estado otimista aplicado acima.
         }
       },
+      onListModels: async (
+        accountId,
+      ) =>
+        window.coach.provider
+          .listAvailableModels(
+            accountId,
+          ),
+
+      onUpdate: async (
+        accountId,
+        label,
+        model,
+        reasoningEffort,
+      ) => {
+        /*
+         * A mutação concluída pelo backend é a autoridade.
+         * O refresh posterior é apenas best-effort.
+         */
+        const account =
+          providerAccounts.find(
+            (item) =>
+              item.id === accountId,
+          )
+
+        if (!account) {
+          throw new Error(
+            'Provider account not found',
+          )
+        }
+
+        /*
+         * Trocar o modelo da IA ativa é uma nova
+         * configuração funcional.
+         *
+         * Depois que o backend confirmar a alteração,
+         * a interface entra em "Conectando..." até o
+         * probe barato validar a nova configuração.
+         */
+        const modelChangedForActiveAccount =
+          account.isActive
+          && (
+            account.model.trim()
+              !== model.trim()
+            || account.reasoningEffort
+              !== reasoningEffort
+          )
+
+        const previousConnectingAccountId =
+          providerConnectingAccountId
+
+        if (modelChangedForActiveAccount) {
+          /*
+           * A troca visual começa imediatamente ao salvar.
+           * O estado de conexão definitivo vem do probe
+           * barato do novo modelo.
+           */
+          setProviderConnectingAccountId(
+            accountId,
+          )
+        }
+
+        let status
+
+        try {
+          status =
+            await window.coach.provider.updateAccount({
+              accountId,
+              label,
+              identityLabel:
+                account.identityLabel ?? undefined,
+              model,
+              reasoningEffort,
+            })
+        } catch (error) {
+          if (modelChangedForActiveAccount) {
+            setProviderConnectingAccountId(
+              (current) =>
+                current === accountId
+                  ? previousConnectingAccountId
+                  : current,
+            )
+          }
+
+          throw error
+        }
+
+        setProviderStatus(status)
+
+        if (modelChangedForActiveAccount) {
+          /*
+           * Um resultado funcional do modelo anterior
+           * não vale para a nova configuração.
+           */
+          setProviderConnectingAccountId(
+            accountId,
+          )
+
+          setProviderRuntimeIssues(
+            (current) => {
+              if (!(accountId in current)) {
+                return current
+              }
+
+              const next = {
+                ...current,
+              }
+
+              delete next[
+                accountId
+              ]
+
+              return next
+            },
+          )
+
+          setProviderHealthSnapshots(
+            (current) => {
+              if (!(accountId in current)) {
+                return current
+              }
+
+              const next = {
+                ...current,
+              }
+
+              delete next[
+                accountId
+              ]
+
+              return next
+            },
+          )
+        }
+
+        setProviderAccounts((current) =>
+          current.map((item) =>
+            item.id === accountId
+              ? {
+                  ...item,
+                  label,
+                  model,
+                  reasoningEffort,
+                }
+              : item,
+          ),
+        )
+
+        if (modelChangedForActiveAccount) {
+          await verifyActiveProviderOnce(
+            accountId,
+          )
+        }
+
+        try {
+          setProviderAccounts(
+            await window.coach.provider.listAccounts(),
+          )
+        } catch {
+          // A edição já foi aplicada no backend.
+        }
+      },
+
       onRemove: async (accountId) => {
         /*
          * Remover também não depende da disponibilidade do provider.
@@ -934,7 +2800,7 @@ export function App() {
           // A conta já foi removida; mantemos a UI coerente.
         }
       },
-    }} onSection={setHomeSection} onSettings={() => setHomeSection('ai')} onCreate={() => { setWorkspaceCreationInitial(null); setDialogOpen(true) }} onOpen={(id) => void openWorkspace(id)} onArchive={(id) => void archiveWorkspace(id)} onRetryProvisioning={(id) => { void window.coach.workspace.retryProvisioning(id).then(() => loadWorkspaces()) }} onPlannerInput={setPlannerInput} onPlannerSend={() => void sendPlannerMessage()} onRefreshAcademicLife={(affectsPlanning) => affectsPlanning ? refreshDependentProjections().then(() => undefined) : refreshAfterAcademicMutation(false, { replan: () => Promise.resolve(), read: () => window.coach.academicLife.getProjection() }).then(setAcademicLife)} onResolveAction={(actionId, decision) => void resolveHomePlannerAction(actionId, decision)} />
+    }} onSection={setHomeSection} onSettings={() => setHomeSection('ai')} onCreate={() => { setWorkspaceCreationInitial(null); setDialogOpen(true) }} onOpen={(id) => void openWorkspace(id)} onPlanNavigate={(dateKey) => { void window.coach.planning.getWeeklyPlan(dateKey).then(setWeeklyPlan).catch(() => setPlannerError('Não foi possível carregar esse período do plano.')) }} onArchive={(id) => void archiveWorkspace(id)} onRetryProvisioning={(id) => { void window.coach.workspace.retryProvisioning(id).then(() => loadWorkspaces()) }} onPlannerInput={setPlannerInput} onPlannerSend={() => void sendPlannerMessage()} onRefreshAcademicLife={(affectsPlanning) => affectsPlanning ? refreshDependentProjections().then(() => undefined) : refreshAfterAcademicMutation(false, { replan: () => Promise.resolve(), read: () => window.coach.academicLife.getProjection() }).then(setAcademicLife)} onResolveAction={(actionId, decision) => void resolveHomePlannerAction(actionId, decision)} />
     {dialogOpen && <WorkspaceCreationScreen open={dialogOpen} submitting={submitting} initial={workspaceCreationInitial} onClose={() => { setDialogOpen(false); setWorkspaceCreationInitial(null) }} onSubmit={createWorkspace} />}
   </>
 }

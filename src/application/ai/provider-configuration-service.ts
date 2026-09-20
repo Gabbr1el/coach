@@ -1,3 +1,7 @@
+import type {
+  ProviderAccountHealthSnapshot,
+  ProviderRuntimeIssue,
+} from '../../shared/contracts/provider-contract'
 import type { AIProviderManager } from './ai-provider-manager'
 import type { CredentialVault } from './credential-vault'
 import type {
@@ -17,27 +21,6 @@ export type ProviderHealth = {
 }
 
 const OPENAI_SECRET_REFERENCE = 'provider-openai-api-key'
-
-const LOCAL_OMNIROUTE_ACCOUNT_ID =
-  crypto.randomUUID()
-
-function isLocalOmniRoute(
-  baseUrl: string | null,
-): boolean {
-  try {
-    const url = new URL(baseUrl ?? '')
-
-    return (
-      (
-        url.hostname === '127.0.0.1'
-        || url.hostname === 'localhost'
-      )
-      && url.port === '20128'
-    )
-  } catch {
-    return false
-  }
-}
 
 function isQuotaError(
   error: unknown,
@@ -62,6 +45,53 @@ function failedHealth(
         quota: 'unknown',
       }
 }
+
+function healthRuntimeIssue(
+  error: unknown,
+): ProviderRuntimeIssue {
+  const code =
+    error instanceof Error
+    && 'code' in error
+    && typeof (
+      error as Error & {
+        code?: unknown
+      }
+    ).code === 'string'
+      ? (
+          error as Error & {
+            code: string
+          }
+        ).code
+      : null
+
+  switch (code) {
+    case 'INSUFFICIENT_QUOTA':
+      return 'usage-limit'
+
+    case 'MODEL_UNAVAILABLE':
+      return 'model-unavailable'
+
+    case 'INVALID_CREDENTIAL':
+    case 'ACCESS_RESTRICTED':
+      return 'reauth-required'
+
+    case 'RATE_LIMITED':
+    case 'NETWORK_UNAVAILABLE':
+    case 'REQUEST_TIMEOUT':
+      return 'temporarily-unavailable'
+  }
+
+  if (
+    error instanceof Error
+    && /credential|token|unauthor|forbidden|access/i
+      .test(error.message)
+  ) {
+    return 'reauth-required'
+  }
+
+  return 'temporarily-unavailable'
+}
+
 
 export class ProviderConfigurationService {
   private operationQueue: Promise<void> =
@@ -125,7 +155,19 @@ export class ProviderConfigurationService {
       ) => AIProvider,
 
     private readonly now: () => number =
-      Date.now,
+      Date.now,    private readonly createGeminiProvider?:
+      (
+        credential: string,
+        model: string,
+      ) => AIProvider,
+
+    private readonly createGitHubCopilotProvider?:
+      (
+        credential: string,
+        model: string,
+        reasoningEffort:
+          'auto' | 'low' | 'medium' | 'high',
+      ) => AIProvider,
   ) {}
 
   async initialize(): Promise<void> {
@@ -149,35 +191,10 @@ export class ProviderConfigurationService {
         await this.repository.list()
 
       if (!this.vault.isAvailable()) {
-        const local = [
-          configurations.find(
-            (item) => item.isActive,
-          ),
-          ...configurations,
-        ].find(
-          (item) =>
-            (
-              item?.providerId ===
-                'omniroute'
-              || item?.providerId ===
-                'openai-compatible'
-            )
-            && isLocalOmniRoute(
-              item.baseUrl,
-            ),
-        )
-
-        this.activateLocalOmniRoute(
-          local?.displayName
-            ?? 'OmniRoute local',
-
-          local?.baseUrl
-            ?? 'http://127.0.0.1:20128/v1',
-
-          local?.model
-            ?? 'codex/gpt-5.6-sol',
-        )
-
+        /*
+         * As credenciais persistentes dependem do cofre seguro.
+         * Sem ele, nenhuma conta artificial é criada.
+         */
         return
       }
 
@@ -190,19 +207,10 @@ export class ProviderConfigurationService {
         ),
       )
 
-      const loaded =
-        await this.loadPersistedAccounts(
-          configurations,
-          false,
-        )
-
-      if (!loaded) {
-        this.activateLocalOmniRoute(
-          'OmniRoute local',
-          'http://127.0.0.1:20128/v1',
-          'codex/gpt-5.6-sol',
-        )
-      }
+      await this.loadPersistedAccounts(
+        configurations,
+        false,
+      )
     })
   }
 
@@ -243,16 +251,17 @@ export class ProviderConfigurationService {
       this.manager.getActive()
 
     /*
-     * O OmniRoute pode entrar ou sair do ar enquanto o Coach
+     * A IA ativa pode perder conectividade enquanto o Coach
      * permanece aberto.
      *
-     * checkAvailability() consulta somente GET /models.
-     * Não envia prompt e não gera resposta do modelo.
+     * Cada provider que suporta checkAvailability() define
+     * seu próprio probe leve. Assim Gemini, OmniRoute e os
+     * demais providers compatíveis podem atualizar o estado
+     * real de conectividade.
      */
     if (
       accountId
-      && activeProvider?.id === 'omniroute'
-      && activeProvider.checkAvailability
+      && activeProvider?.checkAvailability
     ) {
       try {
         await activeProvider
@@ -319,13 +328,13 @@ export class ProviderConfigurationService {
 
       connectionState:
         configured
-          ? connected
-            ? 'connected'
-            : healthKnown
-              ? 'unreachable'
-              : activeProvider
-                ? 'unchecked'
-                : 'unreachable'
+          ? healthKnown
+            ? health.connected
+              ? 'connected'
+              : 'unreachable'
+            : activeProvider
+              ? 'unchecked'
+              : 'unreachable'
           : 'not-configured',
 
       quota:
@@ -427,6 +436,516 @@ export class ProviderConfigurationService {
     ]
   }
 
+  async refreshHealth():
+    Promise<
+      ProviderAccountHealthSnapshot[]
+    > {
+    const accounts =
+      await this.listAccounts()
+
+    const snapshots:
+      ProviderAccountHealthSnapshot[] = []
+
+    for (const account of accounts) {
+      const checkedAt =
+        this.now()
+
+      if (!account.isEnabled) {
+        snapshots.push({
+          accountId:
+            account.id,
+
+          checkedAt,
+
+          connectionState:
+            'unchecked',
+
+          runtimeIssue:
+            null,
+        })
+
+        continue
+      }
+
+      try {
+        /*
+         * listAvailableModels() já recria/resolve o provider
+         * correto para a conta sem mudar a seleção ativa.
+         *
+         * Além de confirmar conectividade/autenticação,
+         * permite detectar um modelo que saiu do catálogo.
+         */
+        const models =
+          await this.listAvailableModels(
+            account.id,
+          )
+
+        const previousHealth =
+          this.healthByAccount.get(
+            account.id,
+          )
+
+        this.healthByAccount.set(
+          account.id,
+          {
+            connected: true,
+
+            /*
+             * Catálogo disponível NÃO prova quota de geração.
+             * Portanto nunca promovemos quota para "available"
+             * aqui.
+             */
+            quota:
+              previousHealth?.quota
+              ?? 'unknown',
+          },
+        )
+
+        snapshots.push({
+          accountId:
+            account.id,
+
+          checkedAt,
+
+          connectionState:
+            'connected',
+
+          runtimeIssue:
+            !account.model.trim()
+            || models.includes(
+              account.model,
+            )
+              ? null
+              : 'model-unavailable',
+        })
+      } catch (error) {
+        const failed =
+          failedHealth(error)
+
+        this.healthByAccount.set(
+          account.id,
+          failed,
+        )
+
+        snapshots.push({
+          accountId:
+            account.id,
+
+          checkedAt,
+
+          connectionState:
+            failed.connected
+              ? 'connected'
+              : 'unreachable',
+
+          runtimeIssue:
+            healthRuntimeIssue(
+              error,
+            ),
+        })
+      }
+    }
+
+    return snapshots
+  }
+
+
+  async checkActiveFunctionalHealth():
+    Promise<
+      ProviderAccountHealthSnapshot | null
+    > {
+    const accountId =
+      this.manager.getActiveRegistrationId()
+
+    const provider =
+      this.manager.getActive()
+
+    if (
+      !accountId
+      || !provider
+    ) {
+      return null
+    }
+
+    const account =
+      (
+        await this.listAccounts()
+      ).find(
+        (item) =>
+          item.id === accountId,
+      )
+
+    if (
+      !account
+      || !account.isEnabled
+    ) {
+      return null
+    }
+
+    const checkedAt =
+      this.now()
+
+    if (!account.model.trim()) {
+      const previous =
+        this.healthByAccount.get(
+          accountId,
+        )
+
+      return {
+        accountId,
+        checkedAt,
+
+        connectionState:
+          previous?.connected
+            ? 'connected'
+            : 'unchecked',
+
+        runtimeIssue:
+          'model-unavailable',
+      }
+    }
+
+    try {
+      /*
+       * Heartbeat funcional do Coach:
+       *
+       * o modelo precisa gerar uma estrutura semelhante
+       * à usada pelo Organizador, não apenas qualquer JSON.
+       */
+      const controller =
+        new AbortController()
+
+      const functionalTimeoutMs =
+        account.providerId
+          === 'github-copilot'
+          ? 20_000
+          : 6_000
+
+      const timeout =
+        setTimeout(
+          () =>
+            controller.abort(),
+          functionalTimeoutMs,
+        )
+
+      const response =
+        await (async () => {
+          try {
+            return await provider.sendMessage({
+              messages: [
+                {
+                  role:
+                    'system',
+
+                  content:
+                    'Internal Coach functional health check. Return ONLY this strict JSON object: {"mode":"conversation","capability":null,"entities":{"subject":null,"query":null,"eventKind":null,"dateExpression":null,"dateFromExpression":null,"dateToExpression":null,"weekday":null,"minutes":null,"completed":null,"target":null,"status":null},"confidence":1,"missingFields":[],"summary":"Coach functional health check"}. No markdown, prose, comments or extra keys.',
+                },
+                {
+                  role:
+                    'user',
+
+                  content:
+                    'Return the required OrganizerIntent-compatible JSON now.',
+                },
+              ],
+
+              model:
+                account.model,
+
+              maxOutputTokens:
+                400,
+
+              signal:
+                controller.signal,
+
+              responseFormat:
+                'json_object',
+            })
+          } finally {
+            clearTimeout(
+              timeout,
+            )
+          }
+        })()
+
+      let parsed:
+        unknown = null
+
+      try {
+        parsed =
+          JSON.parse(
+            response.content,
+          )
+      } catch {
+        parsed = null
+      }
+
+      const isRecord = (
+        value: unknown,
+      ): value is Record<
+        string,
+        unknown
+      > =>
+        Boolean(
+          value
+          && typeof value
+            === 'object'
+          && !Array.isArray(
+            value,
+          ),
+        )
+
+      const entities =
+        isRecord(parsed)
+        && isRecord(
+          parsed.entities,
+        )
+          ? parsed.entities
+          : null
+
+      const requiredNullEntities = [
+        'subject',
+        'query',
+        'eventKind',
+        'dateExpression',
+        'dateFromExpression',
+        'dateToExpression',
+        'weekday',
+        'minutes',
+        'completed',
+        'target',
+        'status',
+      ] as const
+
+      const entitiesValid =
+        entities !== null
+        && requiredNullEntities.every(
+          (key) =>
+            key in entities
+            && entities[key] === null,
+        )
+
+      const valid =
+        isRecord(parsed)
+        && parsed.mode
+          === 'conversation'
+        && parsed.capability
+          === null
+        && entitiesValid
+        && typeof parsed.confidence
+          === 'number'
+        && parsed.confidence >= 0
+        && parsed.confidence <= 1
+        && Array.isArray(
+          parsed.missingFields,
+        )
+        && parsed.missingFields.length
+          === 0
+        && typeof parsed.summary
+          === 'string'
+        && parsed.summary.trim().length
+          > 0
+
+      if (!valid) {
+        console.error(
+          '[Coach AI functional health] invalid response',
+          {
+            providerId:
+              account.providerId,
+            model:
+              account.model,
+            content:
+              response.content.slice(
+                0,
+                1200,
+              ),
+          },
+        )
+
+        const previous =
+          this.healthByAccount.get(
+            accountId,
+          )
+
+        this.healthByAccount.set(
+          accountId,
+          {
+            connected:
+              true,
+
+            quota:
+              previous?.quota
+              ?? 'unknown',
+          },
+        )
+
+        return {
+          accountId,
+          checkedAt,
+
+          connectionState:
+            'connected',
+
+          runtimeIssue:
+            'temporarily-unavailable',
+        }
+      }
+
+      this.healthByAccount.set(
+        accountId,
+        {
+          connected:
+            true,
+
+          quota:
+            'available',
+        },
+      )
+
+      return {
+        accountId,
+        checkedAt,
+
+        connectionState:
+          'connected',
+
+        runtimeIssue:
+          'available',
+      }
+    } catch (error) {
+      console.error(
+        '[Coach AI functional health] generation failed',
+        {
+          providerId:
+            account.providerId,
+          model:
+            account.model,
+          error:
+            error instanceof Error
+              ? {
+                  name:
+                    error.name,
+                  message:
+                    error.message,
+                  code:
+                    'code' in error
+                    ? (
+                        error as Error & {
+                          code?: unknown
+                        }
+                      ).code
+                    : undefined,
+                }
+              : String(error),
+        },
+      )
+
+      const generationIssue =
+        error instanceof Error
+        && error.name === 'AbortError'
+          ? 'temporarily-unavailable'
+          : healthRuntimeIssue(
+              error,
+            )
+
+      /*
+       * Se a geração falhar, usamos o probe leve
+       * somente para diferenciar:
+       *
+       * - serviço inacessível;
+       * - serviço vivo, mas geração/modelo com problema.
+       */
+      if (
+        provider.checkAvailability
+      ) {
+        try {
+          await provider
+            .checkAvailability()
+
+          const previous =
+            this.healthByAccount.get(
+              accountId,
+            )
+
+          this.healthByAccount.set(
+            accountId,
+            {
+              connected:
+                true,
+
+              quota:
+                generationIssue
+                  === 'usage-limit'
+                  ? 'exhausted'
+                  : previous?.quota
+                    ?? 'unknown',
+            },
+          )
+
+          return {
+            accountId,
+            checkedAt,
+
+            connectionState:
+              'connected',
+
+            runtimeIssue:
+              generationIssue,
+          }
+        } catch (probeError) {
+          const failed =
+            failedHealth(
+              probeError,
+            )
+
+          this.healthByAccount.set(
+            accountId,
+            failed,
+          )
+
+          return {
+            accountId,
+            checkedAt,
+
+            connectionState:
+              failed.connected
+                ? 'connected'
+                : 'unreachable',
+
+            runtimeIssue:
+              healthRuntimeIssue(
+                probeError,
+              ),
+          }
+        }
+      }
+
+      const failed =
+        failedHealth(
+          error,
+        )
+
+      this.healthByAccount.set(
+        accountId,
+        failed,
+      )
+
+      return {
+        accountId,
+        checkedAt,
+
+        connectionState:
+          failed.connected
+            ? 'connected'
+            : 'unreachable',
+
+        runtimeIssue:
+          generationIssue,
+      }
+    }
+  }
+
+
   async configureOpenAI(
     label: string,
     apiKey: string,
@@ -523,7 +1042,6 @@ export class ProviderConfigurationService {
           null,
       }
 
-      this.removeLocalFallback()
 
       this.sessionAccounts.set(
         accountId,
@@ -615,7 +1133,6 @@ export class ProviderConfigurationService {
       throw error
     }
 
-    this.removeLocalFallback()
 
     this.registerAndSelect(
       accountId,
@@ -651,19 +1168,71 @@ export class ProviderConfigurationService {
           )
         }
 
+        const configuredModel =
+          model.trim()
+
         const provider =
           this.createCompatibleProvider(
             connectorId,
             label,
             baseUrl,
             apiKey,
-            model,
+            configuredModel,
           )
 
         const health =
           await this.verifyConnection(
             provider,
           )
+
+        /*
+         * A autenticação/conectividade já foi
+         * confirmada.
+         *
+         * No OmniRoute, a escolha de modelo acontece
+         * somente depois de consultar o catálogo real.
+         *
+         * Se houver pelo menos um modelo, usamos o
+         * primeiro retornado pelo OmniRoute.
+         *
+         * Se o catálogo estiver vazio, a conta continua
+         * conectada com model = "", representando
+         * corretamente o estado "Sem modelo".
+         */
+        let selectedModel =
+          configuredModel
+
+        if (
+          provider.listModels
+        ) {
+          const availableModels =
+            await provider.listModels()
+
+          selectedModel =
+            configuredModel
+            || availableModels[0]
+            || ''
+        }
+
+        /*
+         * O primeiro provider foi criado sem modelo para
+         * validar autenticação e consultar /models.
+         *
+         * Se a descoberta escolheu um modelo, precisamos
+         * registrar uma nova instância com esse modelo como
+         * default. Caso contrário, a conta mostraria o modelo
+         * correto na UI, mas o runtime continuaria sem modelo.
+         */
+        const operationalProvider =
+          selectedModel === configuredModel
+            ? provider
+            : this.createCompatibleProvider(
+                connectorId,
+                label,
+                baseUrl,
+                apiKey,
+                selectedModel,
+              )
 
         const accountId =
           crypto.randomUUID()
@@ -689,7 +1258,8 @@ export class ProviderConfigurationService {
 
             label,
 
-            model,
+            model:
+              selectedModel,
 
             reasoningEffort:
               'auto',
@@ -709,7 +1279,6 @@ export class ProviderConfigurationService {
             baseUrl,
           }
 
-          this.removeLocalFallback()
 
           this.sessionAccounts.set(
             accountId,
@@ -718,7 +1287,7 @@ export class ProviderConfigurationService {
 
           this.sessionProviders.set(
             accountId,
-            provider,
+            operationalProvider,
           )
           this.sessionSecrets.set(
             accountId,
@@ -727,7 +1296,7 @@ export class ProviderConfigurationService {
 
           this.registerAndSelect(
             accountId,
-            provider,
+            operationalProvider,
           )
 
           return this.getStatus()
@@ -765,7 +1334,8 @@ export class ProviderConfigurationService {
 
             baseUrl,
 
-            model,
+            model:
+              selectedModel,
 
             reasoningEffort:
               'auto',
@@ -796,7 +1366,262 @@ export class ProviderConfigurationService {
           throw error
         }
 
-        this.removeLocalFallback()
+
+        this.registerAndSelect(
+          accountId,
+          operationalProvider,
+        )
+
+        return this.getStatus()
+      },
+    )
+  }
+
+  async configureGeminiOAuth(
+    credential: string,
+    identityLabel:
+      string | null,
+  ): Promise<ProviderStatus> {
+    return this.exclusive(
+      async () => {
+        await this.assertCanCreateAccount()
+        const secureStorageAvailable =
+          this.vault.isAvailable()
+
+        if (!secureStorageAvailable) {
+          throw new Error(
+            'Secure operating-system credential storage is unavailable',
+          )
+        }
+
+
+        if (!this.createGeminiProvider) {
+          throw new Error(
+            'Gemini provider connector is unavailable',
+          )
+        }
+
+        const persisted =
+          await this.repository.list()
+
+        const alreadyConfigured =
+          persisted.some(
+            (account) =>
+              account.providerId
+              === 'gemini',
+          )
+          || [
+            ...this.sessionAccounts.values(),
+          ].some(
+            (account) =>
+              account.providerId
+              === 'gemini',
+          )
+
+        if (alreadyConfigured) {
+          throw new Error(
+            'Provider already configured: gemini',
+          )
+        }
+
+        /*
+         * O modelo inicial serve somente para criar
+         * a instância capaz de consultar /models.
+         *
+         * A escolha final é feita com base na lista
+         * realmente retornada pela conta.
+         */
+        const probe =
+          this.createGeminiProvider(
+            credential,
+            'gemini-2.5-flash',
+          )
+
+        if (!probe.listModels) {
+          throw new Error(
+            'Gemini model discovery is unavailable',
+          )
+        }
+
+        const availableModels =
+          await probe.listModels()
+
+        const preferredModels = [
+          'gemini-2.5-flash',
+          'gemini-2.5-pro',
+          'gemini-2.0-flash',
+        ] as const
+
+        const model =
+          preferredModels.find(
+            (candidate) =>
+              availableModels.includes(
+                candidate,
+              ),
+          )
+          ?? availableModels[0]
+
+        if (!model) {
+          throw new Error(
+            'No Gemini generation model is available',
+          )
+        }
+
+        const provider =
+          this.createGeminiProvider(
+            credential,
+            model,
+          )
+
+        const health =
+          await this.verifyConnection(
+            provider,
+          )
+
+        const accountId =
+          crypto.randomUUID()
+
+        this.healthByAccount.set(
+          accountId,
+          health,
+        )
+
+        if (!secureStorageAvailable) {
+          const account:
+            ProviderAccountSummary = {
+            id:
+              accountId,
+
+            providerId:
+              'gemini',
+
+            providerName:
+              'Google Gemini',
+
+            label:
+              'Google Gemini',
+
+            identityLabel,
+
+            model,
+
+            reasoningEffort:
+              'auto',
+
+            isEnabled:
+              true,
+
+            isActive:
+              true,
+
+            sessionOnly:
+              true,
+
+            baseUrl:
+              null,
+          }
+
+
+          this.sessionAccounts.set(
+            accountId,
+            account,
+          )
+
+          this.sessionProviders.set(
+            accountId,
+            provider,
+          )
+
+          /*
+           * O refresh token permanece somente
+           * em memória enquanto o Coach estiver
+           * aberto.
+           *
+           * Ao fechar o aplicativo, ele é
+           * esquecido junto com a sessão.
+           */
+          this.sessionSecrets.set(
+            accountId,
+            credential,
+          )
+
+          this.registerAndSelect(
+            accountId,
+            provider,
+          )
+
+          return this.getStatus()
+        }
+
+        const secretReference =
+          `provider-gemini-oauth-${accountId}`
+
+        await this.vault.set(
+          secretReference,
+          credential,
+        )
+
+        try {
+          const now =
+            this.now()
+
+          await this.repository
+            .createAndActivate({
+              id:
+                accountId,
+
+              providerId:
+                'gemini',
+
+              displayName:
+                'Google Gemini',
+
+              label:
+                'Google Gemini',
+
+              authKind:
+                'oauth',
+
+              identityLabel,
+
+              baseUrl:
+                null,
+
+              model,
+
+              reasoningEffort:
+                'auto',
+
+              secretReference,
+
+              isEnabled:
+                true,
+
+              isActive:
+                true,
+
+              createdAt:
+                now,
+
+              updatedAt:
+                now,
+            })
+        } catch (error) {
+          await this.vault
+            .delete(
+              secretReference,
+            )
+            .catch(
+              () => {},
+            )
+
+          this.healthByAccount.delete(
+            accountId,
+          )
+
+          throw error
+        }
+
 
         this.registerAndSelect(
           accountId,
@@ -808,6 +1633,119 @@ export class ProviderConfigurationService {
     )
   }
 
+
+  async configureGitHubCopilotOAuth(
+    credential: string,
+    identityLabel: string | null,
+  ): Promise<ProviderStatus> {
+    return this.exclusive(async () => {
+      await this.assertCanCreateAccount()
+
+      if (!this.vault.isAvailable()) {
+        throw new Error(
+          'Secure operating-system credential storage is unavailable',
+        )
+      }
+
+      if (!this.createGitHubCopilotProvider) {
+        throw new Error(
+          'GitHub Copilot provider connector is unavailable',
+        )
+      }
+
+      const probe =
+        this.createGitHubCopilotProvider(
+          credential,
+          '',
+          'auto',
+        )
+
+      if (!probe.listModels) {
+        throw new Error(
+          'GitHub Copilot model discovery is unavailable',
+        )
+      }
+
+      const availableModels =
+        await probe.listModels()
+
+      const model =
+        availableModels[0]
+
+      if (!model) {
+        throw new Error(
+          'No GitHub Copilot generation model is available',
+        )
+      }
+
+      const provider =
+        this.createGitHubCopilotProvider(
+          credential,
+          model,
+          'auto',
+        )
+
+      const accountId =
+        crypto.randomUUID()
+
+      this.healthByAccount.set(
+        accountId,
+        {
+          connected: true,
+          quota: 'unknown',
+        },
+      )
+
+      const secretReference =
+        `provider-github-copilot-oauth-${accountId}`
+
+      await this.vault.set(
+        secretReference,
+        credential,
+      )
+
+      try {
+        const now =
+          this.now()
+
+        await this.repository.createAndActivate({
+          id: accountId,
+          providerId: 'github-copilot',
+          displayName: 'GitHub Copilot',
+          label: 'GitHub Copilot',
+          authKind: 'oauth',
+          identityLabel,
+          baseUrl: null,
+          model,
+          reasoningEffort: 'auto',
+          secretReference,
+          isEnabled: true,
+          isActive: true,
+          createdAt: now,
+          updatedAt: now,
+        })
+      } catch (error) {
+        await this.vault
+          .delete(secretReference)
+          .catch(() => {})
+
+        this.healthByAccount.delete(
+          accountId,
+        )
+
+        throw error
+      }
+
+      this.registerAndSelect(
+        accountId,
+        provider,
+      )
+
+      return this.getStatus()
+    })
+  }
+
+
   async selectAccount(
     accountId: string,
   ): Promise<ProviderStatus> {
@@ -815,7 +1753,7 @@ export class ProviderConfigurationService {
       () =>
         this.selectAccountExclusive(
           accountId,
-          true,
+          false,
         ),
     )
   }
@@ -893,7 +1831,14 @@ export class ProviderConfigurationService {
         configuration.secretReference,
       )
 
-    if (!apiKey) {
+    if (
+      apiKey === null
+      || (
+        configuration.providerId
+          !== 'openai-compatible'
+        && !apiKey
+      )
+    ) {
       throw new Error(
         'Provider credential not found',
       )
@@ -928,7 +1873,6 @@ export class ProviderConfigurationService {
       this.now(),
     )
 
-    this.removeLocalFallback()
 
     this.manager.replace(
       provider,
@@ -1077,7 +2021,14 @@ export class ProviderConfigurationService {
             configuration.secretReference,
           )
 
-        if (!secret) {
+        if (
+          secret === null
+          || (
+            configuration.providerId
+              !== 'openai-compatible'
+            && !secret
+          )
+        ) {
           throw new Error(
             'Provider credential not found',
           )
@@ -1098,6 +2049,85 @@ export class ProviderConfigurationService {
       },
     )
   }
+
+async listAvailableModels(
+  accountId: string,
+): Promise<readonly string[]> {
+  const sessionAccount =
+    this.sessionAccounts.get(
+      accountId,
+    )
+
+  if (sessionAccount) {
+    const provider =
+      this.sessionProviders.get(
+        accountId,
+      )
+
+    if (!provider) {
+      throw new Error(
+        'Provider session connection not found',
+      )
+    }
+
+    if (!provider.listModels) {
+      throw new Error(
+        'Provider does not support model discovery',
+      )
+    }
+
+    return provider.listModels()
+  }
+
+  const configuration =
+    await this.repository.findById(
+      accountId,
+    )
+
+  if (!configuration) {
+    throw new Error(
+      'Provider account not found',
+    )
+  }
+
+  if (!this.vault.isAvailable()) {
+    throw new Error(
+      'Secure operating-system credential storage is unavailable',
+    )
+  }
+
+  const secret =
+    await this.vault.get(
+      configuration.secretReference,
+    )
+
+  if (
+    secret === null
+    || (
+      configuration.providerId
+        !== 'openai-compatible'
+      && !secret
+    )
+  ) {
+    throw new Error(
+      'Provider credential not found',
+    )
+  }
+
+  const provider =
+    this.createProviderForConfiguration(
+      configuration,
+      secret,
+    )
+
+  if (!provider.listModels) {
+    throw new Error(
+      'Provider does not support model discovery',
+    )
+  }
+
+  return provider.listModels()
+}
 
 async updateAccount(
   accountId: string,
@@ -1176,7 +2206,14 @@ async updateAccount(
               accountId,
             )
 
-          if (!secret) {
+          if (
+            secret === undefined
+            || (
+              sessionAccount.providerId
+                !== 'openai-compatible'
+              && !secret
+            )
+          ) {
             throw new Error(
               'Provider session credential not found',
             )
@@ -1207,12 +2244,85 @@ async updateAccount(
                 )
               break
 
+
             case 'gemini':
+
+
+              if (
+
+
+                !this.createGeminiProvider
+
+
+              ) {
+
+
+                throw new Error(
+
+
+                  'Gemini provider factory is not configured',
+
+
+                )
+
+
+              }
+
+
+
+
+
+              provider =
+
+
+                this.createGeminiProvider(
+
+
+                  secret,
+
+
+                  normalizedModel,
+
+
+                )
+
+
+              break
+
+
+
+
+
+            case 'github-copilot':
+              if (!this.createGitHubCopilotProvider) {
+                throw new Error(
+                  'GitHub Copilot provider factory is not configured',
+                )
+              }
+
+              provider =
+                this.createGitHubCopilotProvider(
+                  secret,
+                  normalizedModel,
+                  reasoningEffort,
+                )
+              break
+
+
             case 'anthropic':
+
+
             case 'ollama':
+
+
               throw new Error(
+
+
                 `Provider connector '${sessionAccount.providerId}' is not implemented yet`,
+
+
               )
+
           }
 
           const updatedSessionAccount:
@@ -1281,7 +2391,14 @@ async updateAccount(
             existing.secretReference,
           )
 
-        if (!secret) {
+        if (
+          secret === null
+          || (
+            existing.providerId
+              !== 'openai-compatible'
+            && !secret
+          )
+        ) {
           throw new Error(
             'Provider credential not found',
           )
@@ -1477,7 +2594,14 @@ async updateAccount(
             configuration.secretReference,
           )
 
-        if (!apiKey) {
+        if (
+          apiKey === null
+          || (
+            configuration.providerId
+              !== 'openai-compatible'
+            && !apiKey
+          )
+        ) {
           continue
         }
 
@@ -1622,116 +2746,103 @@ async updateAccount(
           configuration.model,
         )
 
+
       case 'gemini':
-      case 'anthropic':
-      case 'ollama':
-        throw new Error(
-          `Provider connector '${configuration.providerId}' is not implemented yet`,
+
+
+        if (
+
+
+          !this.createGeminiProvider
+
+
+        ) {
+
+
+          throw new Error(
+
+
+            'Gemini provider factory is not configured',
+
+
+          )
+
+
+        }
+
+
+
+
+
+        return this.createGeminiProvider(
+
+
+          secret,
+
+
+          configuration.model,
+
+
         )
+
+
+
+
+
+      case 'github-copilot':
+        if (!this.createGitHubCopilotProvider) {
+          throw new Error(
+            'GitHub Copilot provider factory is not configured',
+          )
+        }
+
+        return this.createGitHubCopilotProvider(
+          secret,
+          configuration.model,
+          configuration.reasoningEffort
+            ?? 'auto',
+        )
+
+
+      case 'anthropic':
+
+
+      case 'ollama':
+
+
+        throw new Error(
+
+
+          `Provider connector '${configuration.providerId}' is not implemented yet`,
+
+
+        )
+
     }
-  }
-
-  private activateLocalOmniRoute(
-    label: string,
-    baseUrl: string,
-    model: string,
-  ): void {
-    const account:
-      ProviderAccountSummary = {
-      id:
-        LOCAL_OMNIROUTE_ACCOUNT_ID,
-
-      providerId:
-        'omniroute',
-
-      providerName:
-        label,
-
-      label,
-
-      model,
-
-      reasoningEffort:
-        'auto',
-
-      identityLabel:
-        null,
-
-      isEnabled:
-        true,
-
-      isActive:
-        true,
-
-      sessionOnly:
-        true,
-
-      baseUrl,
-    }
-
-    const provider =
-      this.createCompatibleProvider(
-        'omniroute',
-        label,
-        baseUrl,
-        'omniroute',
-        model,
-      )
-
-    this.sessionAccounts.set(
-      LOCAL_OMNIROUTE_ACCOUNT_ID,
-      account,
-    )
-
-    this.sessionProviders.set(
-      LOCAL_OMNIROUTE_ACCOUNT_ID,
-      provider,
-    )
-
-    this.registerAndSelect(
-      LOCAL_OMNIROUTE_ACCOUNT_ID,
-      provider,
-    )
-  }
-
-  private removeLocalFallback():
-    void {
-    if (
-      !this.sessionAccounts.has(
-        LOCAL_OMNIROUTE_ACCOUNT_ID,
-      )
-    ) {
-      return
-    }
-
-    this.sessionAccounts.delete(
-      LOCAL_OMNIROUTE_ACCOUNT_ID,
-    )
-
-    this.sessionProviders.delete(
-      LOCAL_OMNIROUTE_ACCOUNT_ID,
-    )
-    this.sessionSecrets.delete(
-      LOCAL_OMNIROUTE_ACCOUNT_ID,
-    )
-
-    this.healthByAccount.delete(
-      LOCAL_OMNIROUTE_ACCOUNT_ID,
-    )
-
-    this.manager.remove(
-      LOCAL_OMNIROUTE_ACCOUNT_ID,
-    )
   }
 
   private async verifyConnection(
     provider: AIProvider,
   ): Promise<ProviderHealth> {
-    await provider.testConnection()
+    /*
+     * Conectividade e quota são conceitos diferentes.
+     *
+     * A conexão deve validar somente se o provider está acessível
+     * e autenticado. Nunca devemos consumir geração apenas para
+     * permitir que uma conta seja adicionada ao Coach.
+     *
+     * Um modelo sem quota não torna o provider inteiro inválido:
+     * o usuário ainda pode trocar para outro modelo disponível.
+     */
+    if (provider.checkAvailability) {
+      await provider.checkAvailability()
+    } else {
+      await provider.testConnection()
+    }
 
     return {
       connected: true,
-      quota: 'available',
+      quota: 'unknown',
     }
   }
 
@@ -1741,13 +2852,7 @@ async updateAccount(
       await this.repository.list()
 
     const sessionCount =
-      [
-        ...this.sessionAccounts.keys(),
-      ].filter(
-        (id) =>
-          id
-          !== LOCAL_OMNIROUTE_ACCOUNT_ID,
-      ).length
+      this.sessionAccounts.size
 
     const total =
       persisted.length

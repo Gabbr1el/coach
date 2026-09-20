@@ -20,6 +20,8 @@ import { DrizzleProviderConfigurationRepository } from './repositories/drizzle-p
 import { ElectronCredentialVault } from './security/electron-credential-vault'
 import { OpenAIProvider } from './providers/openai-provider'
 import { OpenAICompatibleProvider } from './providers/openai-compatible-provider'
+import { GeminiProvider } from './providers/gemini-provider'
+import { GitHubCopilotProvider } from './providers/github-copilot-provider'
 import { registerProviderHandlers } from './ipc/provider-handlers'
 import { WorkspaceCoachService } from '../application/conversations/workspace-coach-service'
 import { StudyWorkspaceService } from '../application/study-workspaces/study-workspace-service'
@@ -92,6 +94,25 @@ import { EventWorkspaceLinkService } from '../application/academic-life/event-wo
 import { SqliteEventWorkspaceLinkRepository } from './repositories/sqlite-event-workspace-link-repository'
 import { z } from 'zod'
 
+const linuxDesktop = [
+  process.env.XDG_CURRENT_DESKTOP,
+  process.env.XDG_SESSION_DESKTOP,
+  process.env.DESKTOP_SESSION,
+]
+  .filter(Boolean)
+  .join(':')
+  .toLowerCase()
+
+if (
+  process.platform === 'linux'
+  && linuxDesktop.includes('niri')
+) {
+  app.commandLine.appendSwitch(
+    'password-store',
+    'gnome-libsecret',
+  )
+}
+
 let database: CoachDatabase | null = null
 let contentWorker: ContentGenerationWorker | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -161,7 +182,33 @@ void app.whenReady().then(async () => {
           apiKey,
           model,
         ),
-    )
+
+      Date.now,
+
+      (
+        credential,
+        model,
+      ) =>         new GeminiProvider(
+           credential,
+           model,
+         ),
+
+       (
+         credential,
+         model,
+         reasoningEffort,
+       ) =>
+         new GitHubCopilotProvider(
+           credential,
+           model,
+           reasoningEffort,
+           join(
+             app.getPath('userData'),
+             'copilot-runtime',
+           ),
+         ),
+
+     )
     await providerConfigurationService.initialize()
     const homePlannerService = new HomePlannerService({
       repository: new DrizzleConversationRepository(database),

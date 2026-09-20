@@ -17,6 +17,23 @@ export const organizerConversationStateSchema = z.object({
     originalCurrentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     originalTimezone: z.string().trim().min(1).max(100),
   }).strict().nullable(),
+
+  pendingWorkspacePreparation: z.object({
+    subject:
+      z.string()
+        .trim()
+        .min(1)
+        .max(80),
+
+    originalMessageId:
+      z.uuid(),
+
+    originalCreatedAt:
+      z.number()
+        .int()
+        .nonnegative(),
+  }).strict().nullable().default(null),
+
   recentResolvedAcademicEventIds: boundedIds,
   recentResolvedWorkspaceIds: boundedIds,
   updatedAt: z.number().int().nonnegative(),
@@ -30,6 +47,7 @@ export function emptyOrganizerConversationState(updatedAt = 0): OrganizerConvers
     focusedWorkspaceId: null,
     focusedSubject: null,
     pending: null,
+    pendingWorkspacePreparation: null,
     recentResolvedAcademicEventIds: [],
     recentResolvedWorkspaceIds: [],
     updatedAt,

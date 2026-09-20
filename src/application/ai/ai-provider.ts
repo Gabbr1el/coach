@@ -41,6 +41,12 @@ export interface AIProvider {
    */
   checkAvailability?(): Promise<void>
 
+  /**
+   * Lista os modelos anunciados pelo provider quando
+   * ele oferece descoberta dinâmica.
+   */
+  listModels?(): Promise<readonly string[]>
+
   testConnection(): Promise<void>
   sendMessage(request: AIRequest): Promise<AIResponse>
   streamMessage?(request: AIRequest): AsyncIterable<AIStreamEvent>

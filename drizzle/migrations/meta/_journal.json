@@ -428,6 +428,13 @@
       "when": 1789615784395,
       "tag": "0060_provider_accounts",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1789912167518,
+      "tag": "0061_perpetual_raider",
+      "breakpoints": true
     }
   ]
 }

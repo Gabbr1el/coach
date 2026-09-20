@@ -207,3 +207,42 @@ select:focus-visible,
     animation-iteration-count: 1 !important;
   }
 }
+
+/*
+ * Indicador de resposta do Coach.
+ *
+ * Somente opacity é animada para evitar trabalho
+ * desnecessário de layout/transform no Electron.
+ */
+.coach-typing-dot {
+  opacity: 0.2;
+  animation: coach-typing-dot 900ms ease-in-out infinite;
+  will-change: opacity;
+}
+
+.coach-typing-dot:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.coach-typing-dot:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+@keyframes coach-typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.2;
+  }
+
+  30% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .coach-typing-dot {
+    animation: none;
+    opacity: 0.65;
+  }
+}

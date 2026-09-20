@@ -60,8 +60,8 @@ describe('renderer UI safeguards', () => {
     expect(home).toContain('Dados acadêmicos mantidos localmente')
     expect(home).toContain("'Não avaliado'")
     expect(home).not.toContain('averageSuccessRate ?? 100')
-    expect(app).toContain('a cota disponível foi esgotada')
-    expect(app).toContain('provedor configurado está indisponível')
+    expect(app).toContain('O limite de uso desta IA foi atingido')
+    expect(app).toContain('Esta IA não conseguiu responder neste momento.')
   })
 
   it('exposes dialogs and hidden row actions to keyboard users', () => {
@@ -73,6 +73,33 @@ describe('renderer UI safeguards', () => {
     expect(app).toContain('aria-label="Fechar notas"')
     expect(app).toContain('htmlFor="quick-notes"')
     expect(home).toContain('focus-visible:opacity-100')
+  })
+
+  it('keeps custom endpoint creation model-free and authentication optional', () => {
+    const page =
+      read(
+        'src/renderer/app/AIConnectionPage.tsx',
+      )
+
+    expect(page).toContain(
+      'Token / chave de API (opcional)',
+    )
+
+    expect(page).toContain(
+      'Deixe vazio se o servidor não exigir autenticação.',
+    )
+
+    expect(page).toMatch(
+      /providerType\s*!== 'openai-compatible'\s*&& !apiKey\.trim\(\)/,
+    )
+
+    expect(page).toContain(
+      "{providerType === 'openai' && (",
+    )
+
+    expect(page).toContain(
+      '<ProviderModelPicker',
+    )
   })
 
   it('invalidates execution evidence when source or workspace changes', () => {
@@ -154,7 +181,9 @@ describe('renderer UI safeguards', () => {
     expect(panel).not.toContain('Versão anterior')
     expect(panel).toContain('Excluir permanentemente')
     expect(read('src/renderer/app/App.tsx')).toContain('refreshAcademicProjections')
-    expect(read('src/renderer/app/App.tsx')).toContain('replanWeek: () => window.coach.planning.replanWeek()')
+    expect(read('src/renderer/app/App.tsx')).toContain('replanWeek: async () =>')
+    expect(read('src/renderer/app/App.tsx')).toContain('await window.coach.planning.replanWeek()')
+    expect(read('src/renderer/app/App.tsx')).toContain('return window.coach.planning.getWeeklyPlan()')
     expect(read('src/renderer/app/App.tsx')).toContain('setWorkspaces(snapshot.workspaces); setPriorities(snapshot.priorities); setSchedule(snapshot.schedule)')
     expect(panel).not.toMatch(/Vida acadêmica|Fato|Evento|Histórico|Ver histórico/)
     expect(panel).not.toMatch(/mastery|domínio|evidência/i)

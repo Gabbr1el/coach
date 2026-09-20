@@ -139,6 +139,7 @@ export const providerConfigurations = sqliteTable(
       sql`${table.providerId} in (
         'openai',
         'gemini',
+        'github-copilot',
         'anthropic',
         'omniroute',
         'openai-compatible',
@@ -190,7 +191,7 @@ export const providerConfigurations = sqliteTable(
       'provider_configurations_base_url_check',
       sql`
         (
-          ${table.providerId} in ('openai', 'gemini', 'anthropic')
+          ${table.providerId} in ('openai', 'gemini', 'github-copilot', 'anthropic')
           and ${table.baseUrl} is null
         )
         or

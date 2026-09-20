@@ -5,11 +5,30 @@ export const PROVIDER_CHANNELS = {
   listAccounts:
     'provider:list-accounts',
 
+  listAvailableModels:
+    'provider:list-available-models',
+
+  refreshHealth:
+    'provider:refresh-health',
+
+  checkActiveFunctionalHealth:
+    'provider:check-active-functional-health',
+
   configureOpenAI:
     'provider:configure-openai',
 
   configureCompatible:
     'provider:configure-compatible',
+
+  connectGeminiOAuth:
+    'provider:connect-gemini-oauth',
+
+  beginGitHubCopilotOAuth:
+    'provider:begin-github-copilot-oauth',
+
+  completeGitHubCopilotOAuth:
+    'provider:complete-github-copilot-oauth',
+
 
   selectAccount:
     'provider:select-account',

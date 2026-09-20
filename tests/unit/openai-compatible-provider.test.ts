@@ -28,6 +28,63 @@ describe('OpenAICompatibleProvider', () => {
     await expect(provider.testConnection()).resolves.toBeUndefined()
   })
 
+  it('omits Authorization when the API key is empty', async () => {
+    const headersSeen: Headers[] = []
+
+    const compatible =
+      new OpenAICompatibleProvider(
+        'openai-compatible',
+        'Sem autenticação',
+        'https://route.example/v1',
+        '',
+        '',
+        async (_input, init) => {
+          headersSeen.push(
+            new Headers(init?.headers),
+          )
+
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id:
+                    'route/first-model',
+                },
+              ],
+            }),
+            {
+              status: 200,
+              headers: {
+                'Content-Type':
+                  'application/json',
+              },
+            },
+          )
+        },
+      )
+
+    await expect(
+      compatible.listModels(),
+    ).resolves.toEqual([
+      'route/first-model',
+    ])
+
+    expect(headersSeen)
+      .toHaveLength(1)
+
+    expect(
+      headersSeen[0]
+        ?.get('Authorization'),
+    ).toBeNull()
+
+    expect(
+      headersSeen[0]
+        ?.get('Content-Type'),
+    ).toBe(
+      'application/json',
+    )
+  })
+
   it('distinguishes exhausted quota from transient rate limiting', async () => {
     const quota = new OpenAICompatibleProvider('openai-compatible', 'Route', 'https://route.example/v1', 'token', 'route/model', async () => new Response(JSON.stringify({ error: { message: 'You exceeded your current quota' } }), { status: 429 }))
     const rateLimit = new OpenAICompatibleProvider('openai-compatible', 'Route', 'https://route.example/v1', 'token', 'route/model', async () => new Response(JSON.stringify({ error: { message: 'Rate limit reached' } }), { status: 429 }))
@@ -123,4 +180,201 @@ describe('OpenAICompatibleProvider', () => {
     for await (const event of provider.streamMessage!({ messages: [{ role: 'user', content: 'Oi' }], maxOutputTokens: 20 })) events.push(event)
     expect(events).toEqual([{ type: 'text-delta', content: 'O' }, { type: 'text-delta', content: 'K' }, { type: 'completed', response: { content: 'OK', providerId: 'openai-compatible', modelId: 'route/model' } }])
   })
+
+  it('maps OmniRoute configured quota threshold to exhausted quota', async () => {
+    const provider =
+      new OpenAICompatibleProvider(
+        'omniroute',
+        'OmniRoute',
+        'http://127.0.0.1:20128/v1',
+        'omniroute',
+        'cx/gpt-5.6-luna-max',
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                message:
+                  '[codex/gpt-5.6-luna-max] All codex accounts reached configured quota threshold (reset after 19h)',
+              },
+            }),
+            {
+              status: 429,
+              headers: {
+                'Content-Type':
+                  'application/json',
+              },
+            },
+          ),
+      )
+
+    await expect(
+      provider.sendMessage({
+        messages: [
+          {
+            role: 'user',
+            content: 'Oi',
+          },
+        ],
+        maxOutputTokens: 20,
+      }),
+    ).rejects.toMatchObject({
+      code: 'INSUFFICIENT_QUOTA',
+    })
+  })
+
+
+  it('uses the streaming error body to identify OmniRoute quota exhaustion', async () => {
+    const provider =
+      new OpenAICompatibleProvider(
+        'omniroute',
+        'OmniRoute',
+        'http://127.0.0.1:20128/v1',
+        'omniroute',
+        'cx/gpt-5.6-luna-max',
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: {
+                message:
+                  'All codex accounts reached configured quota threshold',
+              },
+            }),
+            {
+              status: 429,
+              headers: {
+                'Content-Type':
+                  'application/json',
+              },
+            },
+          ),
+      )
+
+    const consume = async () => {
+      for await (
+        const _event
+        of provider.streamMessage!({
+          messages: [
+            {
+              role: 'user',
+              content: 'Oi',
+            },
+          ],
+          maxOutputTokens: 20,
+        })
+      ) {
+        // Nenhum evento é esperado.
+      }
+    }
+
+    await expect(
+      consume(),
+    ).rejects.toMatchObject({
+      code: 'INSUFFICIENT_QUOTA',
+    })
+  })
+
+
+  it('rejects an OmniRoute Antigravity retired-model message returned with HTTP 200', async () => {
+    const provider =
+      new OpenAICompatibleProvider(
+        'omniroute',
+        'OmniRoute',
+        'http://127.0.0.1:20128/v1',
+        'omniroute',
+        'antigravity/gemini-3.5-flash-extra-low',
+        async () =>
+          new Response(
+            JSON.stringify({
+              output_text:
+                'Gemini 3.5 Flash is no longer available. Please switch to Gemini 3.7 Flash in the latest version of Antigravity.',
+            }),
+            {
+              status: 200,
+              headers: {
+                'Content-Type':
+                  'application/json',
+              },
+            },
+          ),
+      )
+
+    await expect(
+      provider.sendMessage({
+        messages: [
+          {
+            role: 'user',
+            content: 'Oi',
+          },
+        ],
+        maxOutputTokens: 20,
+      }),
+    ).rejects.toMatchObject({
+      code: 'MODEL_UNAVAILABLE',
+    })
+  })
+
+
+  it('does not leak the OmniRoute retired-model message through streaming deltas', async () => {
+    const encoder =
+      new TextEncoder()
+
+    const stream =
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              'data: {"choices":[{"delta":{"content":"Gemini 3.5 Flash is no longer available. "}}]}\n\n'
+              + 'data: {"choices":[{"delta":{"content":"Please switch to Gemini 3.7 Flash in the latest version of Antigravity."}}]}\n\n'
+              + 'data: [DONE]\n\n',
+            ),
+          )
+
+          controller.close()
+        },
+      })
+
+    const provider =
+      new OpenAICompatibleProvider(
+        'omniroute',
+        'OmniRoute',
+        'http://127.0.0.1:20128/v1',
+        'omniroute',
+        'antigravity/gemini-3.5-flash-extra-low',
+        async () =>
+          new Response(
+            stream,
+            {
+              status: 200,
+            },
+          ),
+      )
+
+    const events: unknown[] = []
+
+    const consume = async () => {
+      for await (
+        const event
+        of provider.streamMessage!({
+          messages: [
+            {
+              role: 'user',
+              content: 'Oi',
+            },
+          ],
+          maxOutputTokens: 20,
+        })
+      ) {
+        events.push(event)
+      }
+    }
+
+    await expect(
+      consume(),
+    ).rejects.toMatchObject({
+      code: 'MODEL_UNAVAILABLE',
+    })
+
+    expect(events).toEqual([])
+  })
+
 })

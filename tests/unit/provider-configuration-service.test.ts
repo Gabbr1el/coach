@@ -989,6 +989,50 @@ describe('ProviderConfigurationService account lifecycle', () => {
     })
   })
 
+  it('keeps a persisted account disabled when its credential cannot be restored', async () => {
+    const repository =
+      new MemoryConfigurationRepository()
+
+    repository.configuration = {
+      id: '00000000-0000-4000-8000-000000000030',
+      providerId: 'openai',
+      displayName: 'OpenAI',
+      label: 'OpenAI',
+      baseUrl: null,
+      model: 'gpt-test',
+      secretReference: 'missing-secret',
+      isEnabled: false,
+      isActive: false,
+      createdAt: 1,
+      updatedAt: 1,
+    }
+
+    const service =
+      new ProviderConfigurationService(
+        repository,
+        new MemoryVault(true),
+        new AIProviderManager(),
+        openAIProvider,
+        compatibleProvider,
+      )
+
+    await expect(
+      service.setAccountEnabled(
+        repository.configuration.id,
+        true,
+      ),
+    ).rejects.toThrow(
+      'Provider credential not found',
+    )
+
+    expect(
+      repository.configuration,
+    ).toMatchObject({
+      isEnabled: false,
+      isActive: false,
+    })
+  })
+
   it('edits persisted account metadata without touching the stored credential', async () => {
     const repository =
       new MemoryConfigurationRepository()

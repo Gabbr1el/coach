@@ -1964,10 +1964,76 @@ export class ProviderConfigurationService {
           return this.getStatus()
         }
 
+        if (enabled) {
+          const existing =
+            await this.repository.findById(
+              accountId,
+            )
+
+          if (!existing) {
+            throw new Error(
+              'Provider account not found',
+            )
+          }
+
+          if (!this.vault.isAvailable()) {
+            throw new Error(
+              'Secure operating-system credential storage is unavailable',
+            )
+          }
+
+          const secret =
+            await this.vault.get(
+              existing.secretReference,
+            )
+
+          if (
+            secret === null
+            || (
+              existing.providerId
+                !== 'openai-compatible'
+              && !secret
+            )
+          ) {
+            throw new Error(
+              'Provider credential not found',
+            )
+          }
+
+          const provider =
+            this.createProviderForConfiguration(
+              {
+                ...existing,
+                isEnabled: true,
+              },
+              secret,
+            )
+
+          const configuration =
+            await this.repository.setEnabled(
+              accountId,
+              true,
+              this.now(),
+            )
+
+          if (!configuration) {
+            throw new Error(
+              'Provider account not found',
+            )
+          }
+
+          this.manager.replace(
+            provider,
+            accountId,
+          )
+
+          return this.getStatus()
+        }
+
         const configuration =
           await this.repository.setEnabled(
             accountId,
-            enabled,
+            false,
             this.now(),
           )
 
@@ -1977,73 +2043,29 @@ export class ProviderConfigurationService {
           )
         }
 
-        if (!enabled) {
-          const wasActive =
-            this.manager
-              .getActiveRegistrationId()
-            === accountId
+        const wasActive =
+          this.manager
+            .getActiveRegistrationId()
+          === accountId
 
-          this.manager.remove(
-            accountId,
-          )
-
-          this.healthByAccount.delete(
-            accountId,
-          )
-
-          if (wasActive) {
-            /*
-             * A configuração já foi desativada no repositório.
-             * Encontrar uma substituta não faz parte do sucesso
-             * da operação de desativação.
-             */
-            await this.ensureActiveProvider(
-              false,
-            ).catch(() => {})
-          }
-
-          return this.getStatus()
-        }
-
-        /*
-         * Ao habilitar uma conta persistida, reconstruímos o provider
-         * a partir da credencial segura. Ela fica disponível para uso,
-         * mas não vira principal automaticamente.
-         */
-        if (!this.vault.isAvailable()) {
-          throw new Error(
-            'Secure operating-system credential storage is unavailable',
-          )
-        }
-
-        const secret =
-          await this.vault.get(
-            configuration.secretReference,
-          )
-
-        if (
-          secret === null
-          || (
-            configuration.providerId
-              !== 'openai-compatible'
-            && !secret
-          )
-        ) {
-          throw new Error(
-            'Provider credential not found',
-          )
-        }
-
-        const provider =
-          this.createProviderForConfiguration(
-            configuration,
-            secret,
-          )
-
-        this.manager.replace(
-          provider,
+        this.manager.remove(
           accountId,
         )
+
+        this.healthByAccount.delete(
+          accountId,
+        )
+
+        if (wasActive) {
+          /*
+           * A configuração já foi desativada no repositório.
+           * Encontrar uma substituta não faz parte do sucesso
+           * da operação de desativação.
+           */
+          await this.ensureActiveProvider(
+            false,
+          ).catch(() => {})
+        }
 
         return this.getStatus()
       },

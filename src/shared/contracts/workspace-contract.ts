@@ -35,15 +35,62 @@ export interface WorkspaceProvisioningState { readonly workspaceId: string; read
 
 export type CreateWorkspaceInput = z.infer<typeof createWorkspaceInputSchema>
 
+export interface PriorSubjectMemory {
+  readonly subject: string
+  readonly outcomes: readonly string[]
+  readonly goals: readonly string[]
+  readonly prerequisites: readonly string[]
+  readonly memory: string | null
+}
+
+export interface WorkspaceContinuationRecommendation {
+  readonly id: string
+  readonly predecessorId: string
+  readonly suggestedName: string
+  readonly objective: string
+  readonly rationale: string
+  readonly action: 'create' | 'open_existing'
+  readonly existingWorkspaceId: string | null
+  readonly context: readonly PriorSubjectMemory[]
+}
+
 export interface Workspace {
   readonly id: string
   readonly name: string
   readonly objective: string
-  readonly status: 'active' | 'archived'
+  readonly status: 'active' | 'completed' | 'archived'
   readonly createdAt: number
   readonly updatedAt: number
   readonly lastOpenedAt: number | null
   readonly archivedAt: number | null
+  readonly completedAt?: number | null
+  readonly equivalenceKey?: string
+  readonly meaningfulDistinction?: string | null
+  readonly predecessorId?: string | null
+  readonly confirmedAt?: number | null
+}
+
+export type WorkspaceRepairConflictReason = 'multiple_meaningful_evidence'
+
+export interface WorkspaceRepairConflictSummary {
+  readonly reason: WorkspaceRepairConflictReason
+  readonly relation: 'preserved_duplicate_of_canonical'
+  readonly canonicalWorkspace: Pick<Workspace, 'id' | 'name' | 'status'>
+}
+
+export interface WorkspaceRepairConflictDetail extends WorkspaceRepairConflictSummary {
+  readonly evidenceWorkspaceIds: readonly string[]
+  readonly relatedWorkspaces: readonly Pick<Workspace, 'id' | 'name' | 'status'>[]
+}
+
+export interface WorkspaceHistoryDetail {
+  readonly workspace: Workspace
+  readonly repairConflict: WorkspaceRepairConflictDetail | null
+  readonly roadmap: { readonly title: string; readonly modules: readonly { readonly title: string; readonly status: string; readonly topics: readonly string[] }[] } | null
+  readonly materials: readonly { readonly id: string; readonly name: string; readonly status: string; readonly pageCount: number }[]
+  readonly progress: { readonly completedTopics: number; readonly totalTopics: number; readonly evidenceEvents: number }
+  readonly performance: { readonly attempts: number; readonly successfulAttempts: number; readonly focusSeconds: number }
+  readonly sessions: readonly { readonly startedAt: number; readonly endedAt: number | null; readonly focusSeconds: number; readonly status: string }[]
 }
 
 export interface WorkspaceSummary {
@@ -52,11 +99,18 @@ export interface WorkspaceSummary {
   readonly objective: string
   readonly updatedAt: number
   readonly lastOpenedAt: number | null
+  readonly status?: Workspace['status']
+  readonly completedAt?: number | null
+  readonly archivedAt?: number | null
   readonly provisioning?: WorkspaceProvisioningState | null
+  readonly continuationRecommendation?: WorkspaceContinuationRecommendation | null
+  readonly repairConflict?: WorkspaceRepairConflictSummary | null
 }
 
 export interface WorkspaceApi {
   list(): Promise<WorkspaceSummary[]>
+  listHistory(): Promise<WorkspaceSummary[]>
+  getHistoryDetail(id: string): Promise<WorkspaceHistoryDetail | null>
   create(input: CreateWorkspaceInput): Promise<Workspace>
   prepareDraft(input: CreateWorkspaceInput): Promise<Workspace>
   discardDraft(id: string): Promise<void>
@@ -64,4 +118,6 @@ export interface WorkspaceApi {
   retryProvisioning(id: string): Promise<WorkspaceProvisioningState>
   open(id: string): Promise<Workspace | null>
   archive(id: string): Promise<void>
+  acceptContinuation(id: string): Promise<Workspace>
+  declineContinuation(id: string): Promise<void>
 }

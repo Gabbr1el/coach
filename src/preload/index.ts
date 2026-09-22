@@ -74,6 +74,8 @@ const api: CoachDesktopApi = {
   },
   workspace: {
     list: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.list),
+    listHistory: () => ipcRenderer.invoke(WORKSPACE_CHANNELS.listHistory),
+    getHistoryDetail: (id) => ipcRenderer.invoke(WORKSPACE_CHANNELS.getHistoryDetail, id),
     create: (input) => ipcRenderer.invoke(WORKSPACE_CHANNELS.create, input),
     prepareDraft: (input) => ipcRenderer.invoke(WORKSPACE_CHANNELS.prepareDraft, input),
     discardDraft: (id) => ipcRenderer.invoke(WORKSPACE_CHANNELS.discardDraft, id),
@@ -81,6 +83,8 @@ const api: CoachDesktopApi = {
     retryProvisioning: (id) => ipcRenderer.invoke(WORKSPACE_CHANNELS.retryProvisioning, id),
     open: (id) => ipcRenderer.invoke(WORKSPACE_CHANNELS.open, id),
     archive: (id) => ipcRenderer.invoke(WORKSPACE_CHANNELS.archive, id),
+    acceptContinuation: (id) => ipcRenderer.invoke(WORKSPACE_CHANNELS.acceptContinuation, id),
+    declineContinuation: (id) => ipcRenderer.invoke(WORKSPACE_CHANNELS.declineContinuation, id),
   },
   conversation: {
     listHomeMessages: () => ipcRenderer.invoke(CONVERSATION_CHANNELS.listHomeMessages),

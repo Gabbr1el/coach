@@ -28,6 +28,8 @@ export interface PlanningRepository {
   findWeeklyPlan?(weekStart: string, timezone: string): { id: string; revision: number; generatedAt: number; items: ExistingWeeklyItem[] } | null
   listWeeklyPlanningTopics?(now: number): WeeklyPlanningTopic[]
   listWeeklyPlanningReviews?(now: number): WeeklyPlanningReview[]
+  listPlannedSourceKeys?(excludingWeekStart: string, timezone: string, pendingOnOrAfter: string): Set<string>
+  listMovablePendingItems?(beforeDate: string, timezone: string): ExistingWeeklyItem[]
   listWeeklyAvailability?(now: number): Array<{ weekday: number; minutes: number }>
   saveWeeklyPlan?(input: { id: string; weekStart: string; timezone: string; revision: number; generatedAt: number; items: ExistingWeeklyItem[] }): void
   ensureAuthoritativeNextStudyItem?(workspaceId: string, now: number, timezone: string): boolean
@@ -256,14 +258,7 @@ export class PlanningService {
           ) < today
         )
 
-      if (
-        needsCurrentRefresh
-        || (
-          !found
-          && weekStart
-            > currentWeekStart
-        )
-      ) {
+      if (needsCurrentRefresh) {
         this.replanWeekStarting(
           weekStart,
           timezone,
@@ -513,7 +508,7 @@ export class PlanningService {
     if (!existing) return this.replanWeek(timezone)
     const availability = new Map(this.repository.listWeeklyAvailability(now).map((item) => [item.weekday, item.minutes]))
     const dayBudgets = new Map((this.repository.listTodayBudgets?.(weekStart, timezone) ?? []).map((item) => [item.dateKey, item.minutes]))
-    const proposed = distributeWeeklyPlan({ weekStart, today, timezone, now, availability, dayBudgets, topics: this.repository.listWeeklyPlanningTopics(now), reviews: this.repository.listWeeklyPlanningReviews?.(now) ?? [], existing: existing.items, createId: () => crypto.randomUUID() })
+    const proposed = distributeWeeklyPlan({ weekStart, today, timezone, now, availability, dayBudgets, topics: this.repository.listWeeklyPlanningTopics(now), reviews: this.repository.listWeeklyPlanningReviews?.(now) ?? [], existing: existing.items, blockedSourceKeys: this.repository.listPlannedSourceKeys?.(weekStart, timezone, today), createId: () => crypto.randomUUID() })
     const items = [...existing.items.filter((item) => item.workspaceId !== workspaceId), ...proposed.filter((item) => item.workspaceId === workspaceId)].sort((a, b) => a.dateKey.localeCompare(b.dateKey) || a.position - b.position)
     const revision = existing.revision + 1
     this.repository.saveWeeklyPlan({ id: existing.id, weekStart, timezone, revision, generatedAt: now, items })
@@ -608,7 +603,8 @@ export class PlanningService {
       )
 
     const previous =
-      existing?.items
+      [
+        ...(existing?.items
       ?? (
         weekStart
           === currentWeekStart
@@ -620,7 +616,9 @@ export class PlanningService {
               ?? []
             )
           : []
-      )
+      )),
+        ...(this.repository.listMovablePendingItems?.(planningToday, timezone) ?? []),
+      ].filter((item, index, all) => all.findIndex((candidate) => candidate.sourceKey === item.sourceKey) === index)
 
     const reviews =
       this.repository
@@ -642,6 +640,14 @@ export class PlanningService {
         dayBudgets,
         topics,
         reviews,
+
+        blockedSourceKeys:
+          this.repository
+            .listPlannedSourceKeys?.(
+              weekStart,
+              timezone,
+              planningToday,
+            ),
 
         existing:
           previous,

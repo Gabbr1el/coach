@@ -31,7 +31,8 @@ function database(): CoachDatabase {
 }
 
 function workspace(db: CoachDatabase, id = '00000000-0000-4000-8000-000000000001') {
-  db.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,'C','Ponteiros','active',1,1)").run(id)
+  const hasConfirmedAt = (db.sqlite.pragma('table_info(workspaces)') as Array<{ name: string }>).some((column) => column.name === 'confirmed_at')
+  db.sqlite.prepare(hasConfirmedAt ? "INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at) VALUES (?,'C','Ponteiros','active',1,1,1)" : "INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,'C','Ponteiros','active',1,1)").run(id)
   return id
 }
 

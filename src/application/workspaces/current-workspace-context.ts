@@ -1,6 +1,6 @@
 import type { ObserverState } from '../../shared/contracts/observer-contract'
 import type { StudyWorkspaceState } from '../../shared/contracts/study-workspace-contract'
-import type { Workspace } from '../../shared/contracts/workspace-contract'
+import type { PriorSubjectMemory, Workspace } from '../../shared/contracts/workspace-contract'
 import type { AcademicSubjectContext, RelatedAcademicContext } from '../../shared/contracts/academic-subject-context-contract'
 
 export interface CurrentWorkspaceContext {
@@ -12,6 +12,7 @@ export interface CurrentWorkspaceContext {
   readonly memory: string | null
   readonly academicSubject?: AcademicSubjectContext | null
   readonly relatedAcademicSubjects?: Array<AcademicSubjectContext & { relation: RelatedAcademicContext['relation'] }>
+  readonly priorSubjectMemory?: readonly PriorSubjectMemory[]
 }
 
 export interface CurrentWorkspaceContextDependencies {
@@ -22,6 +23,7 @@ export interface CurrentWorkspaceContextDependencies {
   readonly getAcademicSubjectContext?: (subject: string) => AcademicSubjectContext | null
   readonly getPrimaryAcademicContext?: (workspaceId: string) => AcademicSubjectContext | null
   readonly getRelatedAcademicContexts?: (workspaceId: string) => Array<AcademicSubjectContext & { relation: RelatedAcademicContext['relation'] }>
+  readonly getPriorSubjectMemory?: (workspaceId: string, limit: number) => readonly PriorSubjectMemory[]
 }
 
 export class CurrentWorkspaceContextService {
@@ -40,6 +42,7 @@ export class CurrentWorkspaceContextService {
       memory: this.dependencies.getWorkspaceMemory(workspaceId),
       academicSubject: this.dependencies.getPrimaryAcademicContext?.(workspaceId) ?? this.dependencies.getAcademicSubjectContext?.(workspace.name) ?? null,
       relatedAcademicSubjects: this.dependencies.getRelatedAcademicContexts?.(workspaceId) ?? [],
+      priorSubjectMemory: this.dependencies.getPriorSubjectMemory?.(workspaceId, 3) ?? [],
     }
   }
 }

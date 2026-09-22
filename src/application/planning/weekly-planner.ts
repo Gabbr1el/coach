@@ -18,7 +18,7 @@ export function weekStartKey(value: number, timezone: string): string { return w
 
 function activityTypes(topic: WeeklyPlanningTopic): Array<'introduction' | 'review' | 'exercise'> {
   if (topic.conceptMemory) return topic.evidenceCount > 0 || topic.conceptMemory.performance !== 'unknown' ? ['exercise'] : ['introduction', 'exercise']
-  if (topic.progress === 'IN_PROGRESS' || topic.needsReview || topic.difficultyLevel === 'high') return ['review', 'exercise']
+  if (topic.progress === 'IN_PROGRESS' || topic.needsReview || topic.difficultyLevel === 'high') return ['exercise']
   if (topic.evidenceCount > 0 || topic.masteryEstimate !== null) return ['exercise']
   return ['introduction', 'exercise']
 }
@@ -49,13 +49,14 @@ function reason(topic: WeeklyPlanningTopic): string {
   return 'Continuidade da Trilha conforme progresso observado.'
 }
 
-export function distributeWeeklyPlan(input: { weekStart: string; today: string; timezone: string; now: number; availability: Map<number, number>; dayBudgets?: Map<string, number>; topics: WeeklyPlanningTopic[]; reviews?: WeeklyPlanningReview[]; existing: ExistingWeeklyItem[]; createId(): string }): WeeklyPlanDraftItem[] {
-  const activeWorkspaceIds = new Set(input.topics.map((topic) => topic.workspaceId))
+export function distributeWeeklyPlan(input: { weekStart: string; today: string; timezone: string; now: number; availability: Map<number, number>; dayBudgets?: Map<string, number>; topics: WeeklyPlanningTopic[]; reviews?: WeeklyPlanningReview[]; existing: ExistingWeeklyItem[]; blockedSourceKeys?: ReadonlySet<string>; createId(): string }): WeeklyPlanDraftItem[] {
+  const reviews = (input.reviews ?? []).filter((review) => review.nextReviewAt !== null && review.nextReviewAt <= input.now)
+  const activeWorkspaceIds = new Set([...input.topics.map((topic) => topic.workspaceId), ...reviews.map((review) => review.workspaceId)])
 
   const preserved = input.existing.filter((item) => {
-    if (item.workspaceArchived === true && item.workspaceName?.trim()) return true
+    if (item.workspaceArchived === true) return item.status === 'completed' && item.dateKey < input.today && Boolean(item.workspaceName?.trim())
     if (!activeWorkspaceIds.has(item.workspaceId)) return false
-    return item.dateKey < input.today || item.status !== 'pending'
+    return item.status !== 'pending'
   })
 
   const preservedKeys = new Set(preserved.map((item) => item.sourceKey))
@@ -64,7 +65,6 @@ export function distributeWeeklyPlan(input: { weekStart: string; today: string; 
       .filter((item) =>
         activeWorkspaceIds.has(item.workspaceId)
         && item.status === 'pending'
-        && item.dateKey >= input.today
       )
       .map((item) => [item.sourceKey, item]),
   )
@@ -84,7 +84,7 @@ export function distributeWeeklyPlan(input: { weekStart: string; today: string; 
   }
   for (const topic of candidates) for (const activityType of activityTypes(topic)) {
     const sourceKey = `${topic.workspaceId}:${topic.topicId}:${activityType}`
-    if (preservedKeys.has(sourceKey) || generated.some((item) => item.sourceKey === sourceKey)) continue
+    if (input.blockedSourceKeys?.has(sourceKey) || preservedKeys.has(sourceKey) || generated.some((item) => item.sourceKey === sourceKey)) continue
     const preferred = preferredDuration(topic, activityType)
     let selected: { dateKey: string; duration: number } | null = null
     for (let offset = 0; offset < 7; offset++) {
@@ -101,17 +101,17 @@ export function distributeWeeklyPlan(input: { weekStart: string; today: string; 
     generated.push({ id: old?.id ?? input.createId(), sourceKey, workspaceId: topic.workspaceId, workspaceName: topic.workspaceName, dateKey: selected.dateKey, title, durationMinutes: selected.duration, position: 0, status: 'pending', moduleId: topic.moduleId, topicId: topic.topicId, activityType, scheduledStartMinutes: 0, reason: reason(topic) })
     dayUsage.set(selected.dateKey, (dayUsage.get(selected.dateKey) ?? 0) + selected.duration)
   }
-  for (const review of [...(input.reviews ?? [])].sort((a, b) => (a.nextReviewAt ?? Number.MAX_SAFE_INTEGER) - (b.nextReviewAt ?? Number.MAX_SAFE_INTEGER) || a.conceptId.localeCompare(b.conceptId))) {
-    const sourceKey = `${review.workspaceId}:concept:${review.conceptId}:review`
-    if (preservedKeys.has(sourceKey) || generated.some((item) => item.sourceKey === sourceKey)) continue
+  for (const review of reviews.sort((a, b) => a.nextReviewAt! - b.nextReviewAt! || a.conceptId.localeCompare(b.conceptId))) {
+    const sourceKey = `${review.workspaceId}:concept:${review.conceptId}:review:${review.nextReviewAt}`
+    if (input.blockedSourceKeys?.has(sourceKey) || preservedKeys.has(sourceKey) || generated.some((item) => item.sourceKey === sourceKey)) continue
     let selected: { dateKey: string; duration: number } | null = null
     for (let offset = 0; offset < 7; offset++) { const dateKey = shiftDateKey(input.weekStart, offset); if (dateKey < input.today) continue; const available = input.dayBudgets?.get(dateKey) ?? input.availability.get(weekdayForDateKey(dateKey)) ?? 120; const free = available - (dayUsage.get(dateKey) ?? 0); if (free >= 15) { selected = { dateKey, duration: Math.min(20, free) }; break } }
     if (!selected) continue
     const old = reusable.get(sourceKey)
-    generated.push({ id: old?.id ?? input.createId(), sourceKey, workspaceId: review.workspaceId, workspaceName: review.workspaceName, dateKey: selected.dateKey, title: `${review.conceptName} / revisão`, durationMinutes: selected.duration, position: 0, status: 'pending', moduleId: null, topicId: null, activityType: 'review', scheduledStartMinutes: 0, reason: review.performance === 'struggling' ? 'Revisão por falhas recentes na memória do conceito.' : review.retention === 'fragile' ? 'Revisão por retenção frágil.' : 'Revisão de manutenção vencida.' })
+    generated.push({ id: old?.id ?? input.createId(), sourceKey, workspaceId: review.workspaceId, workspaceName: review.workspaceName, dateKey: selected.dateKey, title: `${review.conceptName} / REVIEW_DUE`, durationMinutes: selected.duration, position: 0, status: 'pending', moduleId: null, topicId: null, activityType: 'review', scheduledStartMinutes: 0, reason: review.performance === 'struggling' ? 'REVIEW_DUE por falhas recentes na memória do conceito.' : review.retention === 'fragile' ? 'REVIEW_DUE por retenção frágil.' : 'REVIEW_DUE de manutenção vencida.' })
     dayUsage.set(selected.dateKey, (dayUsage.get(selected.dateKey) ?? 0) + selected.duration)
   }
-  const names = new Map(input.topics.map((topic) => [topic.workspaceId, topic.workspaceName]))
+  const names = new Map([...input.topics.map((topic) => [topic.workspaceId, topic.workspaceName] as const), ...reviews.map((review) => [review.workspaceId, review.workspaceName] as const)])
   const combined: WeeklyPlanDraftItem[] = [
     ...preserved.map((item) => ({
       ...item,

@@ -12,8 +12,8 @@ export class InitialProvisioningCoordinator {
 
   initialize(workspaceId: string): void {
     const now = this.now()
-    const workspace = this.database.sqlite.prepare("SELECT status FROM workspaces WHERE id=?").get(workspaceId) as { status: string } | undefined
-    if (workspace?.status !== 'active') {
+    const workspace = this.database.sqlite.prepare("SELECT status,confirmed_at AS confirmedAt FROM workspaces WHERE id=?").get(workspaceId) as { status: string; confirmedAt: number | null } | undefined
+    if (workspace?.status !== 'active' || workspace.confirmedAt === null) {
       this.repository.invalidateArchivedWorkspace?.(workspaceId, now)
       return
     }
@@ -143,7 +143,9 @@ export class InitialProvisioningCoordinator {
   }
   reconcileWorkspace(workspaceId: string): void { this.initialize(workspaceId) }
   reconcileAll(): void {
-    const rows = this.database.sqlite.prepare("SELECT w.id FROM workspaces w JOIN workspace_provisioning p ON p.workspace_id=w.id WHERE w.status='active' AND p.status<>'draft' ORDER BY COALESCE(w.last_opened_at,w.updated_at) DESC").all() as Array<{ id: string }>
+    const now = this.now()
+    this.database.sqlite.prepare("INSERT OR IGNORE INTO workspace_provisioning (workspace_id,status,stage,material_ids_json,attempt_count,created_at,started_at,stage_updated_at) SELECT id,'queued','workspace','[]',0,?,?,? FROM workspaces WHERE status='active' AND confirmed_at IS NOT NULL").run(now, now, now)
+    const rows = this.database.sqlite.prepare("SELECT w.id FROM workspaces w JOIN workspace_provisioning p ON p.workspace_id=w.id WHERE w.status='active' AND w.confirmed_at IS NOT NULL AND p.status<>'draft' ORDER BY COALESCE(w.last_opened_at,w.updated_at) DESC").all() as Array<{ id: string }>
     this.startupQueue = rows.map((row) => row.id)
     this.reconcileStartupBatch()
   }

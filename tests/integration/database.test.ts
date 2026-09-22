@@ -68,10 +68,47 @@ function migrationsThrough0056(): string {
   return directory
 }
 
+function migrationsThrough0063(): string {
+  const directory = mkdtempSync(join(tmpdir(), 'coach-migrations-0063-'))
+  temporaryDirectories.push(directory)
+  cpSync(migrationsFolder, directory, { recursive: true })
+  const journalPath = join(directory, 'meta/_journal.json')
+  const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: Array<{ idx: number }> }
+  journal.entries = journal.entries.filter((entry) => entry.idx <= 63)
+  writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`)
+  return directory
+}
+
+function migrationsThrough0068(): string {
+  const directory = mkdtempSync(join(tmpdir(), 'coach-migrations-0068-'))
+  temporaryDirectories.push(directory)
+  cpSync(migrationsFolder, directory, { recursive: true })
+  const journalPath = join(directory, 'meta/_journal.json')
+  const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: Array<{ idx: number }> }
+  journal.entries = journal.entries.filter((entry) => entry.idx <= 68)
+  writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`)
+  return directory
+}
+
 describe('Coach database migrations', () => {
   it('keeps journal timestamps strictly increasing so upgrades cannot skip migrations', () => {
     const entries = (JSON.parse(readFileSync(join(migrationsFolder, 'meta/_journal.json'), 'utf8')) as { entries: Array<{ when: number }> }).entries
     expect(entries.every((entry, index) => index === 0 || entry.when > entries[index - 1]!.when)).toBe(true)
+  })
+  it('does not infer per-workspace terminal consolidation from a shared subject timestamp', () => {
+    const databasePath = createDatabasePath()
+    let database = openCoachDatabase({ databasePath, migrationsFolder: migrationsThrough0068() })
+    database.sqlite.prepare("INSERT INTO academic_subject_contexts (subject,declared_knowledge_json,declared_difficulties_json,goals_json,source_evidence_json,observed_strengths_json,observed_difficulties_json,misconceptions_json,mastered_concepts_json,review_concepts_json,last_consolidated_at,created_at,updated_at) VALUES ('C','[]','[]','[]','[]','[]','[]','[]','[]','[]',100,1,100)").run()
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at,completed_at) VALUES ('terminal-a','C','A','completed',1,1,10,10),('terminal-b','C','B','completed',1,1,20,20)").run()
+    database.sqlite.prepare("INSERT INTO workspace_learning_overrides (workspace_id,subject,declared_knowledge_json,declared_difficulties_json,goals_json,created_at,updated_at) VALUES ('terminal-a','C','[\"Ponteiros\"]','[]','[]',1,1),('terminal-b','C','[\"Memória\"]','[]','[]',1,1)").run()
+    database.close()
+
+    database = openCoachDatabase({ databasePath, migrationsFolder })
+
+    const context = database.sqlite.prepare("SELECT declared_knowledge_json AS knowledge FROM academic_subject_contexts WHERE subject='C'").get() as { knowledge: string }
+    expect(JSON.parse(context.knowledge)).toEqual(['Ponteiros', 'Memória'])
+    expect(database.sqlite.prepare('SELECT workspace_id AS workspaceId FROM workspace_terminal_memory ORDER BY workspace_id').all()).toEqual([{ workspaceId: 'terminal-a' }, { workspaceId: 'terminal-b' }])
+    database.close()
   })
   it('repairs legacy prediction labels without inventing expected output', () => {
     const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
@@ -389,13 +426,16 @@ describe('Coach database migrations', () => {
       { name: 'workspace_academic_contexts' },
       { name: 'workspace_content_authority' },
       { name: 'workspace_content_revisions' },
+      { name: 'workspace_continuation_decisions' },
       { name: 'workspace_learning_overrides' },
       { name: 'workspace_learning_path_state' },
       { name: 'workspace_memories' },
       { name: 'workspace_projects' },
       { name: 'workspace_provisioning' },
+      { name: 'workspace_repair_conflicts' },
       { name: 'workspace_study_preferences' },
       { name: 'workspace_study_states' },
+      { name: 'workspace_terminal_memory' },
       { name: 'workspaces' },
     ])
     expect(sqlite.prepare('SELECT COUNT(*) AS count FROM __drizzle_migrations').get()).toEqual({ count: currentJournalMigrationCount })
@@ -431,7 +471,7 @@ describe('Coach database migrations', () => {
 
   it('uses identical effective availability and complete active deadlines for read projections', () => {
     const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const now = Date.now(); const workspaceId = crypto.randomUUID(); const repository = new DrizzlePlanningRepository(database)
-    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,?,?,'active',?,?)").run(workspaceId, 'Redes', 'Estudar redes', now, now)
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at) VALUES (?,?,?,'active',?,?,?)").run(workspaceId, 'Redes', 'Estudar redes', now, now, now)
     repository.setAvailability(5, 60, now - 10)
     database.sqlite.prepare("INSERT INTO academic_life_items (id,kind,title,details,workspace_id,starts_at,ends_at,expires_at,timezone,weekday,minutes,status,share_with_ai,provenance_source,provenance_reference,replaces_id,replaced_by_id,fingerprint,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',1,'conversation',NULL,NULL,NULL,?,?,?)").run(crypto.randomUUID(), 'availability', 'Sexta', '', null, null, null, null, 'UTC', 5, 90, 'availability-newer', now, now)
     database.sqlite.prepare('INSERT INTO study_deadlines (id,workspace_id,title,due_at,estimated_minutes,mastery_percent,completed,created_at) VALUES (?,?,?,?,?,?,0,?)').run('deadline-only', workspaceId, 'Prazo avulso', now + 86_400_000, 120, null, now)
@@ -443,7 +483,7 @@ describe('Coach database migrations', () => {
 
   it('consumes validated academic event effort metadata and keeps legacy defaults', () => {
     const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const now = Date.now(); const workspaceId = crypto.randomUUID(); const repository = new DrizzlePlanningRepository(database)
-    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,?,?,'active',?,?)").run(workspaceId, 'Redes', 'Estudar redes', now, now)
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at) VALUES (?,?,?,'active',?,?,?)").run(workspaceId, 'Redes', 'Estudar redes', now, now, now)
     const insert = (id: string, title: string, details: string) => database.sqlite.prepare("INSERT INTO academic_life_items (id,kind,title,details,workspace_id,starts_at,ends_at,expires_at,timezone,weekday,minutes,status,share_with_ai,provenance_source,provenance_reference,replaces_id,replaced_by_id,fingerprint,created_at,updated_at) VALUES (?,'event',?,?,?,NULL,?,?, 'UTC',NULL,NULL,'active',1,'conversation',NULL,NULL,NULL,?,?,?)").run(id, title, details, workspaceId, now + 86_400_000, now + 86_400_000, id, now, now)
     insert('effort', 'Prova Redes', JSON.stringify({ schema: 'academic-event/v1', eventKind: 'exam', subject: 'Redes', estimatedMinutes: 300 })); insert('legacy', 'Prova antiga', JSON.stringify({ schema: 'academic-event/v1', eventKind: 'exam', subject: 'Redes' })); insert('unsafe', 'Prova inválida', JSON.stringify({ schema: 'academic-event/v1', eventKind: 'exam', subject: 'Redes', estimatedMinutes: 100001 }))
     const efforts = new Map(repository.listPriorityInputs().map((item) => [item.title, item.estimatedMinutes])); expect(efforts.get('Prova Redes')).toBe(300); expect(efforts.get('Prova antiga')).toBe(240); expect(efforts.get('Prova inválida')).toBe(240)
@@ -452,7 +492,7 @@ describe('Coach database migrations', () => {
 
   it('keeps unlinked event effort out, then consumes 300 minutes after link and explicit replan', () => {
     const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const now = Date.now(); const workspaceId = crypto.randomUUID(); const roadmapId = crypto.randomUUID(); const moduleId = crypto.randomUUID(); const eventId = crypto.randomUUID(); const repository = new DrizzlePlanningRepository(database); const service = new PlanningService(repository, () => now)
-    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,?,?,'active',?,?)").run(workspaceId, 'Redes', 'Estudar redes', now, now)
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at) VALUES (?,?,?,'active',?,?,?)").run(workspaceId, 'Redes', 'Estudar redes', now, now, now)
     database.sqlite.prepare("INSERT INTO roadmaps (id,workspace_id,title,status,generation_kind,version,created_at,updated_at) VALUES (?,?,?,'accepted','ai_generated',1,?,?)").run(roadmapId, workspaceId, 'Redes', now, now)
     database.sqlite.prepare("INSERT INTO roadmap_modules (id,roadmap_id,title,objective,estimated_minutes,position,status,topics_json,outcomes_json,practice,completion_criteria_json,resources_json) VALUES (?,?,?,?,?,?,'active',?,?,?,?,?)").run(moduleId, roadmapId, 'Fundamentos', 'Estudar OSI', 300, 0, JSON.stringify(['OSI']), JSON.stringify(['Entender OSI']), 'Praticar', JSON.stringify(['Concluir']), '[]')
     const details = JSON.stringify({ schema: 'academic-event/v1', eventKind: 'exam', subject: 'Redes', estimatedMinutes: 300 })
@@ -467,14 +507,15 @@ describe('Coach database migrations', () => {
 
   it('persists one weekly plan across restart without duplicate work', () => {
     const databasePath = createDatabasePath(); const workspaceId = crypto.randomUUID(); let database = openCoachDatabase({ databasePath, migrationsFolder })
-    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,'C','Ponteiros','active',1,1)").run(workspaceId)
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at) VALUES (?,'C','Ponteiros','active',1,1,1)").run(workspaceId)
     database.sqlite.prepare("INSERT INTO roadmaps (id,workspace_id,title,status,generation_kind,version,created_at,updated_at) VALUES ('roadmap',?,'C','accepted','ai_generated',1,1,1)").run(workspaceId)
     database.sqlite.prepare("INSERT INTO roadmap_modules (id,roadmap_id,title,objective,estimated_minutes,position,status,topics_json,outcomes_json,practice,completion_criteria_json,resources_json) VALUES ('module','roadmap','Base','Aprender',120,1,'active','[\"Ponteiros\"]','[]','','[]','[]')").run()
     const at = Date.parse('2026-09-09T14:00:00Z'); const service = new PlanningService(new DrizzlePlanningRepository(database), () => at); const first = service.replanWeek('UTC'); expect(first.days.flatMap((day) => day.items).length).toBeGreaterThan(0); database.close()
     database = openCoachDatabase({ databasePath, migrationsFolder }); const restored = new PlanningService(new DrizzlePlanningRepository(database), () => at).getWeeklyPlan('UTC'); expect(restored.id).toBe(first.id); expect(new Set(restored.days.flatMap((day) => day.items).map((item) => item.id)).size).toBe(restored.days.flatMap((day) => day.items).length); database.close()
   })
   it('uses the explicitly current planning timezone without rewriting historical snapshots', () => { const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const at = Date.parse('2026-09-09T02:00:00Z'); const repository = new DrizzlePlanningRepository(database); const service = new PlanningService(repository, () => at); const first = service.replanWeek('America/Sao_Paulo'); const second = service.replanWeek('UTC'); expect(first.timezone).toBe('America/Sao_Paulo'); expect(second.timezone).toBe('UTC'); expect(repository.getCanonicalPlanningTimezone('fallback')).toBe('UTC'); expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM weekly_plans').get()).toEqual({ count: 2 }); database.close() })
-  it('keeps historical rows but excludes an archived workspace from the active projection after timezone change', () => { const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const id = crypto.randomUUID(); database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,'C','Ponteiros','active',1,1)").run(id); database.sqlite.prepare("INSERT INTO roadmaps (id,workspace_id,title,status,generation_kind,version,created_at,updated_at) VALUES ('tz-roadmap',?,'C','accepted','ai_generated',1,1,1)").run(id); database.sqlite.prepare("INSERT INTO roadmap_modules (id,roadmap_id,title,objective,estimated_minutes,position,status,topics_json,outcomes_json,practice,completion_criteria_json,resources_json) VALUES ('tz-module','tz-roadmap','Base','Aprender',120,1,'active','[\"Ponteiros\"]','[]','','[]','[]')").run(); const at = Date.parse('2026-09-09T14:00:00Z'); const service = new PlanningService(new DrizzlePlanningRepository(database), () => at); const first = service.replanWeek('America/Sao_Paulo'); expect(first.days.flatMap((day) => day.items).some((item) => item.workspaceId === id)).toBe(true); database.sqlite.prepare("UPDATE workspaces SET status='archived',archived_at=? WHERE id=?").run(at, id); const second = service.replanWeek('UTC'); expect(second.days.flatMap((day) => day.items).some((item) => item.workspaceId === id)).toBe(false); expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM weekly_plan_items WHERE workspace_id=?').get(id)).toMatchObject({ count: expect.any(Number) }); expect((database.sqlite.prepare('SELECT COUNT(*) AS count FROM weekly_plan_items WHERE workspace_id=?').get(id) as { count: number }).count).toBeGreaterThan(0); database.close() })
+  it('keeps historical rows but excludes an archived workspace from the active projection after timezone change', () => { const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const id = crypto.randomUUID(); database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at) VALUES (?,'C','Ponteiros','active',1,1,1)").run(id); database.sqlite.prepare("INSERT INTO roadmaps (id,workspace_id,title,status,generation_kind,version,created_at,updated_at) VALUES ('tz-roadmap',?,'C','accepted','ai_generated',1,1,1)").run(id); database.sqlite.prepare("INSERT INTO roadmap_modules (id,roadmap_id,title,objective,estimated_minutes,position,status,topics_json,outcomes_json,practice,completion_criteria_json,resources_json) VALUES ('tz-module','tz-roadmap','Base','Aprender',120,1,'active','[\"Ponteiros\"]','[]','','[]','[]')").run(); const at = Date.parse('2026-09-09T14:00:00Z'); const service = new PlanningService(new DrizzlePlanningRepository(database), () => at); const first = service.replanWeek('America/Sao_Paulo'); expect(first.days.flatMap((day) => day.items).some((item) => item.workspaceId === id)).toBe(true); database.sqlite.prepare("UPDATE workspaces SET status='archived',archived_at=? WHERE id=?").run(at, id); const second = service.replanWeek('UTC'); expect(second.days.flatMap((day) => day.items).some((item) => item.workspaceId === id)).toBe(false); expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM weekly_plan_items WHERE workspace_id=?').get(id)).toMatchObject({ count: expect.any(Number) }); expect((database.sqlite.prepare('SELECT COUNT(*) AS count FROM weekly_plan_items WHERE workspace_id=?').get(id) as { count: number }).count).toBeGreaterThan(0); database.close() })
+  it('moves unfinished curriculum activities into the next week without duplicating them', () => { const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder }); const id = crypto.randomUUID(); database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at) VALUES (?,'C','Ponteiros','active',1,1,1)").run(id); database.sqlite.prepare("INSERT INTO roadmaps (id,workspace_id,title,status,generation_kind,version,created_at,updated_at) VALUES ('finite-roadmap',?,'C','accepted','ai_generated',1,1,1)").run(id); database.sqlite.prepare("INSERT INTO roadmap_modules (id,roadmap_id,title,objective,estimated_minutes,position,status,topics_json,outcomes_json,practice,completion_criteria_json,resources_json) VALUES ('finite-module','finite-roadmap','Base','Aprender',120,1,'active','[\"Ponteiros\"]','[]','','[]','[]')").run(); const firstAt = Date.parse('2026-09-07T12:00:00Z'); const first = new PlanningService(new DrizzlePlanningRepository(database), () => firstAt).replanWeek('UTC'); const firstItems = first.days.flatMap((day) => day.items); expect(firstItems).toHaveLength(2); const nextAt = Date.parse('2026-09-14T12:00:00Z'); const next = new PlanningService(new DrizzlePlanningRepository(database), () => nextAt).replanWeek('UTC'); const nextItems = next.days.flatMap((day) => day.items); expect(nextItems.map((item) => item.id).sort()).toEqual(firstItems.map((item) => item.id).sort()); expect(database.sqlite.prepare("SELECT count(*) AS count FROM weekly_plan_items WHERE workspace_id=? AND status='pending'").get(id)).toEqual({ count: 2 }); database.close() })
 
   it('persists public exercise metadata and reloadable progress without private results', () => {
     const databasePath = createDatabasePath()
@@ -550,6 +591,113 @@ describe('Coach database migrations', () => {
 
     expect(() => insert.run('empty', '   ', '', 'active', 1, 1, null)).toThrow()
     expect(() => insert.run('invalid-archive', 'C', '', 'archived', 1, 1, null)).toThrow()
+    database.close()
+  })
+
+  it('enforces active equivalence and preserves completed history as terminal', async () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    const repository = new DrizzleWorkspaceRepository(database)
+    const first = await repository.create({ id: crypto.randomUUID(), name: 'JavaScript', objective: '', equivalenceKey: 'javascript', meaningfulDistinction: null, createdAt: 1, updatedAt: 1, confirmedAt: 1 })
+    expect(() => database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at,confirmed_at,equivalence_key) VALUES (?,'JS','','active',2,2,2,'javascript')").run(crypto.randomUUID())).toThrow()
+    database.sqlite.prepare("UPDATE workspaces SET status='completed',completed_at=3,updated_at=3 WHERE id=?").run(first.id)
+    expect(await repository.markOpened(first.id, 4)).toMatchObject({ id: first.id, status: 'completed', completedAt: 3 })
+    expect(await repository.listActive()).toEqual([])
+    expect(await repository.listHistory()).toEqual([expect.objectContaining({ id: first.id, status: 'completed', completedAt: 3 })])
+    const detail = await repository.getHistoryDetail(first.id)
+    expect(detail).toMatchObject({ workspace: { id: first.id, status: 'completed' }, progress: { completedTopics: 0, totalTopics: 0, evidenceEvents: 0 }, performance: { attempts: 0, successfulAttempts: 0, focusSeconds: 0 }, materials: [], sessions: [] })
+    database.close()
+  })
+
+  it('uses the same Cálculo normalization in migration backfill and runtime', () => {
+    const databasePath = createDatabasePath()
+    let database = openCoachDatabase({ databasePath, migrationsFolder: migrationsThrough0063() })
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES ('calc','Cálculo!!!','','active',1,1)").run()
+    database.close()
+    database = openCoachDatabase({ databasePath, migrationsFolder })
+    expect(database.sqlite.prepare("SELECT equivalence_key AS key FROM workspaces WHERE id='calc'").get()).toEqual({ key: 'calculo' })
+    database.close()
+  })
+
+  it('repairs equivalent workspace data safely and idempotently from real-shaped facts', async () => {
+    const databasePath = createDatabasePath()
+    const oldMigrations = migrationsThrough0063()
+    let database = openCoachDatabase({ databasePath, migrationsFolder: oldMigrations })
+    const sqlite = database.sqlite
+    const insertWorkspace = sqlite.prepare('INSERT INTO workspaces (id,name,objective,status,created_at,updated_at,last_opened_at,archived_at) VALUES (?,?,?,?,?,?,?,?)')
+
+    for (let index = 0; index < 14; index += 1) {
+      const id = `oop-shell-${String(index).padStart(2, '0')}`
+      insertWorkspace.run(id, index % 2 === 0 ? 'POO' : 'Programacao Orientada a Objetos', '', 'active', 100 + index, 200 + index, index === 13 ? 300 : null, null)
+      sqlite.prepare("INSERT INTO workspace_provisioning (workspace_id,status,stage,material_ids_json,attempt_count,created_at,stage_updated_at) VALUES (?,'draft','workspace','[]',0,?,?)").run(id, 100 + index, 200 + index)
+      sqlite.prepare("INSERT INTO study_sessions (id,workspace_id,status,started_at,focus_seconds) VALUES (? ,?,'active',?,0)").run(`empty-session-${index}`, id, 200 + index)
+      sqlite.prepare("INSERT INTO conversation_threads (id,scope,workspace_id,title,created_at,updated_at) VALUES (?,'workspace',?,'',?,?)").run(`empty-thread-${index}`, id, 200 + index, 200 + index)
+    }
+
+    insertWorkspace.run('generated-short', 'JS', '', 'active', 50, 900, 900, null)
+    insertWorkspace.run('generated-complete', 'Java Script', '', 'active', 40, 500, 500, null)
+    sqlite.prepare("INSERT INTO roadmaps (id,workspace_id,title,status,generation_kind,version,content_revision,content_hash,created_at,updated_at) VALUES (? ,?,'Generated','accepted','ai_generated',1,1,'short',1,1)").run('graph-short', 'generated-short')
+    sqlite.prepare("INSERT INTO roadmap_modules (id,roadmap_id,title,objective,estimated_minutes,position,status,topics_json,curricular_topics_json,outcomes_json,practice,completion_criteria_json,resources_json) VALUES ('short-module','graph-short','Short','',30,1,'available','[\"one\"]','[]','[]','','[]','[]')").run()
+    sqlite.prepare("INSERT INTO roadmaps (id,workspace_id,title,status,generation_kind,version,content_revision,content_hash,created_at,updated_at) VALUES (? ,?,'Generated','accepted','ai_generated',1,1,'complete',1,1)").run('graph-complete', 'generated-complete')
+    for (let index = 0; index < 3; index += 1) sqlite.prepare("INSERT INTO roadmap_modules (id,roadmap_id,title,objective,estimated_minutes,position,status,topics_json,curricular_topics_json,outcomes_json,practice,completion_criteria_json,resources_json) VALUES (?, 'graph-complete','Complete','',30,?,'available','[\"one\",\"two\"]','[]','[]','','[]','[]')").run(`complete-module-${index}`, index + 1)
+
+    insertWorkspace.run('conflict-a', 'Rust', '', 'active', 1, 2, 2, null)
+    insertWorkspace.run('conflict-b', ' rust ', '', 'active', 2, 3, 3, null)
+    for (const id of ['conflict-a', 'conflict-b']) {
+      sqlite.prepare("INSERT INTO conversation_threads (id,scope,workspace_id,title,created_at,updated_at) VALUES (?,'workspace',?,'Evidence',1,1)").run(`thread-${id}`, id)
+      sqlite.prepare("INSERT INTO conversation_messages (id,thread_id,role,content,created_at,sequence) VALUES (?,?,'user','My retained work',1,1)").run(`message-${id}`, `thread-${id}`)
+      sqlite.prepare("INSERT INTO study_sessions (id,workspace_id,status,started_at,ended_at,focus_seconds) VALUES (?,?,'completed',1,2,?)").run(`evidence-session-${id}`, id, id === 'conflict-a' ? 120 : 240)
+    }
+    sqlite.prepare("INSERT INTO workspace_provisioning (workspace_id,status,stage,material_ids_json,attempt_count,created_at,stage_updated_at) VALUES ('conflict-b','draft','workspace','[]',0,2,3)").run()
+
+    insertWorkspace.run('already-archived', 'Archived Subject', '', 'archived', 1, 2, null, 2)
+    sqlite.prepare("INSERT INTO weekly_plans (id,week_start,timezone,revision,generated_at,updated_at) VALUES ('stale-plan','2026-01-05','UTC',1,1,1)").run()
+    const insertWeekly = sqlite.prepare("INSERT INTO weekly_plan_items (id,plan_id,workspace_id,source_key,date_key,title,duration_minutes,position,status,activity_type,scheduled_start_minutes,reason,created_at,updated_at) VALUES (?,'stale-plan','already-archived',?,'2026-01-05','Stale',30,?,'pending','introduction',0,'legacy',1,1)")
+    for (let index = 0; index < 177; index += 1) insertWeekly.run(`stale-${index}`, `source-${index}`, index + 1)
+    database.close()
+
+    database = openCoachDatabase({ databasePath, migrationsFolder })
+    const repaired = database.sqlite
+    expect(repaired.prepare("SELECT count(*) AS count FROM workspaces WHERE status='active' AND equivalence_key='programacao-orientada-a-objetos'").get()).toEqual({ count: 0 })
+    expect(repaired.prepare("SELECT count(*) AS count FROM workspaces WHERE status='archived' AND equivalence_key='programacao-orientada-a-objetos'").get()).toEqual({ count: 14 })
+    expect(repaired.prepare("SELECT id FROM workspaces WHERE status='active' AND equivalence_key='javascript'").get()).toEqual({ id: 'generated-complete' })
+    expect(repaired.prepare("SELECT status FROM workspaces WHERE id='generated-short'").get()).toEqual({ status: 'archived' })
+    expect(repaired.prepare("SELECT status FROM workspaces WHERE id='already-archived'").get()).toEqual({ status: 'archived' })
+    expect(repaired.prepare("SELECT count(*) AS count FROM roadmaps WHERE id IN ('graph-short','graph-complete')").get()).toEqual({ count: 2 })
+    expect(repaired.prepare("SELECT canonical_workspace_id AS canonicalWorkspaceId,evidence_workspace_ids_json AS ids, resolved_at AS resolvedAt FROM workspace_repair_conflicts WHERE equivalence_key='rust'").get()).toEqual({ canonicalWorkspaceId: 'conflict-b', ids: '["conflict-a","conflict-b"]', resolvedAt: null })
+    expect(repaired.prepare("SELECT id,status,confirmed_at AS confirmedAt FROM workspaces WHERE equivalence_key='rust' ORDER BY id").all()).toEqual([
+      { id: 'conflict-a', status: 'archived', confirmedAt: null },
+      { id: 'conflict-b', status: 'active', confirmedAt: 2 },
+    ])
+    expect(repaired.prepare("SELECT status,stage,error_code AS errorCode FROM workspace_provisioning WHERE workspace_id='conflict-b'").get()).toEqual({ status: 'ready', stage: 'ready', errorCode: null })
+    expect(repaired.prepare("SELECT input_hash AS inputHash,state,legacy_state AS legacyState FROM workspace_content_revisions WHERE workspace_id='conflict-b'").get()).toEqual({ inputHash: 'legacy-unavailable', state: 'provisioning', legacyState: 'legacy_accessible' })
+    expect(() => repaired.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at,confirmed_at,equivalence_key) VALUES ('conflict-c','RUST','','active',4,4,4,'rust')").run()).toThrow()
+    expect(repaired.prepare("SELECT count(*) AS count FROM conversation_messages WHERE id IN ('message-conflict-a','message-conflict-b')").get()).toEqual({ count: 2 })
+    const repairRepository = new DrizzleWorkspaceRepository(database)
+    expect(await repairRepository.listActive()).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'conflict-b', provisioning: expect.objectContaining({ status: 'ready', legacyState: 'legacy_accessible' }) })]))
+    expect(await repairRepository.listHistory()).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'conflict-a', status: 'archived', repairConflict: { reason: 'multiple_meaningful_evidence', relation: 'preserved_duplicate_of_canonical', canonicalWorkspace: { id: 'conflict-b', name: ' rust ', status: 'active' } } })]))
+    expect(await repairRepository.getHistoryDetail('conflict-a')).toMatchObject({ workspace: { id: 'conflict-a', status: 'archived' }, repairConflict: { relation: 'preserved_duplicate_of_canonical', canonicalWorkspace: { id: 'conflict-b' }, evidenceWorkspaceIds: ['conflict-a', 'conflict-b'], relatedWorkspaces: [{ id: 'conflict-b', status: 'active' }, { id: 'conflict-a', status: 'archived' }] }, performance: { focusSeconds: 120 }, sessions: [expect.objectContaining({ focusSeconds: 120, status: 'completed' })] })
+    expect(await repairRepository.complete('conflict-b', 1_000)).toBe(true)
+    expect((await repairRepository.getHistoryDetail('conflict-a'))?.repairConflict?.canonicalWorkspace).toEqual({ id: 'conflict-b', name: ' rust ', status: 'completed' })
+    expect(await repairRepository.archive('conflict-b', 2_000)).toBe(true)
+    expect((await repairRepository.getHistoryDetail('conflict-a'))?.repairConflict).toMatchObject({ canonicalWorkspace: { id: 'conflict-b', status: 'archived' }, relatedWorkspaces: [{ id: 'conflict-b', status: 'archived' }, { id: 'conflict-a', status: 'archived' }] })
+    expect(repaired.prepare("SELECT canonical_workspace_id AS canonicalWorkspaceId FROM workspace_repair_conflicts WHERE equivalence_key='rust'").get()).toEqual({ canonicalWorkspaceId: 'conflict-b' })
+    expect(repaired.prepare("SELECT count(*) AS count FROM weekly_plan_items WHERE workspace_id='already-archived'").get()).toEqual({ count: 0 })
+    expect(repaired.pragma('foreign_key_check')).toEqual([])
+    expect(repaired.pragma('quick_check', { simple: true })).toBe('ok')
+
+    const repairSql = readFileSync(join(migrationsFolder, '0067_safe_workspace_data_repair.sql'), 'utf8')
+    for (const statement of repairSql.split('--> statement-breakpoint').map((part) => part.trim()).filter(Boolean)) repaired.exec(statement)
+    expect(repaired.prepare("SELECT id FROM workspaces WHERE status='active' AND equivalence_key='javascript'").get()).toEqual({ id: 'generated-complete' })
+    expect(repaired.prepare("SELECT id,status,confirmed_at AS confirmedAt FROM workspaces WHERE equivalence_key='rust' ORDER BY id").all()).toEqual([
+      { id: 'conflict-a', status: 'archived', confirmedAt: null },
+      { id: 'conflict-b', status: 'archived', confirmedAt: 2 },
+    ])
+    expect(repaired.prepare("SELECT canonical_workspace_id AS canonicalWorkspaceId FROM workspace_repair_conflicts WHERE equivalence_key='rust'").get()).toEqual({ canonicalWorkspaceId: 'conflict-b' })
+    expect(repaired.prepare('SELECT count(*) AS count FROM workspace_repair_conflicts').get()).toEqual({ count: 1 })
+    expect(repaired.prepare("SELECT status,stage FROM workspace_provisioning WHERE workspace_id='conflict-b'").get()).toEqual({ status: 'ready', stage: 'ready' })
+    expect(repaired.prepare("SELECT count(*) AS count FROM workspace_content_revisions WHERE workspace_id='conflict-b'").get()).toEqual({ count: 1 })
+    expect(repaired.pragma('foreign_key_check')).toEqual([])
+    expect(repaired.pragma('quick_check', { simple: true })).toBe('ok')
     database.close()
   })
 

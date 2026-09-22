@@ -16,7 +16,7 @@ afterEach(() => { while (roots.length) rmSync(roots.pop()!, { recursive: true, f
 function seedPlan(databasePath: string) {
   const database = openCoachDatabase({ databasePath, migrationsFolder })
   const now = Date.parse('2026-09-10T12:00:00Z'); const workspaceId = crypto.randomUUID(); const planId = crypto.randomUUID(); const itemId = crypto.randomUUID(); const sessionId = crypto.randomUUID()
-  database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES (?,?,?,'active',?,?)").run(workspaceId, 'Java', 'Java', now, now)
+  database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at) VALUES (?,?,?,'active',?,?,?)").run(workspaceId, 'Java', 'Java', now, now, now)
   database.sqlite.prepare("INSERT INTO planning_settings (id,timezone,updated_at) VALUES ('current','UTC',?)").run(now)
   database.sqlite.prepare('INSERT INTO weekly_plans (id,week_start,timezone,revision,generated_at,updated_at) VALUES (?,?,?,?,?,?)').run(planId, '2026-09-07', 'UTC', 1, now, now)
   database.sqlite.prepare("INSERT INTO weekly_plan_items (id,plan_id,workspace_id,source_key,date_key,title,duration_minutes,position,status,activity_type,scheduled_start_minutes,reason,created_at,updated_at) VALUES (?,?,?,?,?,?,60,1,'pending','exercise',600,'test',?,?)").run(itemId, planId, workspaceId, 'java', '2026-09-10', 'Java', now, now)

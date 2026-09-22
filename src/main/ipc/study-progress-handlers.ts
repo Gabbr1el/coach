@@ -12,6 +12,7 @@ import type { AIProviderManager } from '../../application/ai/ai-provider-manager
 import { evaluateCheckpointReasoning, pendingAssessment } from '../../application/study-progress/checkpoint-reasoning'
 import type { PedagogicalPrefetchScheduler } from '../../application/workspaces/pedagogical-prefetch-scheduler'
 import type { LearningEvidenceRecorder } from '../../shared/contracts/learning-evidence-contract'
+import type { WorkspaceService } from '../../application/workspaces/workspace-service'
 import { assertAcceptedTopicAccess } from '../curricular-access'
 
 type ProgressRow = { workspaceId: string; roadmapId: string; currentModuleId: string; currentTopicId: string; currentLessonId: string | null; currentCheckpointId: string | null; topicStatusesJson: string; lessonPositionsJson: string; checkpointStatesJson?: string; updatedAt: number }
@@ -81,7 +82,7 @@ export function mapStudyProgressState(row: ProgressRow): StudyProgressState {
   return { ...row, moduleId: row.currentModuleId, topicId: row.currentTopicId, lessonId: row.currentLessonId, checkpointId: row.currentCheckpointId, topicStatuses: JSON.parse(row.topicStatusesJson) as StudyProgressState['topicStatuses'], lessonPositions: positions, checkpointStates, currentPosition: row.currentLessonId ? positions[row.currentLessonId] ?? null : null }
 }
 
-export function registerStudyProgressHandlers(database: CoachDatabase, getToolchains: () => ToolchainStatus[] = () => [], providerManager?: AIProviderManager, prefetch?: PedagogicalPrefetchScheduler, evidenceRecorder?: LearningEvidenceRecorder): void {
+export function registerStudyProgressHandlers(database: CoachDatabase, getToolchains: () => ToolchainStatus[] = () => [], providerManager?: AIProviderManager, prefetch?: PedagogicalPrefetchScheduler, evidenceRecorder?: LearningEvidenceRecorder, workspaceService?: WorkspaceService): void {
   const get = (workspaceId: string) => {
     const row = database.sqlite.prepare('SELECT workspace_id AS workspaceId, roadmap_id AS roadmapId, current_module_id AS currentModuleId, current_topic_id AS currentTopicId, current_lesson_id AS currentLessonId, current_checkpoint_id AS currentCheckpointId, topic_statuses_json AS topicStatusesJson, lesson_positions_json AS lessonPositionsJson, checkpoint_states_json AS checkpointStatesJson, updated_at AS updatedAt FROM study_progress WHERE workspace_id = ?').get(workspaceId) as ProgressRow | undefined
     return row ? mapStudyProgressState(row) : null
@@ -201,11 +202,15 @@ export function registerStudyProgressHandlers(database: CoachDatabase, getToolch
     answering.set(key, task)
     return task
   })
-  ipcMain.handle(STUDY_PROGRESS_CHANNELS.completeTopic, (event, payload) => {
+  ipcMain.handle(STUDY_PROGRESS_CHANNELS.completeTopic, async (event, payload) => {
     assertTrustedSender(event)
     const input = completeStudyTopicSchema.parse(payload)
     const active = get(input.workspaceId)
-    if (active?.topicStatuses[input.topicId] === 'COMPLETED') return { state: active, nextTarget: active.topicId === input.topicId || !active.lessonId ? null : { moduleId: active.moduleId, topicId: active.topicId, lessonId: active.lessonId }, shouldReplan: false }
+    if (active?.topicStatuses[input.topicId] === 'COMPLETED') {
+      const unfinished = database.sqlite.prepare("SELECT 1 FROM roadmap_modules m JOIN roadmaps r ON r.id=m.roadmap_id,json_each(m.topics_json) topic WHERE r.workspace_id=? AND r.status='accepted' AND NOT EXISTS (SELECT 1 FROM study_progress_events e WHERE e.workspace_id=r.workspace_id AND e.type='TOPIC_COMPLETED' AND e.topic_id=m.id || ':' || topic.value) LIMIT 1").get(input.workspaceId)
+      if (!unfinished && workspaceService) await workspaceService.complete(input.workspaceId)
+      return { state: active, nextTarget: active.topicId === input.topicId || !active.lessonId ? null : { moduleId: active.moduleId, topicId: active.topicId, lessonId: active.lessonId }, shouldReplan: false }
+    }
     if (!active || active.topicId !== input.topicId) throw new Error('Topic is not the active study topic')
     if (!active.lessonId) throw new Error('Active topic lesson is not ready')
     assertTopicCompletionAllowed(database, active, active.lessonId, getToolchains())
@@ -228,7 +233,15 @@ export function registerStudyProgressHandlers(database: CoachDatabase, getToolch
       if (nextTarget && !database.sqlite.prepare("SELECT 1 FROM study_progress_events WHERE workspace_id = ? AND type = 'TOPIC_STARTED' AND topic_id = ? LIMIT 1").get(input.workspaceId, nextTarget.topicId)) database.sqlite.prepare('INSERT INTO study_progress_events (id, workspace_id, type, module_id, topic_id, lesson_id, checkpoint_id, correct, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)').run(crypto.randomUUID(), input.workspaceId, 'TOPIC_STARTED', nextTarget.moduleId, nextTarget.topicId, nextTarget.lessonId, now)
       if (currentIndex === currentTopics.length - 1) { database.sqlite.prepare("UPDATE roadmap_modules SET status = 'completed' WHERE id = ? AND roadmap_id = ?").run(active.moduleId, active.roadmapId); if (nextTarget) database.sqlite.prepare("UPDATE roadmap_modules SET status = 'active' WHERE id = ? AND roadmap_id = ? AND status = 'locked'").run(nextTarget.moduleId, active.roadmapId) }
       database.sqlite.prepare('UPDATE study_progress SET current_module_id = ?, current_topic_id = ?, current_lesson_id = ?, current_checkpoint_id = NULL, topic_statuses_json = ?, updated_at = ? WHERE workspace_id = ?').run(nextTarget?.moduleId ?? active.moduleId, nextTarget?.topicId ?? active.topicId, nextTarget?.lessonId ?? active.lessonId, JSON.stringify(statuses), now, input.workspaceId)
+      if (!nextTarget) {
+        if (!workspaceService) throw new Error('Workspace lifecycle service is unavailable')
+        const completed = database.sqlite.prepare("UPDATE workspaces SET status='completed',completed_at=COALESCE(completed_at,?),updated_at=CASE WHEN status='active' THEN ? ELSE updated_at END WHERE id=? AND status IN ('active','completed')").run(now, now, input.workspaceId)
+        if (completed.changes !== 1) throw new Error('Workspace lifecycle could not be completed')
+        database.sqlite.prepare("DELETE FROM weekly_plan_items WHERE workspace_id=? AND status<>'completed'").run(input.workspaceId)
+        database.sqlite.prepare("DELETE FROM study_plan_items WHERE workspace_id=? AND status<>'completed'").run(input.workspaceId)
+      }
     })()
+    if (!nextTarget) await workspaceService!.complete(input.workspaceId)
     if (nextTarget) prefetch?.schedule({ type: 'topic_unlocked', workspaceId: input.workspaceId, topicId: nextTarget.topicId })
     return { state: get(input.workspaceId)!, nextTarget, shouldReplan: true }
   })

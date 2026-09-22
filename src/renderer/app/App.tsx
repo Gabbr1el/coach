@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BookOpen, CalendarDays, MoreHorizontal, Plus, Send, Sparkles, X } from 'lucide-react'
 import type { ApplicationInfo } from '../../shared/contracts/application-contract'
-import type { CreateWorkspaceInput, Workspace, WorkspaceSummary } from '../../shared/contracts/workspace-contract'
+import type { CreateWorkspaceInput, Workspace, WorkspaceHistoryDetail, WorkspaceSummary } from '../../shared/contracts/workspace-contract'
 import type { ConversationMessage } from '../../shared/contracts/conversation-contract'
 import type {
   ProviderAccountHealthSnapshot,
@@ -758,6 +758,8 @@ export function App() {
   const [weeklyPlan, setWeeklyPlan] = useState<WeeklyPlan | null>(null)
   const [academicOverview, setAcademicOverview] = useState<AcademicOverview | null>(null)
   const [academicLife, setAcademicLife] = useState<AcademicLifeProjection | null>(null)
+  const [workspaceHistory, setWorkspaceHistory] = useState<WorkspaceSummary[]>([])
+  const [historyDetail, setHistoryDetail] = useState<WorkspaceHistoryDetail | null>(null)
   const [materialsOpen, setMaterialsOpen] = useState(false)
   const [materials, setMaterials] = useState<MaterialSummary[]>([])
   const [materialQuery, setMaterialQuery] = useState('')
@@ -786,7 +788,9 @@ export function App() {
 
   const loadWorkspaces = useCallback(async () => {
     try {
-      setWorkspaces(await window.coach.workspace.list())
+      const [active, history] = await Promise.all([window.coach.workspace.list(), window.coach.workspace.listHistory()])
+      setWorkspaces(active)
+      setWorkspaceHistory(history)
       setError(null)
     } catch {
       setError('Não foi possível carregar seus Workspaces.')
@@ -997,6 +1001,12 @@ export function App() {
     setObserverState(null)
     setExecuting(false)
     if (!selected) return
+    if (selected.status !== 'active') {
+      setWorkspaceLoading(true)
+      void window.coach.workspace.getHistoryDetail(selected.id).then((detail) => { if (workspaceLoadEpoch.current === epoch) setHistoryDetail(detail) }).catch(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceError('Não foi possível carregar o histórico deste Workspace.') }).finally(() => { if (workspaceLoadEpoch.current === epoch) setWorkspaceLoading(false) })
+      return () => { workspaceLoadEpoch.current += 1 }
+    }
+    setHistoryDetail(null)
     setWorkspaceLoading(true)
     void Promise.all([window.coach.conversation.listWorkspaceMessages(selected.id), window.coach.studyWorkspace.refreshLivePlan({ workspaceId: selected.id }), window.coach.observer.getState(selected.id)])
       .then(([loaded, state, observer]) => { if (workspaceLoadEpoch.current === epoch) { setWorkspaceMessages((current) => workspaceChat.current.reconcileLoad(selected.id, snapshot.generation, current, loaded) ?? current); setStudyState(state); setObserverState(observer); setEditorContent(state.editorContent); setStudyNotes(state.notes); documentRevision.current = state.documentRevision; notesRevision.current = state.notesRevision } })
@@ -2090,6 +2100,9 @@ export function App() {
   }
 
   if (selected) {
+    if (selected.status === 'completed' || selected.status === 'archived') {
+      return <main className="coach-app-shell overflow-hidden bg-[#090a0d] p-5 text-white"><section className="coach-scroll-pane mx-auto h-full w-full max-w-6xl rounded-2xl border border-[#2d3040] bg-[#111217] p-6 lg:p-8"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-[10px] font-bold uppercase tracking-[.18em] text-[#72d7aa]">Histórico · somente leitura</p><h1 className="mt-3 text-3xl font-semibold">{selected.name}</h1><p className="mt-3 text-sm leading-6 text-[#9297a3]">{selected.objective || 'Workspace de estudos'}</p></div><button type="button" onClick={() => { setSelected(null); setHistoryDetail(null); setHomeSection('workspaces'); void loadWorkspaces() }} className="rounded-lg bg-[#8c7cff] px-4 py-2.5 text-xs font-bold text-[#0c0d10]">Voltar ao histórico</button></div><div className="mt-6 rounded-xl border border-[#292c35] bg-[#0d0e12] p-4 text-xs text-[#747986]">Este Workspace está {selected.status === 'completed' ? 'concluído' : 'arquivado'}. A consulta abaixo não permite editar, reativar nem produzir nova evidência.</div>{workspaceLoading && <p className="mt-6 text-xs text-[#747986]">Carregando dados preservados…</p>}{historyDetail?.repairConflict && <section className="mt-6 rounded-xl border border-[#e8b96d]/40 bg-[#e8b96d]/[.08] p-5"><p className="text-[10px] font-bold uppercase tracking-[.16em] text-[#e8b96d]">Conflito duplicado preservado</p><h2 className="mt-2 text-lg font-semibold">Este registro foi preservado separado do Workspace canônico.</h2><p className="mt-2 text-xs leading-5 text-[#b7bbc5]">O reparo encontrou evidências significativas nos dois registros. Evidências não foram mescladas automaticamente. Compare este histórico com “{historyDetail.repairConflict.canonicalWorkspace.name}” antes de qualquer decisão manual.</p><button type="button" onClick={() => void openWorkspace(historyDetail.repairConflict!.canonicalWorkspace.id)} className="mt-4 rounded-lg border border-[#e8b96d]/50 px-3 py-2 text-xs font-bold text-[#e8b96d]">Abrir Workspace canônico</button></section>}{historyDetail && <><div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[['Tópicos', `${historyDetail.progress.completedTopics}/${historyDetail.progress.totalTopics}`], ['Evidências', historyDetail.progress.evidenceEvents], ['Tentativas', `${historyDetail.performance.successfulAttempts}/${historyDetail.performance.attempts}`], ['Foco', `${Math.floor(historyDetail.performance.focusSeconds / 60)} min`]].map(([label, value]) => <article key={label} className="rounded-xl border border-[#292c35] bg-[#0d0e12] p-4"><strong className="text-2xl">{value}</strong><span className="mt-2 block text-[10px] uppercase tracking-wider text-[#747986]">{label}</span></article>)}</div><div className="mt-6 grid gap-5 lg:grid-cols-2"><section className="rounded-xl border border-[#292c35] p-5"><h2 className="text-sm font-bold">Trilha preservada</h2>{historyDetail.roadmap ? <><p className="mt-2 text-xs text-[#9297a3]">{historyDetail.roadmap.title}</p>{historyDetail.roadmap.modules.map((module) => <article key={module.title} className="mt-3 border-t border-[#292c35] pt-3"><strong className="text-xs">{module.title}</strong><p className="mt-1 text-[11px] text-[#747986]">{module.topics.join(' · ')}</p></article>)}</> : <p className="mt-3 text-xs text-[#747986]">Nenhuma Trilha persistida.</p>}</section><section className="rounded-xl border border-[#292c35] p-5"><h2 className="text-sm font-bold">Materiais</h2>{historyDetail.materials.map((material) => <article key={material.id} className="mt-3 border-t border-[#292c35] pt-3"><strong className="text-xs">{material.name}</strong><p className="mt-1 text-[11px] text-[#747986]">{material.pageCount} página(s) · {material.status}</p></article>)}{historyDetail.materials.length === 0 && <p className="mt-3 text-xs text-[#747986]">Nenhum material persistido.</p>}</section></div><section className="mt-5 rounded-xl border border-[#292c35] p-5"><h2 className="text-sm font-bold">Sessões e desempenho</h2>{historyDetail.sessions.map((session) => <article key={`${session.startedAt}:${session.endedAt}`} className="mt-3 grid grid-cols-[1fr_auto] gap-3 border-t border-[#292c35] pt-3 text-xs"><span>{new Date(session.startedAt).toLocaleString('pt-BR')}</span><span className="text-[#72d7aa]">{Math.floor(session.focusSeconds / 60)} min · {session.status}</span></article>)}{historyDetail.sessions.length === 0 && <p className="mt-3 text-xs text-[#747986]">Nenhuma sessão persistida.</p>}</section></>}</section></main>
+    }
     const completedItems = studyState?.plan.filter((item) => item.status === 'completed').length ?? 0
     const timerRemaining = studyState ? Math.max(0, studyState.timerStatus === 'running' ? timerAnchor.current.remainingSeconds - Math.floor(Math.max(0, timerNow - timerAnchor.current.monotonicMs) / 1000) : studyState.timerRemainingSeconds) : 0
     const timerLabel = `${String(Math.floor(timerRemaining / 60)).padStart(2, '0')}:${String(timerRemaining % 60).padStart(2, '0')}`
@@ -2231,7 +2244,7 @@ export function App() {
       />
     )}
 
-    <HomeScreen section={homeSection} loading={loading} error={error} report={globalReport} schedule={schedule} weeklyPlan={weeklyPlan} academicOverview={academicOverview} academicLife={academicLife} workspaces={workspaces} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={activeProviderLabel()}
+    <HomeScreen section={homeSection} loading={loading} error={error} report={globalReport} schedule={schedule} weeklyPlan={weeklyPlan} academicOverview={academicOverview} academicLife={academicLife} workspaces={workspaces} workspaceHistory={workspaceHistory} priorities={priorities} messages={messages} streamedContent={streamedContent} plannerActions={plannerActions} plannerInput={plannerInput} plannerBusy={plannerSending || plannerLoading} plannerError={plannerError} providerLabel={activeProviderLabel()}
       providerConnected={
         activeProviderConnected()
       }

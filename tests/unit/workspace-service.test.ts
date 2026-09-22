@@ -5,10 +5,14 @@ import type { Workspace, WorkspaceSummary } from '../../src/shared/contracts/wor
 
 class MemoryWorkspaceRepository implements WorkspaceRepository {
   readonly workspaces = new Map<string, Workspace>()
+  getContinuationRecommendation?: WorkspaceRepository['getContinuationRecommendation']
+  resolveContinuation?: WorkspaceRepository['resolveContinuation']
+  findAcceptedContinuation?: WorkspaceRepository['findAcceptedContinuation']
 
   async listActive(): Promise<WorkspaceSummary[]> {
     return [...this.workspaces.values()].filter((item) => item.status === 'active')
   }
+  async listHistory(): Promise<WorkspaceSummary[]> { return [...this.workspaces.values()].filter((item) => item.status !== 'active') }
 
   async create(input: CreateWorkspaceRecord): Promise<Workspace> {
     const workspace: Workspace = { ...input, status: 'active', lastOpenedAt: null, archivedAt: null }
@@ -40,6 +44,20 @@ class MemoryWorkspaceRepository implements WorkspaceRepository {
     if (!workspace || workspace.status !== 'active') return false
     this.workspaces.set(id, { ...workspace, status: 'archived', archivedAt, updatedAt: archivedAt })
     return true
+  }
+  async complete(id: string, completedAt: number): Promise<boolean> {
+    const workspace = this.workspaces.get(id)
+    if (!workspace || workspace.status !== 'active') return false
+    this.workspaces.set(id, { ...workspace, status: 'completed', completedAt, updatedAt: completedAt })
+    return true
+  }
+  async confirm(id: string, confirmedAt: number, afterConfirm?: () => void): Promise<Workspace | null> {
+    const workspace = this.workspaces.get(id)
+    if (!workspace || workspace.status !== 'active') return null
+    afterConfirm?.()
+    const confirmed = { ...workspace, confirmedAt, updatedAt: confirmedAt }
+    this.workspaces.set(id, confirmed)
+    return confirmed
   }
 }
 
@@ -104,7 +122,11 @@ describe('WorkspaceService', () => {
     await service.archive(created.id)
 
     expect(await service.list()).toEqual([])
+    expect(await service.listHistory()).toEqual([expect.objectContaining({ id: created.id, status: 'archived' })])
   })
   it('discovers orphan event suggestions after creation without linking them', async () => { const repository = new MemoryWorkspaceRepository(); const discovered: Workspace[] = []; const service = new WorkspaceService({ repository, discoverOrphanEvents: (created) => { discovered.push(created) } }); const created = await service.create({ name: 'POO', objective: 'Prova' }); expect(discovered).toEqual([created]) })
   it('keeps a created workspace successful when optional orphan discovery fails', async () => { const repository = new MemoryWorkspaceRepository(); const service = new WorkspaceService({ repository, discoverOrphanEvents: () => { throw new Error('provider unavailable') } }); await expect(service.create({ name: 'POO', objective: 'Prova' })).resolves.toMatchObject({ name: 'POO' }) })
+  it('creates a new linked successor while preserving the completed predecessor', async () => { const repository = new MemoryWorkspaceRepository(); const predecessor = await repository.create({ id: 'old', name: 'Java', objective: 'Fundamentos', createdAt: 1, updatedAt: 1 }); await repository.complete(predecessor.id, 2); repository.getContinuationRecommendation = async () => ({ id: 'r', predecessorId: predecessor.id, suggestedName: 'Java avançado', objective: 'Concorrência', rationale: 'Resultados anteriores', action: 'create', existingWorkspaceId: null, context: [] }); repository.resolveContinuation = async () => true; const service = new WorkspaceService({ repository, createId: () => 'new', now: () => 3 }); const successor = await service.acceptContinuation(predecessor.id); expect(successor).toMatchObject({ id: 'new', status: 'active', predecessorId: 'old' }); expect(await repository.findAnyById('old')).toMatchObject({ status: 'completed' }) })
+  it('reuses a durably accepted successor after a retry instead of creating another', async () => { const repository = new MemoryWorkspaceRepository(); const predecessor = await repository.create({ id: 'old', name: 'Java', objective: '', createdAt: 1, updatedAt: 1 }); await repository.complete(predecessor.id, 2); const successor = await repository.create({ id: 'new', name: 'Java avançado', objective: '', predecessorId: 'old', createdAt: 3, updatedAt: 3 }); repository.findAcceptedContinuation = async () => successor; const service = new WorkspaceService({ repository, createId: () => 'duplicate' }); await expect(service.acceptContinuation('old')).resolves.toMatchObject({ id: 'new' }); expect(repository.workspaces.has('duplicate')).toBe(false) })
+  it('persists a declined continuation so it cannot be offered again', async () => { const repository = new MemoryWorkspaceRepository(); const predecessor = await repository.create({ id: 'old', name: 'Redes', objective: '', createdAt: 1, updatedAt: 1 }); await repository.complete(predecessor.id, 2); let pending = true; repository.getContinuationRecommendation = async () => pending ? ({ id: 'r', predecessorId: 'old', suggestedName: 'Redes II', objective: 'Avançar', rationale: 'Contexto', action: 'create', existingWorkspaceId: null, context: [] }) : null; repository.resolveContinuation = async () => { pending = false; return true }; const service = new WorkspaceService({ repository }); await service.declineContinuation('old'); await expect(service.declineContinuation('old')).rejects.toThrow('not found') })
 })

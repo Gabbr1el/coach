@@ -23,6 +23,8 @@ export function registerWorkspaceHandlers(service: WorkspaceService): void {
     assertTrustedSender(event)
     return service.list()
   })
+  ipcMain.handle(WORKSPACE_CHANNELS.listHistory, (event) => { assertTrustedSender(event); return service.listHistory() })
+  ipcMain.handle(WORKSPACE_CHANNELS.getHistoryDetail, (event, payload: unknown) => { assertTrustedSender(event); return service.getHistoryDetail(workspaceIdSchema.parse(payload)) })
 
   ipcMain.handle(WORKSPACE_CHANNELS.create, async (event, payload: unknown) => {
     assertTrustedSender(event)
@@ -42,4 +44,6 @@ export function registerWorkspaceHandlers(service: WorkspaceService): void {
     assertTrustedSender(event)
     return service.archive(workspaceIdSchema.parse(payload))
   })
+  ipcMain.handle(WORKSPACE_CHANNELS.acceptContinuation, (event, payload: unknown) => { assertTrustedSender(event); return service.acceptContinuation(workspaceIdSchema.parse(payload)) })
+  ipcMain.handle(WORKSPACE_CHANNELS.declineContinuation, (event, payload: unknown) => { assertTrustedSender(event); return service.declineContinuation(workspaceIdSchema.parse(payload)) })
 }

@@ -1,5 +1,6 @@
 export function usableWorkspaceSql(alias = 'w'): string {
   return `${alias}.status='active'
+    AND ${alias}.confirmed_at IS NOT NULL
     AND NOT EXISTS (
       SELECT 1 FROM workspace_provisioning draft
       WHERE draft.workspace_id=${alias}.id AND draft.status='draft'

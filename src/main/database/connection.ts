@@ -5,6 +5,7 @@ import { drizzle, type BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { app } from 'electron'
 import { migrateDatabase, preflightPublishedReviewMigration, repairDraftAdaptiveStudyMigration, repairExerciseSchema, repairInteractiveCodeStateSchema, repairPublishedEvidenceSchema } from './migrate'
 import { repairLegacyExerciseData } from './exercise-data-repair'
+import { preflightWorkspaceConflictCanonicalIdentity, repairWorkspaceConflictCanonicalIdentity } from './repair-workspace-conflict-schema'
 import * as workspaceSchema from './schema/workspaces'
 import * as conversationSchema from './schema/conversations'
 import * as providerSchema from './schema/provider-configurations'
@@ -25,6 +26,7 @@ import * as workspaceProvisioningSchema from './schema/workspace-provisioning'
 import * as academicLifeSchema from './schema/academic-life'
 import * as performanceTimelineSchema from './schema/performance-timelines'
 import * as conceptsEvidenceSchema from './schema/concepts-evidence'
+import { DrizzleWorkspaceRepository } from '../repositories/drizzle-workspace-repository'
 
 export const schema = { ...workspaceSchema, ...conversationSchema, ...providerSchema, ...studyWorkspaceSchema, ...learningEventSchema, ...planningSchema, ...materialSchema, ...memorySchema, ...navigationSchema, ...projectSchema, ...roadmapSchema, ...plannerActionSchema, ...studyProgressSchema, ...studyLessonSchema, ...academicSubjectContextSchema, ...exerciseSchema, ...workspaceProvisioningSchema, ...academicLifeSchema, ...performanceTimelineSchema, ...conceptsEvidenceSchema }
 
@@ -47,21 +49,24 @@ export function openCoachDatabase(options: OpenCoachDatabaseOptions = {}): Coach
 
   const sqlite = new Database(databasePath)
   try {
-    sqlite.pragma('foreign_keys = ON')
+    sqlite.pragma('foreign_keys = OFF')
     sqlite.pragma('journal_mode = WAL')
     sqlite.pragma('synchronous = NORMAL')
     sqlite.pragma('busy_timeout = 5000')
 
     const orm = drizzle(sqlite, { schema })
     preflightPublishedReviewMigration(sqlite)
+    preflightWorkspaceConflictCanonicalIdentity(sqlite)
     migrateDatabase(orm, { migrationsFolder })
+    repairWorkspaceConflictCanonicalIdentity(sqlite)
+    sqlite.pragma('foreign_keys = ON')
     repairPublishedEvidenceSchema(sqlite)
     repairDraftAdaptiveStudyMigration(sqlite)
     repairInteractiveCodeStateSchema(sqlite)
     repairExerciseSchema(sqlite)
     repairLegacyExerciseData(sqlite)
 
-    return {
+    const database: CoachDatabase = {
       sqlite,
       orm,
       path: databasePath,
@@ -69,6 +74,8 @@ export function openCoachDatabase(options: OpenCoachDatabaseOptions = {}): Coach
         if (sqlite.open) sqlite.close()
       },
     }
+    new DrizzleWorkspaceRepository(database).reconcileTerminalAcademicMemory()
+    return database
   } catch (error) {
     if (sqlite.open) sqlite.close()
     const detail = error instanceof Error

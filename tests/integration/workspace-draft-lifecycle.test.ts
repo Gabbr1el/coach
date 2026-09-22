@@ -58,6 +58,32 @@ describe('workspace draft lifecycle with migrated SQLite', () => {
     database.close()
   })
 
+  it('allows equivalent drafts but enforces uniqueness when each is confirmed', async () => {
+    const { database, repository, service } = setup()
+    const first = await service.prepareDraft(input('Cálculo'))
+    const second = await service.prepareDraft(input('Calculo!!!'))
+    expect(first.equivalenceKey).toBe('calculo')
+    expect(second.equivalenceKey).toBe('calculo')
+    await repository.confirm(first.id, 10)
+    await expect(repository.confirm(second.id, 11)).rejects.toThrow()
+    expect(database.sqlite.prepare('SELECT count(*) AS count FROM workspaces WHERE equivalence_key=?').get('calculo')).toEqual({ count: 2 })
+    database.close()
+  })
+
+  it('rolls back confirmation and all callback side effects when active identity conflicts', async () => {
+    const { database, repository, service, provisioningRepository } = setup()
+    const first = await service.prepareDraft(input('JavaScript avançado'))
+    const second = await service.prepareDraft(input('javascript avancado'))
+    await repository.confirm(first.id, 10)
+    let sideEffect = false
+    await expect(repository.confirm(second.id, 11, () => { sideEffect = true; database.sqlite.prepare("UPDATE workspace_provisioning SET status='queued' WHERE workspace_id=?").run(second.id) })).rejects.toThrow()
+    expect(sideEffect).toBe(false)
+    expect(provisioningRepository.find(second.id)?.status).toBe('draft')
+    expect((await repository.findAnyById(second.id))?.confirmedAt).toBeNull()
+    expect(database.sqlite.prepare("SELECT count(*) AS count FROM workspaces WHERE status='active' AND confirmed_at IS NOT NULL AND equivalence_key='javascript-avancado'").get()).toEqual({ count: 1 })
+    database.close()
+  })
+
   it('C/D cascades draft materials and chunks but cannot discard a confirmed workspace', async () => {
     const { database, service } = setup()
     const draft = await service.prepareDraft(input('Física'))
@@ -166,7 +192,7 @@ describe('workspace draft lifecycle with migrated SQLite', () => {
   it('archives only a usable workspace, consolidates evidence-backed subject memory, and clears active plan items', async () => {
     const { database, repository } = setup()
     const now = 50_000
-    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES ('archive-me','C','Ponteiros','active',1,1)").run()
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at) VALUES ('archive-me','C','Ponteiros','active',1,1,1)").run()
     database.sqlite.prepare("INSERT INTO workspace_learning_overrides (workspace_id,subject,declared_level,declared_knowledge_json,declared_difficulties_json,goals_json,created_at,updated_at) VALUES ('archive-me','C','intermediate','[\"Sintaxe\"]','[\"Ponteiros\"]','[\"Prova\"]',1,1)").run()
     database.sqlite.prepare("INSERT INTO topic_learning_states (workspace_id,topic_id,evidence_count,assessments,correct_first_try,correct_after_help,incorrect,hints_used,reinforcement_events,exercises_completed,lessons_completed,difficulty_level,mastery_estimate,confidence,needs_review,reasons_json,updated_at) VALUES ('archive-me','mod:Ponteiros',2,2,1,0,1,0,0,0,0,'medium',55,'medium',1,'[]',2)").run()
     database.sqlite.prepare("INSERT INTO checkpoint_reasoning_evidence (answer_id,workspace_id,topic_id,lesson_id,checkpoint_id,alternative_correct,reasoning_status,misconception,retry_count,created_at,updated_at) VALUES ('answer','archive-me','mod:Ponteiros','lesson','checkpoint',0,'misconception','Confunde endereço e valor',0,2,2)").run()
@@ -185,6 +211,72 @@ describe('workspace draft lifecycle with migrated SQLite', () => {
     expect(inherited.observedDifficulties).toEqual(['mod:Ponteiros'])
     expect(inherited.misconceptions).toEqual(['Confunde endereço e valor'])
     expect(await repository.findById('archive-me')).toBeNull()
+    database.close()
+  })
+
+  it('reconciles a terminal workspace whose memory write was interrupted and stays idempotent', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'coach-terminal-retry-')); directories.push(directory); const path = join(directory, 'coach.sqlite')
+    let database = openCoachDatabase({ databasePath: path, migrationsFolder: resolve('drizzle/migrations') })
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at,completed_at) VALUES ('terminal','C','Ponteiros','completed',1,1,10,10)").run()
+    database.sqlite.prepare("INSERT INTO workspace_learning_overrides (workspace_id,subject,declared_knowledge_json,declared_difficulties_json,goals_json,created_at,updated_at) VALUES ('terminal','C','[\"Sintaxe\"]','[]','[]',1,1)").run()
+    database.sqlite.prepare("DELETE FROM workspace_terminal_memory WHERE workspace_id='terminal'").run()
+    database.close()
+    database = openCoachDatabase({ databasePath: path, migrationsFolder: resolve('drizzle/migrations') })
+    expect(database.sqlite.prepare("SELECT declared_knowledge_json AS knowledge FROM academic_subject_contexts WHERE subject='C'").get()).toEqual({ knowledge: '["Sintaxe"]' })
+    expect(database.sqlite.prepare("SELECT count(*) AS count FROM workspace_terminal_memory WHERE workspace_id='terminal'").get()).toEqual({ count: 1 })
+    database.close()
+    database = openCoachDatabase({ databasePath: path, migrationsFolder: resolve('drizzle/migrations') })
+    expect(database.sqlite.prepare("SELECT count(*) AS count FROM workspace_terminal_memory WHERE workspace_id='terminal'").get()).toEqual({ count: 1 })
+    database.close()
+  })
+
+  it('rolls back a continuation decision when provisioning crashes and accepts it on retry', async () => {
+    const { database, repository } = setup()
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at,completed_at,equivalence_key) VALUES ('predecessor','Java','Fundamentos','completed',1,1,2,2,'java')").run()
+    database.sqlite.prepare("INSERT INTO workspace_continuation_decisions (id,predecessor_id,suggested_name,objective,rationale,equivalence_key,context_json,status,created_at) VALUES ('decision','predecessor','Java avançado','Concorrência','Novo ciclo de concorrência','javascript-avancado','[]','pending',3)").run()
+    const crashing = new WorkspaceService({ repository, now: () => 4, createId: () => 'successor', provisioning: { createDraft: (id) => { database.sqlite.prepare("INSERT INTO workspace_provisioning (workspace_id,status,stage,material_ids_json,attempt_count,created_at,stage_updated_at) VALUES (?,'draft','workspace','[]',0,4,4)").run(id); return {} as never }, start: () => { throw new Error('simulated crash') }, get: () => null, retry: () => ({} as never), discardDraft: () => {} } })
+
+    await expect(crashing.acceptContinuation('predecessor')).rejects.toThrow('simulated crash')
+    expect(database.sqlite.prepare("SELECT status,successor_id AS successorId FROM workspace_continuation_decisions WHERE predecessor_id='predecessor'").get()).toEqual({ status: 'pending', successorId: null })
+    expect(database.sqlite.prepare("SELECT count(*) AS count FROM workspaces WHERE predecessor_id='predecessor'").get()).toEqual({ count: 0 })
+    expect(database.sqlite.prepare("SELECT count(*) AS count FROM workspace_provisioning WHERE workspace_id='successor'").get()).toEqual({ count: 0 })
+
+    const provisioningRepository = new SqliteWorkspaceProvisioningRepository(database)
+    const provisioning = new WorkspaceProvisioningService({ repository: provisioningRepository, initializeContent: () => {}, ensureRoadmap: async () => ({ status: 'ready', activeRoadmapId: null, lastErrorCode: null, retryAfter: null }), getRoadmap: async () => null, ensureLesson: async () => ({ status: 'failed_retryable', errorCode: 'PROVIDER_REQUEST_FAILED' }), listReadyMaterialIds: () => [] })
+    const retrying = new WorkspaceService({ repository, now: () => 5, createId: () => 'successor', provisioning })
+    await expect(retrying.acceptContinuation('predecessor')).resolves.toMatchObject({ id: 'successor', status: 'active' })
+    expect(provisioningRepository.find('successor')?.status).not.toBe('draft')
+    expect(database.sqlite.prepare("SELECT status,successor_id AS successorId FROM workspace_continuation_decisions WHERE predecessor_id='predecessor'").get()).toEqual({ status: 'accepted', successorId: 'successor' })
+    database.close()
+  })
+
+  it('creates a distinguished successor instead of accepting a terminal equivalent', async () => {
+    const { database, repository } = setup()
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at,completed_at,equivalence_key) VALUES ('predecessor','Java','Fundamentos','completed',1,1,2,2,'java'),('terminal-equivalent','Java: Streams','Streams antigo','completed',1,1,3,3,'java-streams')").run()
+    database.sqlite.prepare("INSERT INTO study_progress_events (id,workspace_id,type,module_id,topic_id,lesson_id,created_at) VALUES ('outcome','predecessor','TOPIC_COMPLETED','module','Streams','lesson',2)").run()
+    database.sqlite.prepare("INSERT INTO workspace_continuation_decisions (id,predecessor_id,suggested_name,objective,rationale,equivalence_key,context_json,status,successor_id,created_at,resolved_at) VALUES ('legacy-decision','predecessor','Java: Streams','Aprofundar Streams','Novo ciclo de Streams','java-streams','[]','accepted','terminal-equivalent',3,3)").run()
+    const recommendation = await repository.getContinuationRecommendation('predecessor', 4)
+    expect(recommendation).toMatchObject({ action: 'create', existingWorkspaceId: null, suggestedName: 'Java: Streams' })
+    const service = new WorkspaceService({ repository, now: () => 5, createId: () => 'successor' })
+
+    const successor = await service.acceptContinuation('predecessor')
+
+    expect(successor).toMatchObject({ id: 'successor', status: 'active', predecessorId: 'predecessor' })
+    expect(successor.equivalenceKey).toContain('java-streams::continuacao-de-java')
+    expect(await repository.findAnyById('predecessor')).toMatchObject({ status: 'completed' })
+    expect(await repository.findAnyById('terminal-equivalent')).toMatchObject({ status: 'completed' })
+    database.close()
+  })
+
+  it('opens an active accepted continuation without creating a duplicate', async () => {
+    const { database, repository } = setup()
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at,completed_at,equivalence_key) VALUES ('predecessor','Redes','Fundamentos','completed',1,1,2,2,'redes')").run()
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at,equivalence_key,predecessor_id) VALUES ('active-successor','Redes II','Avançar','active',3,3,3,'redes-ii','predecessor')").run()
+    database.sqlite.prepare("INSERT INTO workspace_continuation_decisions (id,predecessor_id,suggested_name,objective,rationale,equivalence_key,context_json,status,successor_id,created_at,resolved_at) VALUES ('accepted','predecessor','Redes II','Avançar','Novo ciclo','redes-ii','[]','accepted','active-successor',3,3)").run()
+    const service = new WorkspaceService({ repository, createId: () => 'duplicate' })
+
+    await expect(service.acceptContinuation('predecessor')).resolves.toMatchObject({ id: 'active-successor', status: 'active' })
+    expect(database.sqlite.prepare("SELECT count(*) AS count FROM workspaces WHERE id='duplicate'").get()).toEqual({ count: 0 })
     database.close()
   })
 

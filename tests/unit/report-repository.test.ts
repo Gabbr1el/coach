@@ -36,7 +36,7 @@ describe('DrizzleReportRepository', () => {
   it('derives learning metrics and recommendations only from recorded evidence', () => {
     const database = createDatabase()
     const sqlite = database.sqlite
-    sqlite.prepare('INSERT INTO workspaces (id, name, objective, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run('workspace-evidence', 'Algoritmos', 'Aprender listas', 1, 1)
+    sqlite.prepare('INSERT INTO workspaces (id, name, objective, confirmed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run('workspace-evidence', 'Algoritmos', 'Aprender listas', 1, 1, 1)
     sqlite.prepare("INSERT INTO study_sessions (id, workspace_id, status, started_at, ended_at, focus_seconds) VALUES (?, ?, 'completed', ?, ?, ?)").run('session-completed', 'workspace-evidence', 10_000, 11_000, 600)
     sqlite.prepare("INSERT INTO study_sessions (id, workspace_id, status, started_at, focus_seconds) VALUES (?, ?, 'active', ?, 0)").run('session-active', 'workspace-evidence', 90_000)
     sqlite.prepare("INSERT INTO workspace_study_states (workspace_id, active_session_id, file_name, language, editor_content, notes, share_context_with_ai, timer_duration_seconds, timer_remaining_seconds, timer_status, timer_started_at, updated_at, document_revision, notes_revision, accumulated_focus_seconds) VALUES (?, ?, 'main.py', 'python', '', '', 0, 1500, 100, 'running', 95000, 95000, 0, 0, 30)").run('workspace-evidence', 'session-active')
@@ -79,7 +79,7 @@ describe('DrizzleReportRepository', () => {
 
   it('uses mapped ConceptMemory for mastery, review, confidence, and retention', () => {
     const database = createDatabase(); const sqlite = database.sqlite
-    sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES ('memory-workspace','C','Ponteiros','active',1,1)").run()
+    sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,confirmed_at,created_at,updated_at) VALUES ('memory-workspace','C','Ponteiros','active',1,1,1)").run()
     sqlite.prepare("INSERT INTO topic_learning_states (workspace_id,topic_id,evidence_count,assessments,correct_first_try,correct_after_help,incorrect,hints_used,reinforcement_events,exercises_completed,lessons_completed,difficulty_level,mastery_estimate,confidence,needs_review,reasons_json,updated_at) VALUES ('memory-workspace','module:Ponteiros',2,2,2,0,0,0,0,0,0,'low',95,'high',0,'[]',2)").run()
     sqlite.prepare("INSERT INTO concepts (id,workspace_id,canonical_name,domain,metadata_json,created_at,updated_at) VALUES ('concept','memory-workspace','Ponteiros','c','{}',1,1)").run()
     sqlite.prepare("INSERT INTO topic_concepts (id,workspace_id,roadmap_id,module_id,topic_id,concept_id,provenance,confidence,mapping_status,created_at,updated_at) VALUES ('mapping','memory-workspace','roadmap','module','module:Ponteiros','concept','explicit',1,'mapped',1,1)").run()

@@ -13,15 +13,11 @@ export const MAX_PROVIDER_ACCOUNTS = 10
  *
  * Conector != modelo.
  *
- * Exemplos:
- * connectorId = 'gemini'
- * model = 'gemini-...'
- *
- * connectorId = 'omniroute'
- * model = 'codex/gpt-5.6-sol'
+ * Modelos nao definem conectores. Por exemplo, o OmniRoute pode retornar
+ * tanto `codex/gpt-5.6-sol` quanto nomes de modelos Gemini.
  */
 export const providerConnectorIds = [
-  'openai',  'gemini',
+  'openai',
   'github-copilot',
   'anthropic',
   'omniroute',
@@ -128,7 +124,6 @@ export interface ProviderAccountDescriptor {
    * Nome escolhido pelo usuário.
    *
    * Exemplos:
-   * "Gemini pessoal"
    * "OmniRoute principal"
    * "Claude faculdade"
    */

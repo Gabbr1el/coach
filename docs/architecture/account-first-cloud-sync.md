@@ -41,7 +41,7 @@ Direct Gemini OAuth and the direct Gemini connector are not part of this
 architecture. A model whose name contains Gemini remains valid when returned by
 OmniRoute and is treated as an OmniRoute model.
 
-The local backup/restore mechanism is not part of recovery. It will be removed.
+The removed local restore mechanism is not part of recovery. Data export remains portability-only and is never a recovery authority.
 Future data export, if implemented, is portability only and cannot replace the
 cloud authority or mutate the live cache by file substitution.
 

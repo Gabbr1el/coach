@@ -13,7 +13,7 @@
 ## Density corrections
 
 - Remove the duplicated top action bar from Home.
-- Move backup, restore, deadline creation, provider setup, and routine editing into Settings or contextual menus.
+- Move data export, deadline creation, provider setup, and routine editing into Settings or contextual menus.
 - Present one primary Planner conversation, one compact Today plan, and one workspace row.
 - Do not render priority cards, hero cards, workspace cards, and Planner actions as competing card grids.
 - Use internal panes with fixed headers and compact rows.

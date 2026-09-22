@@ -25,7 +25,7 @@ Coach is the study system and owns every durable record. AI providers are replac
 5. Materials: secure PDF import, local extraction/chunks/search and relevant-snippet context.
 6. Structured Planner: routine, availability, deadlines, subjects and explainable priority scores.
 7. Session history: automatic outline, collapsible navigation and archived session views.
-8. Reports and backup: deterministic metrics, optional narrative and versioned atomic export/restore.
+8. Reports and portability: deterministic metrics, optional narrative and explicit data export.
 
 ## Refactoring controls
 

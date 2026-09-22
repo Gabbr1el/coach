@@ -20,7 +20,6 @@ import { DrizzleProviderConfigurationRepository } from './repositories/drizzle-p
 import { ElectronCredentialVault } from './security/electron-credential-vault'
 import { OpenAIProvider } from './providers/openai-provider'
 import { OpenAICompatibleProvider } from './providers/openai-compatible-provider'
-import { GeminiProvider } from './providers/gemini-provider'
 import { GitHubCopilotProvider } from './providers/github-copilot-provider'
 import { registerProviderHandlers } from './ipc/provider-handlers'
 import { WorkspaceCoachService } from '../application/conversations/workspace-coach-service'
@@ -39,8 +38,7 @@ import { extractJsonDocument } from '../application/ai/structured-json'
 import { materialSemanticAnalysisSchema } from '../shared/contracts/material-contract'
 import { registerMaterialHandlers } from './ipc/material-handlers'
 import { registerSessionNavigationHandlers } from './ipc/session-navigation-handlers'
-import { registerBackupHandlers } from './ipc/backup-handlers'
-import { finishPendingRestore, recoverPendingRestore, rollbackPendingRestore, validateCoachDatabaseSchema } from './database/restore-recovery'
+import { registerDataExportHandlers } from './ipc/data-export-handlers'
 import { CurrentWorkspaceContextService } from '../application/workspaces/current-workspace-context'
 import { WorkspaceContextHub } from '../application/workspaces/workspace-context-hub'
 import { WorkspaceActionService } from '../application/workspaces/workspace-action-service'
@@ -130,18 +128,7 @@ void app.whenReady().then(async () => {
   try {
     const databasePath = join(app.getPath('userData'), 'coach.sqlite')
     const migrationsFolder = join(app.getAppPath(), 'drizzle/migrations')
-    recoverPendingRestore(databasePath)
-    try {
-      database = openCoachDatabase({ databasePath, migrationsFolder })
-      validateCoachDatabaseSchema(database.sqlite)
-    } catch (error) {
-      console.error('Coach database startup failed before restore recovery retry:', error)
-      database?.close()
-      database = null
-      rollbackPendingRestore(databasePath)
-      database = openCoachDatabase({ databasePath, migrationsFolder })
-      validateCoachDatabaseSchema(database.sqlite)
-    }
+    database = openCoachDatabase({ databasePath, migrationsFolder })
     const workspaceRepository = new DrizzleWorkspaceRepository(database)
     const academicLife = new AcademicLifeService(new SqliteAcademicLifeRepository(database))
     const academicSubjectContext = new AcademicSubjectContextService(new SqliteAcademicSubjectContextRepository(database))
@@ -183,15 +170,6 @@ void app.whenReady().then(async () => {
         ),
 
       Date.now,
-
-      (
-        credential,
-        model,
-      ) =>         new GeminiProvider(
-           credential,
-           model,
-         ),
-
        (
          credential,
          model,
@@ -254,7 +232,7 @@ void app.whenReady().then(async () => {
     registerPlanningHandlers(planningService)
     registerMaterialHandlers(materialService, async (id) => Boolean(await workspaceRepository.findById(id)))
     registerSessionNavigationHandlers(database)
-    registerBackupHandlers(database)
+    registerDataExportHandlers(database)
     registerProjectHandlers(new ProjectService(projectRepository, async (id) => Boolean(await workspaceRepository.findById(id))))
     roadmapService = new RoadmapService(roadmapRepository, providerManager, (id) => workspaceRepository.findById(id), (id) => { const difficulties = (database!.sqlite.prepare("SELECT topic_id AS topicId FROM topic_learning_states WHERE workspace_id = ? AND (difficulty_level IN ('medium','high') OR needs_review = 1) ORDER BY difficulty_level DESC").all(id) as Array<{ topicId: string }>).map((item) => item.topicId.split(':').at(-1) ?? item.topicId); const deadline = (database!.sqlite.prepare('SELECT due_at AS dueAt FROM academic_events WHERE workspace_id = ? AND due_at >= ? ORDER BY due_at LIMIT 1').get(id, Date.now()) as { dueAt: number } | undefined)?.dueAt ?? null; const availability = database!.sqlite.prepare('SELECT weekday, minutes FROM academic_availability ORDER BY weekday').all() as Array<{ weekday: number; minutes: number }>; const workspace = database!.sqlite.prepare('SELECT name FROM workspaces WHERE id = ?').get(id) as { name: string } | undefined; const override = database!.sqlite.prepare('SELECT subject, declared_level AS declaredLevel, declared_knowledge_json AS knowledge, declared_difficulties_json AS difficulties, goals_json AS goals, curricular_scope_json AS curricularScope FROM workspace_learning_overrides WHERE workspace_id = ?').get(id) as { subject: string; declaredLevel: string | null; knowledge: string; difficulties: string; goals: string; curricularScope: string } | undefined; const academic = workspace ? academicSubjectContext.get(workspace.name) : null; const related = (database!.sqlite.prepare("SELECT subject, relation FROM workspace_academic_contexts WHERE workspace_id = ? AND relation != 'primary'").all(id) as Array<{ subject: string; relation: string }>).flatMap((item) => { const context = academicSubjectContext.get(item.subject); return context ? [{ ...context, relation: item.relation }] : [] }); const knownContext = [...(override ? [`Contexto local: ${override.subject}`, `Nível local declarado: ${override.declaredLevel ?? 'não informado'}`, ...(JSON.parse(override.knowledge) as string[]), ...(JSON.parse(override.difficulties) as string[]).map((item) => `Dificuldade local: ${item}`), ...(JSON.parse(override.goals) as string[]).map((item) => `Objetivo local: ${item}`)] : []), ...(academic ? [`Contexto principal: ${academic.subject}`, `Nível declarado: ${academic.declaredLevel ?? 'não informado'}`, ...academic.declaredKnowledge, ...academic.declaredDifficulties.map((item) => `Dificuldade declarada: ${item}`), ...academic.goals.map((item) => `Objetivo: ${item}`)] : []), ...related.flatMap((context) => [`Contexto relacionado (${context.relation}): ${context.subject}`, ...context.declaredKnowledge.map((item) => `${context.subject}: ${item}`), ...context.declaredDifficulties.map((item) => `Dificuldade declarada em ${context.subject}: ${item}`), ...context.goals.map((item) => `Objetivo em ${context.subject}: ${item}`)])]; let curricularScope = {}; if (override?.curricularScope) try { curricularScope = JSON.parse(override.curricularScope) } catch {}; return { difficulties, deadline, availability, knownContext, curricularScope } }, curriculumSourceService, Date.now, () => crypto.randomUUID(), materialService, heavyGenerationQueue)
     provisioningCoordinator = new InitialProvisioningCoordinator(database, contentRepository, () => contentWorker?.wake(), Date.now, performanceTimelines)
@@ -295,7 +273,6 @@ void app.whenReady().then(async () => {
     validateWorkspaceAnalysis = (token, revision, subject, focus, context) => workspaceOnboarding.validate(token, revision, subject, focus, context)
     registerWorkspaceOnboardingHandlers(workspaceOnboarding, (input) => academicSubjectContext.replace(input))
     registerProviderHandlers(providerConfigurationService)
-    finishPendingRestore(databasePath)
     createMainWindow()
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown startup error'

@@ -354,9 +354,6 @@ export interface ProviderApi {
   ):
     Promise<ConfigureProviderResult>
 
-  connectGeminiOAuth():
-    Promise<ConfigureProviderResult>
-
   beginGitHubCopilotOAuth(
     accountId?: string,
   ):

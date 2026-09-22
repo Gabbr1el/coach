@@ -23,7 +23,7 @@ export interface CoachDesktopApi {
   planning: import('./planning-contract').PlanningApi
   material: import('./material-contract').MaterialApi
   sessionNavigation: import('./session-navigation-contract').SessionNavigationApi
-  backup: import('./backup-contract').BackupApi
+  dataExport: import('./data-export-contract').DataExportApi
   project: import('./project-contract').ProjectApi
   roadmap: import('./roadmap-contract').RoadmapApi
   plannerAction: import('./planner-action-contract').PlannerActionApi

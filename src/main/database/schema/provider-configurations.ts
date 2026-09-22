@@ -23,7 +23,6 @@ export const providerConfigurations = sqliteTable(
      *
      * Exemplos:
      * openai
-     * gemini
      * anthropic
      * omniroute
      * openai-compatible
@@ -38,7 +37,6 @@ export const providerConfigurations = sqliteTable(
      *
      * Exemplos:
      * OpenAI
-     * Gemini
      * OmniRoute
      */
     displayName: text('display_name').notNull(),
@@ -47,8 +45,6 @@ export const providerConfigurations = sqliteTable(
      * Nome escolhido pelo usuário para distinguir suas contas.
      *
      * Exemplos:
-     * "Gemini pessoal"
-     * "Gemini faculdade"
      */
     label: text('label').notNull(),
 
@@ -141,7 +137,6 @@ export const providerConfigurations = sqliteTable(
       'provider_configurations_provider_check',
       sql`${table.providerId} in (
         'openai',
-        'gemini',
         'github-copilot',
         'anthropic',
         'omniroute',
@@ -199,7 +194,7 @@ export const providerConfigurations = sqliteTable(
       'provider_configurations_base_url_check',
       sql`
         (
-          ${table.providerId} in ('openai', 'gemini', 'github-copilot', 'anthropic')
+          ${table.providerId} in ('openai', 'github-copilot', 'anthropic')
           and ${table.baseUrl} is null
         )
         or

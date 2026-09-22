@@ -20,9 +20,6 @@ export const PROVIDER_CHANNELS = {
   configureCompatible:
     'provider:configure-compatible',
 
-  connectGeminiOAuth:
-    'provider:connect-gemini-oauth',
-
   beginGitHubCopilotOAuth:
     'provider:begin-github-copilot-oauth',
 

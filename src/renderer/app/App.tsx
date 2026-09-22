@@ -2327,24 +2327,6 @@ export function App() {
           return result
         },
 
-      onConnectGeminiOAuth: async () => {
-        const result =
-          await window.coach.provider
-            .connectGeminiOAuth()
-
-        setProviderStatus(
-          await window.coach.provider
-            .getStatus(),
-        )
-
-        setProviderAccounts(
-          await window.coach.provider
-            .listAccounts(),
-        )
-
-        return result
-      },
-
       onSelect: async (accountId) => {
         const target =
           providerAccounts.find(

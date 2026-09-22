@@ -12,7 +12,7 @@ import { OBSERVER_CHANNELS } from '../shared/contracts/observer-channels'
 import { PLANNING_CHANNELS } from '../shared/contracts/planning-channels'
 import { MATERIAL_CHANNELS } from '../shared/contracts/material-channels'
 import { SESSION_NAVIGATION_CHANNELS } from '../shared/contracts/session-navigation-channels'
-import { BACKUP_CHANNELS } from '../shared/contracts/backup-channels'
+import { DATA_EXPORT_CHANNELS } from '../shared/contracts/data-export-channels'
 import { PROJECT_CHANNELS } from '../shared/contracts/project-channels'
 import { ROADMAP_CHANNELS } from '../shared/contracts/roadmap-channels'
 import { PLANNER_ACTION_CHANNELS } from '../shared/contracts/planner-action-channels'
@@ -156,7 +156,6 @@ const api: CoachDesktopApi = {
     checkActiveFunctionalHealth: () => ipcRenderer.invoke(PROVIDER_CHANNELS.checkActiveFunctionalHealth),
     configureOpenAI: (input) => ipcRenderer.invoke(PROVIDER_CHANNELS.configureOpenAI, input),
     configureCompatible: (input) => ipcRenderer.invoke(PROVIDER_CHANNELS.configureCompatible, input),
-    connectGeminiOAuth: () => ipcRenderer.invoke(PROVIDER_CHANNELS.connectGeminiOAuth),
     beginGitHubCopilotOAuth: (accountId?: string) => ipcRenderer.invoke(PROVIDER_CHANNELS.beginGitHubCopilotOAuth, accountId ? { accountId } : {}),
     completeGitHubCopilotOAuth: (flowId) => ipcRenderer.invoke(PROVIDER_CHANNELS.completeGitHubCopilotOAuth, flowId),
     selectAccount: (accountId) => ipcRenderer.invoke(PROVIDER_CHANNELS.selectAccount, accountId),
@@ -220,9 +219,8 @@ const api: CoachDesktopApi = {
     listSavedForLater: (workspaceId) => ipcRenderer.invoke(SESSION_NAVIGATION_CHANNELS.listSavedForLater, { workspaceId }),
     listOutline: (workspaceId) => ipcRenderer.invoke(SESSION_NAVIGATION_CHANNELS.listOutline, { workspaceId }),
   },
-  backup: {
-    exportBackup: () => ipcRenderer.invoke(BACKUP_CHANNELS.exportBackup),
-    restoreBackup: () => ipcRenderer.invoke(BACKUP_CHANNELS.restoreBackup),
+  dataExport: {
+    exportData: () => ipcRenderer.invoke(DATA_EXPORT_CHANNELS.exportData),
   },
   project: {
     get: (workspaceId) => ipcRenderer.invoke(PROJECT_CHANNELS.get, { workspaceId }),

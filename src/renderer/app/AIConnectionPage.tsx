@@ -35,7 +35,6 @@ type Persistence =
 
 type ConnectionMethod =
   | ProviderType
-  | 'gemini-oauth'
   | 'claude-oauth'
   | 'other-provider'
   | 'opencode-api'
@@ -153,9 +152,6 @@ export interface AIConnectionPageProps {
     model: string,
     persistence: Persistence,
   ) => Promise<ConfigureProviderResult>
-  onConnectGeminiOAuth:
-    () => Promise<ConfigureProviderResult>
-
   onBeginGitHubCopilotOAuth:
     (accountId?: string) => Promise<BeginGitHubCopilotOAuthResult>
 
@@ -643,9 +639,6 @@ function providerDisplayName(
 
     case 'openai-compatible':
       return 'OpenAI-compatible'
-
-    case 'gemini':
-      return 'Google Gemini'
 
     case 'anthropic':
       return 'Claude'
@@ -2055,57 +2048,6 @@ function ProviderLogo({
     large
       ? 'size-10'
       : 'size-9'
-
-  if (
-    account.providerId === 'gemini'
-  ) {
-    const gradientId =
-      `gemini-logo-${account.id}`
-
-    return (
-      <span
-        className={`${sizeClass} grid shrink-0 place-items-center rounded-xl bg-[#20242d]`}
-        aria-hidden="true"
-      >
-        <svg
-          viewBox="0 0 24 24"
-          className="size-[70%]"
-        >
-          <defs>
-            <linearGradient
-              id={gradientId}
-              x1="3"
-              y1="20"
-              x2="21"
-              y2="4"
-              gradientUnits="userSpaceOnUse"
-            >
-              <stop
-                stopColor="#08B962"
-              />
-              <stop
-                offset="0.34"
-                stopColor="#3186FF"
-              />
-              <stop
-                offset="0.68"
-                stopColor="#A142F4"
-              />
-              <stop
-                offset="1"
-                stopColor="#F94543"
-              />
-            </linearGradient>
-          </defs>
-
-          <path
-            d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z"
-            fill={`url(#${gradientId})`}
-          />
-        </svg>
-      </span>
-    )
-  }
 
   if (
     account.providerId === 'omniroute'
@@ -3954,319 +3896,6 @@ const [
 
 
 
-function geminiOAuthErrorMessage(
-  code: string,
-): string {
-  switch (code) {
-    case 'AUTH_CANCELLED':
-      return 'O login com Google foi cancelado.'
-
-    case 'OAUTH_CONFIGURATION_MISSING':
-      return 'A configuração OAuth do Google não está disponível neste ambiente.'
-
-    case 'SECURE_STORAGE_UNAVAILABLE':
-      return 'O armazenamento seguro do sistema não está disponível.'
-
-    case 'INVALID_CREDENTIAL':
-      return 'O Google não retornou uma autorização válida. Tente conectar novamente.'
-
-    case 'ACCESS_RESTRICTED':
-      return 'Esta conta Google não possui permissão para acessar o Gemini por esta configuração.'
-
-    case 'MODEL_UNAVAILABLE':
-      return 'A conta foi autorizada, mas nenhum modelo Gemini compatível ficou disponível.'
-
-    case 'NETWORK_UNAVAILABLE':
-      return 'Não foi possível comunicar com o Google. Verifique sua conexão.'
-
-    case 'RATE_LIMITED':
-      return 'O Google limitou temporariamente as solicitações. Tente novamente em instantes.'
-
-    case 'INSUFFICIENT_QUOTA':
-      return 'O projeto ou conta não possui cota disponível para usar o Gemini.'
-
-    case 'ACCOUNT_LIMIT_REACHED':
-      return 'O limite de contas de IA configuradas no Coach foi atingido.'
-
-    case 'INVALID_CONFIGURATION':
-      return 'A configuração do login Google é inválida.'
-
-    case 'ACCOUNT_DISABLED':
-      return 'Esta conta está desativada.'
-
-    case 'ACCOUNT_NOT_FOUND':
-      return 'A conta não foi encontrada.'
-
-    default:
-      return 'Não foi possível concluir o login com Google.'
-  }
-}
-
-
-function GeminiOAuthPanel({
-  onConnect,
-  onConnected,
-}: {
-  onConnect:
-    () => Promise<ConfigureProviderResult>
-
-  onConnected:
-    () => void
-}) {
-  const [connecting, setConnecting] =
-    useState(false)
-
-  const [error, setError] =
-    useState<string | null>(null)
-
-  async function connect() {
-    if (connecting) {
-      return
-    }
-
-    setConnecting(true)
-    setError(null)
-
-    try {
-      const result =
-        await onConnect()
-
-      if (!result.ok) {
-        setError(
-          geminiOAuthErrorMessage(
-            result.code,
-          ),
-        )
-
-        return
-      }
-
-      onConnected()
-    } catch {
-      setError(
-        'Não foi possível concluir o login com Google.',
-      )
-    } finally {
-      setConnecting(false)
-    }
-  }
-
-  return (
-    <div className="p-5 sm:p-6">
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-[#292244] text-[#8c7cff]">
-            <Sparkles
-              size={21}
-              aria-hidden="true"
-            />
-          </span>
-
-          <div className="min-w-0">
-            <h2 className="text-lg font-semibold text-white">
-              Google Gemini
-            </h2>
-
-            <p className="mt-0.5 text-[11px] text-[#9297a3]">
-              OAuth oficial
-            </p>
-          </div>
-        </div>
-
-        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[#10251c] px-3 py-1.5 text-[10px] font-medium text-[#55d69a]">
-          <span aria-hidden="true">
-            ◉
-          </span>
-          Seguro
-        </span>
-      </div>
-
-      <p className="mt-5 text-sm leading-6 text-[#9297a3]">
-        Conecte sua conta Google para autorizar o Coach a usar
-        os modelos Gemini disponíveis para sua conta e projeto.
-        Você poderá revisar e revogar o acesso quando quiser.
-      </p>
-
-      <section className="mt-4 rounded-xl bg-[#0d0e12] p-4">
-        <h3 className="text-xs font-medium text-white">
-          O que será compartilhado
-        </h3>
-
-        <div className="mt-4 space-y-3 text-[11px] text-[#9297a3]">
-          <div className="flex items-center gap-3">
-            <span className="text-[#55d69a]">
-              ✓
-            </span>
-            <span>
-              Seu e-mail e perfil básico
-            </span>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <span className="text-[#55d69a]">
-              ✓
-            </span>
-            <span>
-              Acesso aos modelos Gemini autorizados pela conta
-            </span>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <span className="text-[#55d69a]">
-              ✓
-            </span>
-            <span>
-              Nenhuma senha é armazenada pelo Coach
-            </span>
-          </div>
-        </div>
-      </section>
-
-      <section className="mt-4">
-        <h3 className="text-xs font-semibold text-white">
-          Como funciona
-        </h3>
-
-        <div className="mt-3 grid gap-2 sm:grid-cols-3">
-          <div className="rounded-xl border border-[#292c35] bg-[#101116] p-3">
-            <div className="flex items-center gap-2">
-              <span className="grid size-5 place-items-center rounded-full bg-[#302951] text-[9px] font-bold text-[#b5aaff]">
-                1
-              </span>
-
-              <strong className="text-[10px] font-medium text-white">
-                Entrar no Google
-              </strong>
-            </div>
-
-            <p className="mt-2 text-[9px] leading-4 text-[#626773]">
-              Você acessa a página oficial
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-[#292c35] bg-[#101116] p-3">
-            <div className="flex items-center gap-2">
-              <span className="grid size-5 place-items-center rounded-full bg-[#302951] text-[9px] font-bold text-[#b5aaff]">
-                2
-              </span>
-
-              <strong className="text-[10px] font-medium text-white">
-                Autorizar
-              </strong>
-            </div>
-
-            <p className="mt-2 text-[9px] leading-4 text-[#626773]">
-              Revise as permissões
-            </p>
-          </div>
-
-          <div className="rounded-xl border border-[#292c35] bg-[#101116] p-3">
-            <div className="flex items-center gap-2">
-              <span className="grid size-5 place-items-center rounded-full bg-[#302951] text-[9px] font-bold text-[#b5aaff]">
-                3
-              </span>
-
-              <strong className="text-[10px] font-medium text-white">
-                Começar a usar
-              </strong>
-            </div>
-
-            <p className="mt-2 text-[9px] leading-4 text-[#626773]">
-              Modelos ficam disponíveis
-            </p>
-          </div>
-        </div>
-      </section>
-
-      <section className="mt-4">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="text-xs font-semibold text-white">
-            Modelos disponíveis após conectar
-          </h3>
-
-          <span className="text-[9px] text-[#626773]">
-            Conforme sua conta/projeto Google
-          </span>
-        </div>
-
-        <div className="mt-3 grid gap-2 sm:grid-cols-3">
-          <div className="flex items-center gap-2 rounded-lg bg-[#171820] px-3 py-2 text-[10px] text-[#9297a3]">
-            <Sparkles
-              size={12}
-              className="text-[#8c7cff]"
-              aria-hidden="true"
-            />
-            Gemini 2.5 Pro
-          </div>
-
-          <div className="flex items-center gap-2 rounded-lg bg-[#171820] px-3 py-2 text-[10px] text-[#9297a3]">
-            <span className="text-[#8c7cff]">
-              ϟ
-            </span>
-            Gemini 2.5 Flash
-          </div>
-
-          <div className="flex items-center gap-2 rounded-lg bg-[#171820] px-3 py-2 text-[10px] text-[#9297a3]">
-            <span className="text-[#8c7cff]">
-              ◔
-            </span>
-            Gemini 2.0 Flash
-          </div>
-        </div>
-      </section>
-
-      <div className="mt-4 flex items-center gap-3 rounded-xl bg-[#2c244b] px-4 py-3">
-        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-[#3a3062] text-[#b8adff]">
-          ◇
-        </span>
-
-        <div>
-          <strong className="block text-[10px] text-white">
-            Você mantém o controle
-          </strong>
-
-          <p className="mt-0.5 text-[9px] leading-4 text-[#aaa4bd]">
-            Desative ou revogue esta conexão a qualquer momento
-            em Gerenciar contas.
-          </p>
-        </div>
-      </div>
-
-      {error && (
-        <div
-          role="alert"
-          className="mt-4 rounded-xl border border-[#5a3035] bg-[#241517] px-4 py-3 text-[11px] leading-5 text-[#f0a5ad]"
-        >
-          {error}
-        </div>
-      )}
-
-      <button
-        type="button"
-        disabled={connecting}
-        onClick={() => {
-          void connect()
-        }}
-        className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-[#8070f2] px-4 py-3 text-xs font-bold text-white transition hover:bg-[#8c7cff] disabled:cursor-wait disabled:opacity-60"
-      >
-        <span aria-hidden="true">
-          ↪
-        </span>
-
-        {connecting
-          ? 'Aguardando autorização...'
-          : 'Continuar com Google'}
-      </button>
-
-      <p className="mt-3 text-center text-[9px] text-[#626773]">
-        Uma nova janela segura será aberta para concluir o login.
-      </p>
-    </div>
-  )
-}
-
-
-
 function GitHubCopilotConnection({
   status,
   onBeginGitHubCopilotOAuth,
@@ -4631,13 +4260,7 @@ export function AIConnectionPage(
       {activeTab === 'current' && (
         <CurrentAISelection
           status={props.status}
-          accounts={
-            props.accounts.filter(
-              (account) =>
-                account.providerId
-                !== 'gemini',
-            )
-          }
+          accounts={props.accounts}
           runtimeIssues={
             props.runtimeIssues ?? {}
           }

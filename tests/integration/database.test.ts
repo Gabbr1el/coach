@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openCoachDatabase } from '../../src/main/database/connection'
-import { validateCoachDatabaseSchema } from '../../src/main/database/restore-recovery'
+import { validateCoachDatabaseSchema } from '../helpers/database-validation'
 import { migrationCount, repairExerciseSchema, repairInteractiveCodeStateSchema, repairPublishedEvidenceSchema } from '../../src/main/database/migrate'
 import { repairLegacyExerciseData } from '../../src/main/database/exercise-data-repair'
 import { DrizzleWorkspaceRepository } from '../../src/main/repositories/drizzle-workspace-repository'
@@ -90,10 +90,40 @@ function migrationsThrough0068(): string {
   return directory
 }
 
+function migrationsThrough0070(): string {
+  const directory = mkdtempSync(join(tmpdir(), 'coach-migrations-0070-'))
+  temporaryDirectories.push(directory)
+  cpSync(migrationsFolder, directory, { recursive: true })
+  const journalPath = join(directory, 'meta/_journal.json')
+  const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: Array<{ idx: number }> }
+  journal.entries = journal.entries.filter((entry) => entry.idx <= 70)
+  writeFileSync(journalPath, `${JSON.stringify(journal, null, 2)}\n`)
+  return directory
+}
+
 describe('Coach database migrations', () => {
   it('keeps journal timestamps strictly increasing so upgrades cannot skip migrations', () => {
     const entries = (JSON.parse(readFileSync(join(migrationsFolder, 'meta/_journal.json'), 'utf8')) as { entries: Array<{ when: number }> }).entries
     expect(entries.every((entry, index) => index === 0 || entry.when > entries[index - 1]!.when)).toBe(true)
+  })
+  it('removes only legacy direct Gemini accounts during upgrade', () => {
+    const databasePath = createDatabasePath()
+    let database = openCoachDatabase({ databasePath, migrationsFolder: migrationsThrough0070() })
+    const insert = database.sqlite.prepare('INSERT INTO provider_configurations (id,provider_id,display_name,label,auth_kind,identity_label,base_url,model,reasoning_effort,secret_reference,is_enabled,is_active,created_at,updated_at,identity_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    insert.run('legacy-gemini', 'gemini', 'Google Gemini', 'Gemini antiga', 'oauth', 'user@example.com', null, 'gemini-2.5-flash', 'auto', 'provider-gemini-oauth-legacy', 1, 1, 1, 1, null)
+    insert.run('kept-omniroute', 'omniroute', 'OmniRoute', 'OmniRoute', 'endpoint-token', null, 'https://example.com/v1', 'google/gemini-2.5-pro', 'auto', 'provider-omniroute-kept', 1, 0, 1, 1, null)
+    database.close()
+
+    database = openCoachDatabase({ databasePath, migrationsFolder })
+    expect(database.sqlite.prepare('SELECT id,provider_id AS providerId,model,secret_reference AS secretReference FROM provider_configurations ORDER BY id').all()).toEqual([{
+      id: 'kept-omniroute',
+      providerId: 'omniroute',
+      model: 'google/gemini-2.5-pro',
+      secretReference: 'provider-omniroute-kept',
+    }])
+    const insertAfterMigration = database.sqlite.prepare('INSERT INTO provider_configurations (id,provider_id,display_name,label,auth_kind,identity_label,base_url,model,reasoning_effort,secret_reference,is_enabled,is_active,created_at,updated_at,identity_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    expect(() => insertAfterMigration.run('new-direct-gemini', 'gemini', 'Gemini', 'Gemini', 'oauth', null, null, 'gemini-2.5-flash', 'auto', 'forbidden', 1, 0, 1, 1, null)).toThrow()
+    database.close()
   })
   it('does not infer per-workspace terminal consolidation from a shared subject timestamp', () => {
     const databasePath = createDatabasePath()

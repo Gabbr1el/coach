@@ -1,41 +1,4 @@
-import { closeSync, existsSync, fsyncSync, openSync, renameSync, rmSync } from 'node:fs'
-import { dirname } from 'node:path'
 import type Database from 'better-sqlite3'
-
-function syncDirectory(path: string): void {
-  const descriptor = openSync(dirname(path), 'r')
-  try { fsyncSync(descriptor) } finally { closeSync(descriptor) }
-}
-
-export function recoverPendingRestore(databasePath: string): void {
-  const marker = `${databasePath}.restore-pending`
-  if (!existsSync(marker)) return
-  const previous = `${databasePath}.restore-previous`
-  const staging = `${databasePath}.restore-staging`
-  if (!existsSync(previous) && existsSync(databasePath) && existsSync(staging)) {
-    rmSync(`${databasePath}-wal`, { force: true })
-    rmSync(`${databasePath}-shm`, { force: true })
-    renameSync(databasePath, previous)
-    syncDirectory(databasePath)
-  }
-  if (!existsSync(databasePath)) {
-    if (existsSync(staging)) renameSync(staging, databasePath)
-    else if (existsSync(previous)) renameSync(previous, databasePath)
-    else throw new Error('Coach restore recovery could not find a database copy')
-    syncDirectory(databasePath)
-  }
-}
-
-export function rollbackPendingRestore(databasePath: string): void {
-  const marker = `${databasePath}.restore-pending`
-  const previous = `${databasePath}.restore-previous`
-  if (!existsSync(marker) || !existsSync(previous)) return
-  rmSync(databasePath, { force: true })
-  renameSync(previous, databasePath)
-  rmSync(`${databasePath}.restore-staging`, { force: true })
-  rmSync(marker, { force: true })
-  syncDirectory(databasePath)
-}
 
 export function validateCoachDatabaseSchema(sqlite: Database.Database, expectedMigrationCount?: number): void {
   const integrity = sqlite.pragma('quick_check') as Array<{ quick_check: string }>
@@ -85,10 +48,3 @@ export function validateCoachDatabaseSchema(sqlite: Database.Database, expectedM
   }
 }
 
-export function finishPendingRestore(databasePath: string): void {
-  const marker = `${databasePath}.restore-pending`
-  if (!existsSync(marker)) return
-  rmSync(`${databasePath}.restore-previous`, { force: true })
-  rmSync(`${databasePath}.restore-staging`, { force: true })
-  rmSync(marker, { force: true })
-}

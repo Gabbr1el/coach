@@ -7,12 +7,13 @@ import { ProviderConfigurationService } from '../../src/application/ai/provider-
 
 class MemoryVault implements CredentialVault {
   value: string | null = null
+  validReferences: ReadonlySet<string> | null = null
   constructor(private readonly available = true) {}
   isAvailable() { return this.available }
   async set(_reference: string, secret: string) { this.value = secret }
   async get() { return this.value }
   async delete() { this.value = null }
-  async removeOrphans() {}
+  async removeOrphans(validReferences: ReadonlySet<string>) { this.validReferences = new Set(validReferences) }
 }
 
 class MemoryConfigurationRepository implements ProviderConfigurationRepository {
@@ -97,6 +98,22 @@ const openAIProvider = () => provider()
 const compatibleProvider = () => provider()
 
 describe('ProviderConfigurationService', () => {
+  it('preserves every supported persisted credential reference during startup cleanup', async () => {
+    const repository = new MemoryConfigurationRepository()
+    repository.configurations = [
+      { id: '00000000-0000-4000-8000-000000000001', providerId: 'openai', displayName: 'OpenAI', label: 'OpenAI', baseUrl: null, model: 'gpt-5-mini', secretReference: 'provider-openai-kept', isActive: true, createdAt: 1, updatedAt: 1 },
+      { id: '00000000-0000-4000-8000-000000000002', providerId: 'omniroute', displayName: 'OmniRoute', label: 'OmniRoute', baseUrl: 'https://example.com/v1', model: 'google/gemini-2.5-pro', secretReference: 'provider-omniroute-kept', isActive: false, createdAt: 1, updatedAt: 1 },
+    ]
+    const vault = new MemoryVault()
+    vault.value = 'credential'
+    const service = new ProviderConfigurationService(repository, vault, new AIProviderManager(), openAIProvider, compatibleProvider)
+
+    await service.initialize()
+
+    expect(vault.validReferences).toEqual(new Set(['provider-openai-kept', 'provider-omniroute-kept']))
+    expect((await service.listAccounts()).map((account) => account.model)).toContain('google/gemini-2.5-pro')
+  })
+
   it('does not create an implicit OmniRoute account when secure storage is unavailable', async () => {
     const manager =
       new AIProviderManager()
@@ -557,7 +574,7 @@ describe('ProviderConfigurationService multi-account behavior', () => {
       listModels: async () => ['preferred-model', 'fallback-model'],
       sendMessage: async () => ({ content: model, providerId: 'github-copilot', modelId: model }),
     })
-    const service = new ProviderConfigurationService(repository, vault, manager, openAIProvider, compatibleProvider, () => 50, undefined, copilotFactory)
+    const service = new ProviderConfigurationService(repository, vault, manager, openAIProvider, compatibleProvider, () => 50, copilotFactory)
 
     await service.configureGitHubCopilotOAuth('new-token', '@new-login', 'github:42', accountId)
 
@@ -599,7 +616,7 @@ describe('ProviderConfigurationService multi-account behavior', () => {
     const vault = new MemoryVault()
     vault.value = 'old-token'
     const copilotFactory = (): AIProvider => ({ ...provider(), id: 'github-copilot', name: 'GitHub Copilot', listModels: async () => ['model-a'] })
-    const service = new ProviderConfigurationService(repository, vault, new AIProviderManager(), openAIProvider, compatibleProvider, Date.now, undefined, copilotFactory)
+    const service = new ProviderConfigurationService(repository, vault, new AIProviderManager(), openAIProvider, compatibleProvider, Date.now, copilotFactory)
 
     await expect(service.configureGitHubCopilotOAuth('other-token', '@other', 'github:8', accountId)).rejects.toMatchObject({ code: 'INVALID_CREDENTIAL' })
     expect(repository.configuration?.identityKey).toBe('github:7')
@@ -649,7 +666,7 @@ describe('ProviderConfigurationService multi-account behavior', () => {
     const vault = new MemoryVault()
     vault.value = 'old-token'
     const copilotFactory = (): AIProvider => ({ ...provider(), id: 'github-copilot', name: 'GitHub Copilot', listModels: async () => ['model-a', 'model-b'] })
-    const service = new ProviderConfigurationService(repository, vault, new AIProviderManager(), openAIProvider, compatibleProvider, Date.now, undefined, copilotFactory)
+    const service = new ProviderConfigurationService(repository, vault, new AIProviderManager(), openAIProvider, compatibleProvider, Date.now, copilotFactory)
 
     await service.configureGitHubCopilotOAuth('renewed-token', '@verified', 'github:77', targetId)
 

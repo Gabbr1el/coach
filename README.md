@@ -16,7 +16,7 @@ pnpm dev
 
 ## Local MVP
 
-The current Linux-first desktop MVP includes local Workspaces, BYOK provider routing, Planner and Tutor modes, authoritative academic context by subject, versioned learning roadmaps, confirmed Planner and Workspace actions, durable multi-file Python/C/Java projects, Monaco file navigation, sandboxed compilation and execution, adaptive focus sessions, the event-driven Observer, progressive ContextRouter assistance, layered memory, staged PDF/PPTX materials with explicit approval, bounded on-demand context reads, priorities, session reports/outline, distraction parking, and backup export/restore.
+The current Linux-first desktop MVP includes local Workspaces, BYOK provider routing, Planner and Tutor modes, authoritative academic context by subject, versioned learning roadmaps, confirmed Planner and Workspace actions, durable multi-file Python/C/Java projects, Monaco file navigation, sandboxed compilation and execution, adaptive focus sessions, the event-driven Observer, progressive ContextRouter assistance, layered memory, staged PDF/PPTX materials with explicit approval, bounded on-demand context reads, priorities, session reports/outline, distraction parking, and optional data export.
 
 Runtime requirements for the hardened local tools:
 

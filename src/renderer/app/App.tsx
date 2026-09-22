@@ -431,6 +431,7 @@ function AIProblemDialog({
 }) {
   const copy =
     aiProblemCopy(problem)
+  const dialogRef = useDialogFocus<HTMLElement>(true, onClose, 'button')
 
   return (
     <div
@@ -439,7 +440,7 @@ function AIProblemDialog({
       aria-modal="true"
       aria-labelledby="ai-problem-title"
     >
-      <section className="w-full max-w-md rounded-2xl border border-[#39313b] bg-[#121318] p-6 shadow-2xl">
+      <section ref={dialogRef} className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-[#39313b] bg-[#121318] p-6 shadow-2xl">
         <div className="mx-auto grid size-11 place-items-center rounded-full bg-[#3a2024] font-bold text-[#ef8d93]">
           !
         </div>
@@ -511,6 +512,7 @@ export function App() {
   const [plannerError, setPlannerError] = useState<string | null>(null)
   const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null)
   const [providerAccounts, setProviderAccounts] = useState<ProviderAccountSummary[]>([])
+  const [providerAccountsState, setProviderAccountsState] = useState<'loading' | 'loaded' | 'error'>('loading')
 
   const [
     providerRuntimeIssues,
@@ -809,7 +811,7 @@ export function App() {
     void window.coach.planning.getWeeklyPlan().then(setWeeklyPlan).catch(() => setPlannerError('Não foi possível carregar o plano semanal.'))
     void window.coach.academicLife.getProjection().then(setAcademicLife)
     void window.coach.provider.getStatus().then(setProviderStatus).catch(() => setPlannerError('Não foi possível consultar a configuração de IA.'))
-    void window.coach.provider.listAccounts().then(setProviderAccounts).catch(() => setPlannerError('Não foi possível listar as contas de IA.'))
+    void window.coach.provider.listAccounts().then((accounts) => { setProviderAccounts(accounts); setProviderAccountsState('loaded') }).catch(() => { setProviderAccountsState('error'); setPlannerError('Não foi possível listar as contas de IA.') })
     void window.coach.plannerAction.listPending().then(setPlannerActions)
     void window.coach.report.getGlobalOverview().then(setGlobalReport).catch(() => setPlannerError('Não foi possível carregar o panorama geral.'))
   }, [loadWorkspaces])
@@ -2257,6 +2259,11 @@ export function App() {
       aiConnection={{
       status: providerStatus,
       accounts: providerAccounts,
+      accountsState: providerAccountsState,
+      onRetryAccounts: () => {
+        setProviderAccountsState('loading')
+        void window.coach.provider.listAccounts().then((accounts) => { setProviderAccounts(accounts); setProviderAccountsState('loaded') }).catch(() => setProviderAccountsState('error'))
+      },
       runtimeIssues:
         providerRuntimeIssues,
       healthSnapshots:

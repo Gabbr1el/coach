@@ -69,7 +69,7 @@ export function registerConversationHandlers(service: HomePlannerService, worksp
     }
     send({ requestId: input.requestId, type: 'started', state: 'sending' })
     try {
-      const turn = await organizer.organize(input)
+      const turn = await organizer.organize(input, controller.signal)
 
       /*
        * "failed" significa que o fluxo do Coach não conseguiu

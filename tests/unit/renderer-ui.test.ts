@@ -73,6 +73,15 @@ describe('renderer UI safeguards', () => {
     expect(app).toContain('aria-label="Fechar notas"')
     expect(app).toContain('htmlFor="quick-notes"')
     expect(home).toContain('focus-visible:opacity-100')
+    expect(focus).toContain('element.inert = true')
+    const ai = read('src/renderer/app/AIConnectionPage.tsx')
+    expect(ai).toContain('Usar esta IA')
+    expect(ai).toContain('aria-pressed={account.isActive}')
+    expect(ai).toContain('max-h-[calc(100dvh-2rem)]')
+    expect(ai).toContain('modelRequestEpoch.current')
+    expect(ai).toContain("accountsState === 'error'")
+    expect(ai).toContain('connectionSuccessDialogRef')
+    expect(app).toContain('const dialogRef = useDialogFocus<HTMLElement>(true, onClose')
   })
 
   it('keeps custom endpoint creation model-free and authentication optional', () => {

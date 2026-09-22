@@ -2369,35 +2369,16 @@ async updateAccount(
 
       || configuration.isActive
 
-    /**
-     * Mantemos este comportamento propositalmente:
-     *
-     * se a conta estava ativa, ela sai do manager antes da exclusão da
-     * credencial.
-     *
-     * Isso evita que uma conta continue operacional caso a exclusão
-     * segura da credencial falhe.
-     */
-    this.manager.remove(
-      accountId,
-    )
+    await this.repository.remove(accountId)
 
-    this.healthByAccount.delete(
-      accountId,
-    )
+    /* Runtime removal follows the authoritative metadata commit. */
+    this.manager.remove(accountId)
+    this.healthByAccount.delete(accountId)
 
-    await this.repository.remove(
-      accountId,
-    )
-
-    /*
-     * Remove metadata first. A vault failure may leave an orphaned secret,
-     * which startup cleanup can safely collect; the inverse would leave a
-     * live account pointing at a credential that no longer exists.
-     */
+    /* Metadata is authoritative. A failed cleanup leaves only an inert orphan. */
     await this.vault.delete(
       configuration.secretReference,
-    )
+    ).catch(() => {})
 
     if (wasActive) {
       await this.ensureActiveProvider(

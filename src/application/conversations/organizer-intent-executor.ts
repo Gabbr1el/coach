@@ -5,6 +5,7 @@ import type { WeeklyPlanningReview } from '../planning/weekly-planner'
 import type { PlannerActionType } from '../../shared/contracts/planner-action-contract'
 import { plannerActionProposalSchema } from '../../shared/contracts/planner-action-contract'
 import type { PlannerActionService } from '../planning/planner-action-service'
+import type { StagedPlannerAction } from './organizer-unit-of-work'
 import { extractAcademicDate, extractAcademicDateChange } from './academic-event-time'
 
 interface OrganizerExecutionContext {
@@ -23,7 +24,7 @@ interface OrganizerExecutionContext {
   readonly focusedAcademicEventId?: string | null
 }
 
-export type OrganizerExecution = { readonly result: HomeOrganizerResult; readonly assistantId?: string } | null
+export type OrganizerExecution = { readonly result: HomeOrganizerResult; readonly assistantId?: string; readonly proposals?: readonly StagedPlannerAction[] } | null
 
 function normalized(value: string): string { return value.trim().toLocaleLowerCase('pt-BR') }
 function searchNormalized(value: string): string { return normalized(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '') }
@@ -123,9 +124,10 @@ export class OrganizerIntentExecutor {
     const parsed = plannerActionProposalSchema.parse({ type: proposal.type, payload: proposal.payload })
     const assistantId = crypto.randomUUID()
     const originMessageId = context.originMessageId ?? assistantId
-    const action = this.actions.propose({ type: parsed.type as PlannerActionType, payload: parsed.payload, label: proposal.label, originMessageId, contextVersion: context.version, idempotencyScope: `organizer:${originMessageId}:${parsed.type}:${JSON.stringify(parsed.payload)}` })
+    const staged = this.actions.stageProposal({ type: parsed.type as PlannerActionType, payload: parsed.payload, label: proposal.label, originMessageId, contextVersion: context.version, idempotencyScope: `organizer:${originMessageId}:${parsed.type}:${JSON.stringify(parsed.payload)}` })
+    const action = staged.action
     const workspaceIds = workspace ? [workspace.id] : []
-    return { assistantId, result: { outcome: 'needs_decision', operations: [], actions: [action], affectedWorkspaceIds: workspaceIds, message: `Posso ${proposal.label.toLocaleLowerCase('pt-BR')}. Confirme pelo botão; nada mudou ainda.` } }
+    return { assistantId, proposals: [staged], result: { outcome: 'needs_decision', operations: [], actions: [action], affectedWorkspaceIds: workspaceIds, message: `Posso ${proposal.label.toLocaleLowerCase('pt-BR')}. Confirme pelo botão; nada mudou ainda.` } }
   }
 
   private query(capability: string, entities: OrganizerEntities, workspace: { id: string; name: string } | null, context: OrganizerExecutionContext): HomeOrganizerResult {

@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { plannerActionProposalSchema, type PlannerAction, type PlannerActionType } from '../../shared/contracts/planner-action-contract'
 import type { ProjectLanguage } from '../../shared/contracts/project-contract'
 import type { AcademicLifeItem, AcademicLifeMutationInput } from '../../shared/contracts/academic-life-contract'
+import type { StagedPlannerAction } from '../conversations/organizer-unit-of-work'
 
 export interface PlannerActionRepository {
   listPending(): PlannerAction[]
@@ -48,11 +49,15 @@ export class PlannerActionService {
   private readonly createId: () => string
   constructor(private readonly dependencies: PlannerActionDependencies) { this.now = dependencies.now ?? Date.now; this.createId = dependencies.createId ?? (() => crypto.randomUUID()) }
   listPending(): PlannerAction[] { return this.dependencies.repository.listPending() }
-  propose(input: { type: PlannerActionType; payload: unknown; label: string; originMessageId: string; contextVersion: number; idempotencyScope?: string }): PlannerAction {
+  stageProposal(input: { type: PlannerActionType; payload: unknown; label: string; originMessageId: string; contextVersion: number; idempotencyScope?: string }): StagedPlannerAction {
     const parsed = plannerActionProposalSchema.parse({ type: input.type, payload: input.payload })
     const payload = parsed.payload
     const key = createHash('sha256').update(input.idempotencyScope ?? JSON.stringify({ type: parsed.type, payload, originMessageId: input.originMessageId, contextVersion: input.contextVersion })).digest('hex')
-    return this.dependencies.repository.create({ id: this.createId(), originMessageId: input.originMessageId, label: input.label, contextVersion: input.contextVersion, type: parsed.type, status: 'proposed', payload, result: null, createdAt: this.now(), resolvedAt: null }, key)
+    return { action: { id: this.createId(), originMessageId: input.originMessageId, label: input.label, contextVersion: input.contextVersion, type: parsed.type, status: 'proposed', payload, result: null, createdAt: this.now(), resolvedAt: null }, idempotencyKey: key }
+  }
+  propose(input: { type: PlannerActionType; payload: unknown; label: string; originMessageId: string; contextVersion: number; idempotencyScope?: string }): PlannerAction {
+    const staged = this.stageProposal(input)
+    return this.dependencies.repository.create(staged.action, staged.idempotencyKey)
   }
   invalidateBefore(contextVersion: number): void { this.dependencies.repository.invalidatePending(contextVersion, this.now()) }
   async resolve(actionId: string, decision: 'apply' | 'reject'): Promise<PlannerAction> {

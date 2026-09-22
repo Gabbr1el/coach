@@ -3,6 +3,7 @@ import type { ConversationRepository } from './conversation-repository'
 import type { AIProviderManager } from '../ai/ai-provider-manager'
 import { COACH_POLICY } from '../ai/coach-policy'
 import { AUTHORITATIVE_TIMEZONE } from './academic-event-time'
+import type { StagedOrganizerTurn } from './organizer-unit-of-work'
 
 export const HOME_THREAD_ID = '00000000-0000-4000-8000-000000000000'
 
@@ -43,26 +44,40 @@ export class HomePlannerService {
   }
   get threadId(): string { return HOME_THREAD_ID }
   createMessageId(): string { return this.createId() }
+  createAuthoritativeTurn(
+    content: string,
+    assistantContent: string,
+    assistantId?: string,
+    userId?: string,
+    providerId = 'coach-local',
+    modelId = 'home-organizer-v1',
+  ): StagedOrganizerTurn {
+    const now = this.now()
+    return {
+      threadId: HOME_THREAD_ID,
+      now,
+      user: { id: userId ?? this.createId(), threadId: HOME_THREAD_ID, role: 'user', content, createdAt: now, providerId: null, modelId: null },
+      assistant: { id: assistantId ?? this.createId(), threadId: HOME_THREAD_ID, role: 'assistant', content: assistantContent, createdAt: now + 1, providerId, modelId },
+    }
+  }
   async listRecentUserMessages(limit = 4): Promise<Array<Pick<ConversationMessage, 'content' | 'createdAt'>>> {
-    await this.repository.ensureHomeThread(HOME_THREAD_ID, this.now())
     return (await this.repository.listMessages(HOME_THREAD_ID, Math.min(8, Math.max(2, limit * 2)))).filter((message) => message.role === 'user').slice(-Math.min(4, Math.max(2, limit))).map(({ content, createdAt }) => ({ content: content.slice(0, 300), createdAt }))
   }
 
   async sendMessage(input: SendHomeMessageInput): Promise<ConversationMessage[]> { return this.sendMessageWithAuthority(input, { currentTime: this.now(), currentDate: new Intl.DateTimeFormat('en-CA', { timeZone: AUTHORITATIVE_TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(this.now()), timezone: AUTHORITATIVE_TIMEZONE, state: {}, operationResult: null, constraints: [] }) }
-  async sendMessageWithAuthority(input: SendHomeMessageInput, authority: { currentTime: number; currentDate: string; timezone: string; state: unknown; operationResult: unknown; constraints: string[] }): Promise<ConversationMessage[]> {
-    const now = this.now()
-    await this.repository.ensureHomeThread(HOME_THREAD_ID, now)
-    const userMessage = {
-      id: this.createId(),
-      threadId: HOME_THREAD_ID,
-      role: 'user' as const,
-      content: input.content.trim(),
-      createdAt: now,
-      providerId: null,
-      modelId: null,
-    }
+  async sendMessageWithAuthority(input: SendHomeMessageInput, authority: { currentTime: number; currentDate: string; timezone: string; state: unknown; operationResult: unknown; constraints: string[] }, signal?: AbortSignal): Promise<ConversationMessage[]> {
+    const reply = await this.generateMessageWithAuthority(input, authority, signal)
+    signal?.throwIfAborted()
+    const turn = this.createAuthoritativeTurn(input.content.trim(), reply.content, undefined, undefined, reply.providerId, reply.modelId)
+    await this.repository.ensureHomeThread(HOME_THREAD_ID, turn.now)
+    signal?.throwIfAborted()
+    return this.repository.addTurn(turn)
+  }
+  async generateMessageWithAuthority(input: SendHomeMessageInput, authority: { currentTime: number; currentDate: string; timezone: string; state: unknown; operationResult: unknown; constraints: string[] }, signal?: AbortSignal): Promise<{ content: string; providerId: string; modelId: string }> {
+    signal?.throwIfAborted()
+    const userContent = input.content.trim()
     const provider = this.providerManager?.route('planner') ?? null
-    let assistantContent = localPlannerReply(userMessage.content)
+    let assistantContent = localPlannerReply(userContent)
     let providerId = 'coach-local'
     let modelId = 'planner-rules-v1'
 
@@ -73,9 +88,10 @@ export class HomePlannerService {
           messages: [
             { role: 'system', content: `Você é Organizador, não Tutor. Nunca ministre conteúdo acadêmico, explique conceitos ou crie exercícios. Você responde somente conversa informativa no Home e nunca executa nem escreve dados. CURRENT_DATE=${authority.currentDate} CURRENT_TIME=${new Date(authority.currentTime).toISOString()} TIMEZONE=${authority.timezone} STATE=${JSON.stringify(authority.state)} OPERATION_RESULT=${JSON.stringify(authority.operationResult)} CONSTRAINTS=${authority.constraints.join(' ')} Nunca afirme ter criado, alterado, confirmado ou proposto algo. Não invente datas, conteúdos, duração ou cronograma. Regras: ${COACH_POLICY.principles.join(' ')}` },
             ...recentMessages.map((message) => ({ role: message.role, content: message.content })),
-            { role: 'user', content: userMessage.content },
+            { role: 'user', content: userContent },
           ],
           maxOutputTokens: 180,
+          signal,
         })
         assistantContent = response.content
         providerId = response.providerId
@@ -85,16 +101,8 @@ export class HomePlannerService {
       }
     }
 
-    const assistantMessage = {
-      id: this.createId(),
-      threadId: HOME_THREAD_ID,
-      role: 'assistant' as const,
-      content: assistantContent,
-      createdAt: now + 1,
-      providerId,
-      modelId,
-    }
-    return this.repository.addTurn({ threadId: HOME_THREAD_ID, user: userMessage, assistant: assistantMessage })
+    signal?.throwIfAborted()
+    return { content: assistantContent, providerId, modelId }
   }
 
   async *streamMessage(input: SendHomeMessageInput, signal: AbortSignal): AsyncIterable<string> {
@@ -156,63 +164,14 @@ export class HomePlannerService {
     userId?: string,
     providerId = 'coach-local',
     modelId = 'home-organizer-v1',
+    signal?: AbortSignal,
   ): Promise<ConversationMessage[]> {
-    const now = this.now()
+    signal?.throwIfAborted()
+    const turn = this.createAuthoritativeTurn(content, assistantContent, assistantId, userId, providerId, modelId)
+    await this.repository.ensureHomeThread(HOME_THREAD_ID, turn.now)
 
-    await this.repository.ensureHomeThread(
-      HOME_THREAD_ID,
-      now,
-    )
-
-    return this.repository.addTurn({
-      threadId:
-        HOME_THREAD_ID,
-
-      user: {
-        id:
-          userId
-          ?? this.createId(),
-
-        threadId:
-          HOME_THREAD_ID,
-
-        role:
-          'user',
-
-        content,
-
-        createdAt:
-          now,
-
-        providerId:
-          null,
-
-        modelId:
-          null,
-      },
-
-      assistant: {
-        id:
-          assistantId
-          ?? this.createId(),
-
-        threadId:
-          HOME_THREAD_ID,
-
-        role:
-          'assistant',
-
-        content:
-          assistantContent,
-
-        createdAt:
-          now + 1,
-
-        providerId,
-
-        modelId,
-      },
-    })
+    signal?.throwIfAborted()
+    return this.repository.addTurn(turn)
   }
   saveSystemResult(content: string): Promise<ConversationMessage[]> { return this.saveAuthoritativeTurn('Ação aplicada pelo botão da Organizadora.', content) }
 }

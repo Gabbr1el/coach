@@ -29,6 +29,7 @@ export interface OrganizerIntentInterpreter {
   interpret(
     content: string,
     context: OrganizerInterpretationContext,
+    signal?: AbortSignal,
   ): Promise<OrganizerInterpretation>
 }
 
@@ -54,7 +55,8 @@ function minutesFrom(content: string): number | null {
 }
 
 export class LocalOrganizerIntentInterpreter implements OrganizerIntentInterpreter {
-  async interpret(content: string, context: OrganizerInterpretationContext): Promise<OrganizerIntent> {
+  async interpret(content: string, context: OrganizerInterpretationContext, signal?: AbortSignal): Promise<OrganizerIntent> {
+    signal?.throwIfAborted()
     const normalized = content.toLocaleLowerCase('pt-BR'); const minutes = minutesFrom(content)
     const queryWords = /\b(?:qual|quais|quando|liste|mostre|existe|como está|como esta)\b/
     const eventWords = /\b(?:provas?|exames?|trabalhos?|atividades?|prazos?|eventos?)\b/
@@ -91,8 +93,10 @@ export class LocalOrganizerIntentInterpreter implements OrganizerIntentInterpret
 
 export class ProviderOrganizerIntentInterpreter implements OrganizerIntentInterpreter {
   constructor(private readonly providers: AIProviderManager, private readonly fallback: OrganizerIntentInterpreter = new LocalOrganizerIntentInterpreter()) {}
-  async interpret(content: string, context: OrganizerInterpretationContext): Promise<OrganizerInterpretation> {
-    const deterministic = await this.fallback.interpret(content, context)
+  async interpret(content: string, context: OrganizerInterpretationContext, signal?: AbortSignal): Promise<OrganizerInterpretation> {
+    signal?.throwIfAborted()
+    const deterministic = await this.fallback.interpret(content, context, signal)
+    signal?.throwIfAborted()
     const deterministicAcademicCreate =
       (
         deterministic.capability === 'academic.event.create'
@@ -122,10 +126,12 @@ export class ProviderOrganizerIntentInterpreter implements OrganizerIntentInterp
           { role: 'user', content: JSON.stringify({ message: content, capabilities: ORGANIZER_CAPABILITY_CATALOG, unavailableCapabilities: ORGANIZER_UNAVAILABLE_CAPABILITIES, currentDate: context.currentDate, timezone: context.timezone, conversation: context.conversation ?? null }) },
         ],
         maxOutputTokens: 320,
+        signal,
 
         responseFormat:
           'json_object',
       })
+      signal?.throwIfAborted()
       const extracted =
         extractJsonDocument(
           response.content,
@@ -385,6 +391,7 @@ export class ProviderOrganizerIntentInterpreter implements OrganizerIntentInterp
         },
       }
     } catch (error) {
+      if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error
       if (error instanceof Error && (error.name === 'ZodError' || /JSON|capability|intent/i.test(error.message))) throw new Error('Organizer provider returned an invalid structured intent', { cause: error })
       return deterministic
     }

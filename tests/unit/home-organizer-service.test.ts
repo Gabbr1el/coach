@@ -7,24 +7,129 @@ import { emptyOrganizerConversationState } from '../../src/shared/contracts/orga
 const emptyMutation = { changed: false, summary: '', workspaceIds: [], needsRefinement: null }
 const blankEntities = { subject: null, query: null, dateExpression: null, dateFromExpression: null, dateToExpression: null, eventKind: null, weekday: null, minutes: null, completed: null, target: null, status: null }
 
-function setup(options: { workspaces?: Array<{ id: string; name: string }>; pending?: any[]; academicLife?: any[]; planItems?: any[]; deadlines?: any[]; availability?: any[]; reviewNeeds?: any[]; interpreter?: OrganizerIntentInterpreter; state?: any; currentTime?: number; currentDate?: string; timezone?: string } = {}) {
+function setup(options: { workspaces?: Array<{ id: string; name: string }>; listWorkspaces?: () => Promise<Array<{ id: string; name: string }>>; pending?: any[]; academicLife?: any[]; planItems?: any[]; deadlines?: any[]; availability?: any[]; reviewNeeds?: any[]; interpreter?: OrganizerIntentInterpreter; state?: any; currentTime?: number; currentDate?: string; timezone?: string; failCommitAt?: 'ensureHomeThread' | 'state' | 'action' | 'turn'; beforeCommit?: () => void } = {}) {
   const turns: Array<{ content: string; message: string; id?: string }> = []; const proposed: any[] = []; const proposedByScope = new Map<string, any>(); let authority: any = null; let planningWrites = 0; let contextWrites = 0
   let state = options.state ?? emptyOrganizerConversationState(); let stateWrites = 0; let id = 0
   const conversation: any = {
     threadId: '00000000-0000-4000-8000-000000000000', createMessageId: () => `00000000-0000-4000-8000-${String(++id).padStart(12, '0')}`, listRecentUserMessages: async () => turns.slice(-4).map((turn) => ({ content: turn.content, createdAt: 1 })),
     listMessages: async () => [],
     saveAuthoritativeTurn: async (content: string, message: string, id?: string) => { turns.push({ content, message, id }); return [{ id: id ?? 'assistant', role: 'assistant', content: message, createdAt: 1, sequence: 1, providerId: null, modelId: null }] },
+    createAuthoritativeTurn: (content: string, message: string, id?: string, userId?: string, providerId = 'coach-local', modelId = 'home-organizer-v1') => ({ threadId: '00000000-0000-4000-8000-000000000000', now: 1, user: { id: userId ?? 'user', threadId: '00000000-0000-4000-8000-000000000000', role: 'user', content, createdAt: 1, providerId: null, modelId: null }, assistant: { id: id ?? 'assistant', threadId: '00000000-0000-4000-8000-000000000000', role: 'assistant', content: message, createdAt: 2, providerId, modelId } }),
+    generateMessageWithAuthority: async (_input: unknown, context: unknown) => { authority = context; return { content: 'Estou bem e pronto para ajudar.', providerId: 'test', modelId: 'test' } },
     sendMessageWithAuthority: async (_input: unknown, context: unknown) => { authority = context; return [{ id: 'assistant', role: 'assistant', content: 'Estou bem e pronto para ajudar.', createdAt: 1, sequence: 1, providerId: null, modelId: null }] },
   }
   const plan = { id: 'week', weekStart: '2026-09-07', timezone: 'UTC', revision: 1, generatedAt: 1, days: [{ dateKey: '2026-09-07', weekday: 1, availableMinutes: 120, scheduledMinutes: 0, status: 'today', items: options.planItems ?? [] }] }
   const planning: any = { applyAcademicMessage: () => { planningWrites += 1; return emptyMutation }, getAcademicOverview: () => ({ events: options.deadlines ?? [], availability: options.availability ?? [], workspaces: [], routine: [] }), listReviewNeeds: () => options.reviewNeeds ?? [], getWeeklyPlan: () => { planningWrites += 1; return plan }, peekWeeklyPlan: () => plan }
-  const actions: any = { listPending: () => options.pending ?? [], propose: (input: any) => { if (input.idempotencyScope && proposedByScope.has(input.idempotencyScope)) return proposedByScope.get(input.idempotencyScope); const action = { id: crypto.randomUUID(), status: 'proposed', result: null, createdAt: 1, resolvedAt: null, ...input }; proposed.push(action); if (input.idempotencyScope) proposedByScope.set(input.idempotencyScope, action); return action } }
+  const stage = (input: any) => ({ action: { id: crypto.randomUUID(), status: 'proposed', result: null, createdAt: 1, resolvedAt: null, ...input }, idempotencyKey: input.idempotencyScope ?? crypto.randomUUID() })
+  const actions: any = { listPending: () => options.pending ?? [], stageProposal: stage, propose: (input: any) => { const staged = stage(input); if (input.idempotencyScope && proposedByScope.has(input.idempotencyScope)) return proposedByScope.get(input.idempotencyScope); proposed.push(staged.action); if (input.idempotencyScope) proposedByScope.set(input.idempotencyScope, staged.action); return staged.action } }
   const states: any = { load: () => state, save: (_threadId: string, next: any) => { stateWrites += 1; state = next; return next }, clear: () => { state = emptyOrganizerConversationState() } }
-  const currentTime = options.currentTime ?? Date.UTC(2026, 8, 7, 12); const service = new HomeOrganizerService(conversation, planning, actions, async () => options.workspaces ?? [], () => currentTime, () => (options.academicLife ?? []).map((item) => ({ shareWithAi: true, ...item })), options.interpreter, () => ({ currentTime, currentDate: options.currentDate ?? '2026-09-07', timezone: options.timezone ?? 'UTC' }), states)
+  const unitOfWork: any = { commit: async (input: any, signal?: AbortSignal) => { options.beforeCommit?.(); signal?.throwIfAborted(); for (const boundary of ['ensureHomeThread', 'state', 'action', 'turn'] as const) if (options.failCommitAt === boundary) throw new Error(`injected ${boundary}`); if (input.state) { stateWrites += 1; state = input.state } const committed = input.actions.map(({ action, idempotencyKey }: any) => { const existing = proposedByScope.get(idempotencyKey); if (existing) return existing; proposed.push(action); proposedByScope.set(idempotencyKey, action); return action }); turns.push({ content: input.turn.user.content, message: input.turn.assistant.content, id: input.turn.assistant.id }); return { messages: [input.turn.user, input.turn.assistant], actions: committed } } }
+  const currentTime = options.currentTime ?? Date.UTC(2026, 8, 7, 12); const service = new HomeOrganizerService(conversation, planning, actions, options.listWorkspaces ?? (async () => options.workspaces ?? []), () => currentTime, () => (options.academicLife ?? []).map((item) => ({ shareWithAi: true, ...item })), options.interpreter, () => ({ currentTime, currentDate: options.currentDate ?? '2026-09-07', timezone: options.timezone ?? 'UTC' }), states, unitOfWork)
   return { service, proposed, turns, authority: () => authority, planningWrites: () => planningWrites, contextWrites: () => contextWrites, stateWrites: () => stateWrites, state: () => state }
 }
 
 describe('HomeOrganizerService', () => {
+  it.each(['ensureHomeThread', 'state', 'action', 'turn'] as const)('commits no organizer writes when the %s boundary fails', async (failCommitAt) => {
+    const initialState = { ...emptyOrganizerConversationState(), pendingWorkspacePreparation: { subject: 'POO', originalMessageId: 'origin', originalCreatedAt: 1 }, updatedAt: 1 }
+    const ctx = setup({ state: initialState, failCommitAt })
+
+    await expect(ctx.service.organize({ content: 'quero criar' })).rejects.toThrow(`injected ${failCommitAt}`)
+
+    expect(ctx.turns).toHaveLength(0)
+    expect(ctx.proposed).toHaveLength(0)
+    expect(ctx.state()).toEqual(initialState)
+    expect(ctx.stateWrites()).toBe(0)
+  })
+  it('checks cancellation immediately before the atomic commit', async () => {
+    const controller = new AbortController()
+    const ctx = setup({ beforeCommit: () => controller.abort() })
+
+    await expect(ctx.service.organize({ content: 'Hoje tenho 4 horas para estudar' }, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+
+    expect(ctx.turns).toHaveLength(0)
+    expect(ctx.proposed).toHaveLength(0)
+    expect(ctx.stateWrites()).toBe(0)
+  })
+  it('propagates cancellation to the provider and persists no turn after cancel', async () => {
+    const controller = new AbortController()
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => { markStarted = resolve })
+    const interpreter: OrganizerIntentInterpreter = { interpret: async (_content, _context, signal) => new Promise((_resolve, reject) => { markStarted(); signal?.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true }) }) }
+    const ctx = setup({ interpreter })
+    const pending = ctx.service.organize({ content: 'organize isto' }, controller.signal)
+    await started
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(ctx.turns).toHaveLength(0)
+    expect(ctx.proposed).toHaveLength(0)
+    expect(ctx.stateWrites()).toBe(0)
+  })
+  it('checks cancellation immediately after listing workspaces', async () => {
+    const controller = new AbortController()
+    let resolveWorkspaces!: (workspaces: Array<{ id: string; name: string }>) => void
+    const ctx = setup({ listWorkspaces: () => new Promise((resolve) => { resolveWorkspaces = resolve }) })
+    const pending = ctx.service.organize({ content: 'me explica ponteiros' }, controller.signal)
+    controller.abort()
+    resolveWorkspaces([])
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(ctx.turns).toHaveLength(0)
+    expect(ctx.stateWrites()).toBe(0)
+  })
+  it('does not propose a workspace action when cancelled during workspace listing', async () => {
+    const controller = new AbortController()
+    let resolveWorkspaces!: (workspaces: Array<{ id: string; name: string }>) => void
+    const state = { ...emptyOrganizerConversationState(), pendingWorkspacePreparation: { subject: 'POO', originalMessageId: 'origin', originalCreatedAt: 1 }, updatedAt: 1 }
+    const ctx = setup({ state, listWorkspaces: () => new Promise((resolve) => { resolveWorkspaces = resolve }) })
+    const pending = ctx.service.organize({ content: 'quero criar' }, controller.signal)
+    controller.abort()
+    resolveWorkspaces([])
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(ctx.proposed).toHaveLength(0)
+    expect(ctx.stateWrites()).toBe(0)
+  })
+  it('preserves the previous workspace preparation when cancelled after staging a replacement', async () => {
+    const controller = new AbortController()
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => { markStarted = resolve })
+    const previousPreparation = { subject: 'Rust', originalMessageId: 'previous', originalCreatedAt: 1 }
+    const interpreter: OrganizerIntentInterpreter = { interpret: async (_content, _context, signal) => new Promise((_resolve, reject) => { markStarted(); signal?.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true }) }) }
+    const ctx = setup({ interpreter, state: { ...emptyOrganizerConversationState(), pendingWorkspacePreparation: previousPreparation, updatedAt: 1 } })
+
+    const pending = ctx.service.organize({ content: 'tenho prova de POO e quero aprender javascript' }, controller.signal)
+    await started
+    controller.abort()
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(ctx.state().pendingWorkspacePreparation).toEqual(previousPreparation)
+    expect(ctx.stateWrites()).toBe(0)
+    expect(ctx.turns).toHaveLength(0)
+  })
+  it('preserves pending intents when cancelled during the second interpretation', async () => {
+    const controller = new AbortController()
+    let markSecondStarted!: () => void
+    const secondStarted = new Promise<void>((resolve) => { markSecondStarted = resolve })
+    let calls = 0
+    const previousPreparation = { subject: 'Rust', originalMessageId: 'workspace-origin', originalCreatedAt: 1 }
+    const previousPending = { capability: 'academic.event.create' as const, entities: { ...blankEntities, subject: 'POO', eventKind: 'exam' as const }, missingFields: ['dateExpression'], originalMessageId: 'exam-origin', originalText: 'tenho prova de POO', originalCreatedAt: 1, originalCurrentDate: '2026-09-07', originalTimezone: 'UTC' }
+    const interpreter: OrganizerIntentInterpreter = {
+      interpret: async (_content, _context, signal) => {
+        calls += 1
+        if (calls === 1) return { mode: 'conversation', capability: null, entities: blankEntities, confidence: 1, missingFields: [], summary: 'new request' }
+        return new Promise((_resolve, reject) => { markSecondStarted(); signal?.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true }) })
+      },
+    }
+    const initialState = { ...emptyOrganizerConversationState(), pending: previousPending, pendingWorkspacePreparation: previousPreparation, updatedAt: 1 }
+    const ctx = setup({ interpreter, state: initialState, currentTime: 2 })
+
+    const pending = ctx.service.organize({ content: 'organize uma nova coisa' }, controller.signal)
+    await secondStarted
+    controller.abort()
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(ctx.state()).toEqual(initialState)
+    expect(ctx.stateWrites()).toBe(0)
+    expect(ctx.turns).toHaveLength(0)
+  })
   it('excludes a private academic title from provider prompt and focus while retaining public focus', async () => {
     const privateId = crypto.randomUUID(); const publicId = crypto.randomUUID(); const prompts: string[] = []
     const academic = (id: string, subject: string, shareWithAi: boolean) => ({ id, kind: 'event', status: 'active', title: `Prova ${subject}`, details: JSON.stringify({ schema: 'academic-event/v1', eventKind: 'exam', subject, sourceText: subject }), workspaceId: null, startsAt: null, endsAt: Date.UTC(2026, 8, 20), expiresAt: null, timezone: 'UTC', weekday: null, minutes: null, shareWithAi, provenance: { source: 'user_ui', reference: null }, replacesId: null, replacedById: null, createdAt: 1, updatedAt: 1, resolvedAt: null, archivedAt: null })
@@ -145,7 +250,7 @@ describe('HomeOrganizerService', () => {
   it('keeps small talk informational without proposing a write', async () => { const ctx = setup(); const turn = await ctx.service.organize({ content: 'como voce está?' }); expect(turn.result.outcome).toBe('informational'); expect(ctx.proposed).toHaveLength(0); expect(ctx.authority()).toMatchObject({ currentDate: '2026-09-07', operationResult: null }) })
   it.each(['quais provas eu tenho?', 'quando é meu próximo prazo?', 'mostre meus trabalhos'])('treats read phrase %s as a query with zero domain writes', async (content) => { const ctx = setup(); const turn = await ctx.service.organize({ content }); expect(turn.result.outcome).toBe('informational'); expect(ctx.proposed).toHaveLength(0); expect(ctx.planningWrites()).toBe(0); expect(ctx.contextWrites()).toBe(0) })
   it('does not classify cancellation as create', async () => { const ctx = setup(); const turn = await ctx.service.organize({ content: 'cancele a prova de C' }); expect(turn.result.outcome).toBe('needs_information'); expect(ctx.proposed).toHaveLength(0) })
-  it('invalid provider output produces zero domain writes', async () => { const provider = { sendMessage: async () => ({ content: '{not-json', providerId: 'test', modelId: 'test' }) }; const ctx = setup({ interpreter: new ProviderOrganizerIntentInterpreter({ route: () => provider } as any) }); const turn = await ctx.service.organize({ content: 'qual é meu prazo?' }); expect(turn.result.outcome).toBe('failed'); expect(ctx.proposed).toHaveLength(0); expect(ctx.planningWrites()).toBe(0); expect(ctx.contextWrites()).toBe(0) })
+  it('invalid provider output produces zero domain writes', async () => { const provider = { sendMessage: async () => ({ content: '{not-json', providerId: 'test', modelId: 'test' }) }; const ctx = setup({ interpreter: new ProviderOrganizerIntentInterpreter({ route: () => provider } as any) }); const turn = await ctx.service.organize({ content: 'qual é meu prazo?' }); expect(turn.result.outcome).toBe('failed'); expect(ctx.turns).toHaveLength(0); expect(ctx.proposed).toHaveLength(0); expect(ctx.planningWrites()).toBe(0); expect(ctx.contextWrites()).toBe(0) })
   it.each([
     ['Quais matérias estão com prazo mais próximo?', 'query'],
     ['qual é a prova de C no dia 16?', 'query'],

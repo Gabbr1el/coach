@@ -32,6 +32,18 @@ export function useDialogFocus<T extends HTMLElement>(open: boolean, onClose: ()
   useEffect(() => {
     if (!open) return
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const dialog = dialogRef.current
+    const background: HTMLElement[] = []
+    let branch: HTMLElement | null = dialog
+    while (branch?.parentElement) {
+      for (const sibling of Array.from(branch.parentElement.children)) {
+        if (sibling !== branch && sibling instanceof HTMLElement) background.push(sibling)
+      }
+      branch = branch.parentElement
+      if (branch === document.body) break
+    }
+    const previousInert = background.map((element) => element.inert)
+    background.forEach((element) => { element.inert = true })
     const frame = window.requestAnimationFrame(() => {
       const target = dialogRef.current?.querySelector<HTMLElement>(initialFocus) ?? dialogFocusable(dialogRef.current)[0]
       target?.focus()
@@ -48,6 +60,7 @@ export function useDialogFocus<T extends HTMLElement>(open: boolean, onClose: ()
     return () => {
       window.cancelAnimationFrame(frame)
       window.removeEventListener('keydown', handleKeyDown)
+      background.forEach((element, index) => { element.inert = previousInert[index] ?? false })
       if (previous?.isConnected) previous.focus()
     }
   }, [open, initialFocus])

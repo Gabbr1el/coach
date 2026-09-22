@@ -4,10 +4,26 @@ import type { ReasoningEffort } from '../../shared/contracts/provider-account-co
 type Fetcher = typeof fetch
 
 export class OpenAIProviderError extends Error {
-  constructor(readonly code: 'INVALID_CREDENTIAL' | 'INSUFFICIENT_QUOTA' | 'MODEL_UNAVAILABLE' | 'ACCESS_RESTRICTED' | 'RATE_LIMITED' | 'NETWORK_UNAVAILABLE' | 'UNKNOWN') {
+  constructor(readonly code: 'INVALID_CREDENTIAL' | 'INSUFFICIENT_QUOTA' | 'MODEL_UNAVAILABLE' | 'ACCESS_RESTRICTED' | 'RATE_LIMITED' | 'NETWORK_UNAVAILABLE' | 'REQUEST_TIMEOUT' | 'UNKNOWN') {
     super(code)
     this.name = 'OpenAIProviderError'
   }
+}
+
+function errorForResponse(status: number, body: OpenAIResponseBody | null): OpenAIProviderError {
+  if (status === 401) return new OpenAIProviderError('INVALID_CREDENTIAL')
+  if (status === 403) return new OpenAIProviderError('ACCESS_RESTRICTED')
+  if ((status === 400 || status === 404) && (body?.error?.param === 'model' || body?.error?.code === 'model_not_found')) return new OpenAIProviderError('MODEL_UNAVAILABLE')
+  if (status === 404) return new OpenAIProviderError('MODEL_UNAVAILABLE')
+  if (status === 429) {
+    const quotaCodes = new Set(['insufficient_quota', 'credit_balance_exhausted', 'organization_spend_limit_exceeded', 'project_spend_limit_exceeded', 'organization_usage_limit_exceeded'])
+    const code = body?.error?.code?.toLocaleLowerCase('en-US') ?? ''
+    const type = body?.error?.type?.toLocaleLowerCase('en-US') ?? ''
+    const message = body?.error?.message?.toLocaleLowerCase('en-US') ?? ''
+    const quota = quotaCodes.has(code) || quotaCodes.has(type) || message.includes('exceeded your current quota') || message.includes('credit balance is too low') || message.includes('usage limit has been reached')
+    return new OpenAIProviderError(quota ? 'INSUFFICIENT_QUOTA' : 'RATE_LIMITED')
+  }
+  return new OpenAIProviderError('UNKNOWN')
 }
 
 interface OpenAIResponseBody {
@@ -63,34 +79,12 @@ export class OpenAIProvider implements AIProvider {
       })
       if (!response.ok) body = await response.json().catch(() => null) as OpenAIResponseBody | null
     } catch {
-      throw new OpenAIProviderError('NETWORK_UNAVAILABLE')
+      throw new OpenAIProviderError(controller.signal.aborted ? 'REQUEST_TIMEOUT' : 'NETWORK_UNAVAILABLE')
     } finally {
       clearTimeout(timeout)
     }
     if (response.ok) return
-    if (response.status === 401) throw new OpenAIProviderError('INVALID_CREDENTIAL')
-    if (response.status === 403) throw new OpenAIProviderError('ACCESS_RESTRICTED')
-    if (response.status === 404 && (body?.error?.param === 'model' || body?.error?.code === 'model_not_found')) throw new OpenAIProviderError('MODEL_UNAVAILABLE')
-    if (response.status === 429) {
-      const quotaCodes = new Set([
-        'insufficient_quota',
-        'credit_balance_exhausted',
-        'organization_spend_limit_exceeded',
-        'project_spend_limit_exceeded',
-        'organization_usage_limit_exceeded',
-      ])
-      const code = body?.error?.code?.toLocaleLowerCase('en-US') ?? ''
-      const type = body?.error?.type?.toLocaleLowerCase('en-US') ?? ''
-      const message = body?.error?.message?.toLocaleLowerCase('en-US') ?? ''
-      const insufficientQuota = quotaCodes.has(code)
-        || quotaCodes.has(type)
-        || message.includes('exceeded your current quota')
-        || message.includes('credit balance is too low')
-        || message.includes('usage limit has been reached')
-      throw new OpenAIProviderError(insufficientQuota ? 'INSUFFICIENT_QUOTA' : 'RATE_LIMITED')
-    }
-    if (response.status === 400 && (body?.error?.param === 'model' || body?.error?.code === 'model_not_found')) throw new OpenAIProviderError('MODEL_UNAVAILABLE')
-    throw new OpenAIProviderError('UNKNOWN')
+    throw errorForResponse(response.status, body)
   }
 
   sendMessage(request: AIRequest): Promise<AIResponse> {
@@ -147,7 +141,11 @@ export class OpenAIProvider implements AIProvider {
         }),
         signal: timeoutController.signal,
       })
-      if (!response.ok || !response.body) throw new Error(`OpenAI streaming request failed with status ${response.status}`)
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as OpenAIResponseBody | null
+        throw errorForResponse(response.status, body)
+      }
+      if (!response.body) throw new OpenAIProviderError('NETWORK_UNAVAILABLE')
       reader = response.body.getReader()
       while (true) {
         const { done, value } = await reader.read()
@@ -176,6 +174,11 @@ export class OpenAIProvider implements AIProvider {
         }
       }
       if (!completed) throw new Error('OpenAI stream ended before completion')
+    } catch (error) {
+      if (error instanceof OpenAIProviderError) throw error
+      if (request.signal?.aborted) throw new DOMException('Request cancelled', 'AbortError')
+      if (timeoutController.signal.aborted) throw new OpenAIProviderError('REQUEST_TIMEOUT')
+      throw new OpenAIProviderError('NETWORK_UNAVAILABLE')
     } finally {
       clearTimeout(timeout)
       request.signal?.removeEventListener('abort', abort)
@@ -230,21 +233,20 @@ export class OpenAIProvider implements AIProvider {
           }),
         signal: timeoutController.signal,
       })
-      body = await response.json() as OpenAIResponseBody
+      body = await response.json().catch(() => ({})) as OpenAIResponseBody
     } catch (error) {
-      if (timeoutController.signal.aborted) throw new Error('OpenAI request was cancelled or timed out')
-      throw new Error('Could not connect to OpenAI', { cause: error })
+      if (request.signal?.aborted) throw new DOMException('Request cancelled', 'AbortError')
+      if (timeoutController.signal.aborted) throw new OpenAIProviderError('REQUEST_TIMEOUT')
+      throw new OpenAIProviderError('NETWORK_UNAVAILABLE')
     } finally {
       clearTimeout(timeout)
       request.signal?.removeEventListener('abort', abortFromCaller)
     }
     if (!response.ok) {
-      if (response.status === 401 || response.status === 403) throw new Error('OpenAI rejected the API credential')
-      if (response.status === 429) throw new Error('OpenAI rate limit or quota was reached')
-      throw new Error(`OpenAI request failed with status ${response.status}`)
+      throw errorForResponse(response.status, body)
     }
     const content = extractText(body)
-    if (!content) throw new Error('OpenAI returned an empty response')
+    if (!content) throw new OpenAIProviderError('UNKNOWN')
     return {
       content,
       providerId: this.id,

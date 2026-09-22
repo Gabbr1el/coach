@@ -11,8 +11,17 @@ import type { HomePlannerService } from './home-planner-service'
 import { LocalOrganizerIntentInterpreter, type OrganizerIntentInterpreter } from './organizer-intent-interpreter'
 import { OrganizerIntentExecutor } from './organizer-intent-executor'
 import { AUTHORITATIVE_TIMEZONE } from './academic-event-time'
+import type { OrganizerUnitOfWork, StagedPlannerAction } from './organizer-unit-of-work'
 
 export interface HomeTurnClock { readonly currentTime: number; readonly currentDate: string; readonly timezone: string }
+
+class OrganizerCommitError extends Error {
+  readonly isOrganizerCommitError = true
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'Organizer atomic commit failed', { cause })
+    this.name = cause instanceof Error ? cause.name : 'OrganizerCommitError'
+  }
+}
 
 function currentClock(now: () => number): HomeTurnClock {
   const currentTime = now(); const timezone = AUTHORITATIVE_TIMEZONE
@@ -153,15 +162,17 @@ const PENDING_TTL_MS = 24 * 60 * 60 * 1_000
 
 export class HomeOrganizerService {
   private readonly executor: OrganizerIntentExecutor
-  constructor(private readonly conversation: HomePlannerService, private readonly planning: PlanningService, private readonly actions: PlannerActionService, private readonly listWorkspaces: () => Promise<Array<{ id: string; name: string }>>, private readonly now = Date.now, private readonly listAcademicLife: () => AcademicLifeItem[] = () => [], private readonly interpreter: OrganizerIntentInterpreter = new LocalOrganizerIntentInterpreter(), private readonly clock?: () => HomeTurnClock, private readonly states?: OrganizerConversationStateRepository) { this.executor = new OrganizerIntentExecutor(actions) }
+  constructor(private readonly conversation: HomePlannerService, private readonly planning: PlanningService, private readonly actions: PlannerActionService, private readonly listWorkspaces: () => Promise<Array<{ id: string; name: string }>>, private readonly now = Date.now, private readonly listAcademicLife: () => AcademicLifeItem[] = () => [], private readonly interpreter: OrganizerIntentInterpreter = new LocalOrganizerIntentInterpreter(), private readonly clock?: () => HomeTurnClock, private readonly states?: OrganizerConversationStateRepository, private readonly unitOfWork?: OrganizerUnitOfWork) { this.executor = new OrganizerIntentExecutor(actions) }
   listMessages(): Promise<ConversationMessage[]> { return this.conversation.listMessages() }
 
-  async organize(input: SendHomeMessageInput): Promise<{ messages: ConversationMessage[]; result: HomeOrganizerResult }> {
+  async organize(input: SendHomeMessageInput, signal?: AbortSignal): Promise<{ messages: ConversationMessage[]; result: HomeOrganizerResult }> {
+    signal?.throwIfAborted()
     const content = input.content.trim(); const clock = this.clock?.() ?? currentClock(this.now); const pendingActions = this.actions.listPending(); const userMessageId = this.conversation.createMessageId()
     const learningRequest = learningRequestParts(content)
     const organizerContent = learningRequest?.organizerContent || content
     if (isPedagogicalQuery(content) && !learningRequest?.organizerContent) {
       const workspaces = await this.listWorkspaces()
+      signal?.throwIfAborted()
       const requestedSubject = learningRequest?.subject ?? learningRequestSubject(content)
       const named = requestedSubject
         ? exactWorkspaceForSubject(requestedSubject, workspaces)
@@ -170,16 +181,9 @@ export class HomeOrganizerService {
       if (
         requestedSubject
         && !named
-        && this.states
       ) {
-        const current =
-          this.states.load(
-            this.conversation.threadId,
-          )
-
-        this.states.save(
-          this.conversation.threadId,
-          {
+        const current = this.states?.load(this.conversation.threadId) ?? emptyOrganizerConversationState()
+        const nextState = {
             ...current,
 
             pendingWorkspacePreparation: {
@@ -195,11 +199,13 @@ export class HomeOrganizerService {
 
             updatedAt:
               clock.currentTime,
-          },
-        )
+          }
+        return this.persist(signal, content, {
+          outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: `Você ainda não tem um Workspace de ${requestedSubject}. Quer criar um?`,
+        }, undefined, userMessageId, nextState)
       }
 
-      return this.persist(
+      return this.persist(signal,
         content,
         named
           ? {
@@ -218,8 +224,7 @@ export class HomeOrganizerService {
                 ? `Você ainda não tem um Workspace de ${requestedSubject}. Quer criar um?`
                 : 'Esse é um pedido de estudo e o HOME não ministra aulas. Escolha um Workspace adequado ou prepare um novo Workspace.',
             },
-        undefined,
-        userMessageId,
+        undefined, userMessageId,
       )
     }
 
@@ -230,6 +235,7 @@ export class HomeOrganizerService {
     ) {
       const workspaces =
         await this.listWorkspaces()
+      signal?.throwIfAborted()
 
       const academicLife =
         this.listAcademicLife()
@@ -250,6 +256,7 @@ export class HomeOrganizerService {
           workspaces,
           academicLife,
           clock.currentTime,
+          false,
         )
 
       const preparation =
@@ -272,12 +279,7 @@ export class HomeOrganizerService {
               clock.currentTime,
           }
 
-          this.states?.save(
-            this.conversation.threadId,
-            confirmationState,
-          )
-
-          return this.persist(
+          return this.persist(signal,
             content,
             {
               outcome:
@@ -292,12 +294,12 @@ export class HomeOrganizerService {
                 `O Workspace de ${existing.name} já existe. Podemos continuar os estudos por ele.`,
             },
             undefined,
-            userMessageId,
+            userMessageId, confirmationState,
           )
         }
 
-        const action =
-          this.actions.propose({
+        const proposal =
+          this.actions.stageProposal({
             type:
               'workspace.prepare',
 
@@ -337,12 +339,7 @@ export class HomeOrganizerService {
             clock.currentTime,
         }
 
-        this.states?.save(
-          this.conversation.threadId,
-          confirmationState,
-        )
-
-        return this.persist(
+        return this.persist(signal,
           content,
           {
             outcome:
@@ -350,14 +347,14 @@ export class HomeOrganizerService {
             operations:
               [],
             actions:
-              [action],
+              [proposal.action],
             affectedWorkspaceIds:
               [],
             message:
               `Posso preparar o Workspace de ${preparation.subject}. Confirme pelo botão; ele ainda não foi criado.`,
           },
           undefined,
-          userMessageId,
+          userMessageId, confirmationState, [proposal],
         )
       }
     }
@@ -369,6 +366,7 @@ export class HomeOrganizerService {
     ) {
       const workspaces =
         await this.listWorkspaces()
+      signal?.throwIfAborted()
 
       const academicLife =
         this.listAcademicLife()
@@ -389,6 +387,7 @@ export class HomeOrganizerService {
           workspaces,
           academicLife,
           clock.currentTime,
+          false,
         )
 
       const preparation =
@@ -409,11 +408,6 @@ export class HomeOrganizerService {
             clock.currentTime,
         }
 
-        this.states?.save(
-          this.conversation.threadId,
-          rejectionState,
-        )
-
         const pendingExam =
           rejectionState.pending
           && rejectionState.pending.capability
@@ -432,7 +426,7 @@ export class HomeOrganizerService {
             ? ` A prova de ${pendingExam.entities.subject} continua pendente; qual é a data?`
             : ''
 
-        return this.persist(
+        return this.persist(signal,
           content,
           {
             outcome:
@@ -453,17 +447,38 @@ export class HomeOrganizerService {
               `Certo, não vou preparar o Workspace de ${preparation.subject}.${examReminder}`,
           },
           undefined,
-          userMessageId,
+          userMessageId, rejectionState,
         )
       }
     }
 
-    if (confirmationText(content)) return this.persist(content, { outcome: 'informational', operations: [], actions: [], affectedWorkspaceIds: [], message: pendingActions.length ? 'Há uma decisão pendente, mas ela só pode ser executada pelo botão ligado à mensagem original.' : 'Não há nenhuma ação aguardando confirmação. Quando uma decisão for necessária, ela aparecerá aqui com um botão próprio.' }, undefined, userMessageId)
-    if (mentionsProposal(content)) return this.persist(content, { outcome: 'informational', operations: [], actions: pendingActions, affectedWorkspaceIds: [], message: pendingActions.length ? 'As decisões pendentes continuam disponíveis nos botões da mensagem que as originou.' : 'Não há nenhuma proposta pendente no estado real do Coach.' }, undefined, userMessageId)
+    if (confirmationText(content)) return this.persist(signal, content, { outcome: 'informational', operations: [], actions: [], affectedWorkspaceIds: [], message: pendingActions.length ? 'Há uma decisão pendente, mas ela só pode ser executada pelo botão ligado à mensagem original.' : 'Não há nenhuma ação aguardando confirmação. Quando uma decisão for necessária, ela aparecerá aqui com um botão próprio.' }, undefined, userMessageId)
+    if (mentionsProposal(content)) return this.persist(signal, content, { outcome: 'informational', operations: [], actions: pendingActions, affectedWorkspaceIds: [], message: pendingActions.length ? 'As decisões pendentes continuam disponíveis nos botões da mensagem que as originou.' : 'Não há nenhuma proposta pendente no estado real do Coach.' }, undefined, userMessageId)
 
     try {
-      const workspaces = await this.listWorkspaces(); const academicLife = this.listAcademicLife().filter((item) => item.status === 'active' && item.replacedById === null && item.shareWithAi); const recentUserMessages = await this.conversation.listRecentUserMessages(4)
-      let state = this.revalidate(this.states?.load(this.conversation.threadId) ?? emptyOrganizerConversationState(), workspaces, academicLife, clock.currentTime)
+      const workspaces = await this.listWorkspaces()
+      signal?.throwIfAborted()
+      const academicLife = this.listAcademicLife().filter((item) => item.status === 'active' && item.replacedById === null && item.shareWithAi)
+      const recentUserMessages = await this.conversation.listRecentUserMessages(4)
+      signal?.throwIfAborted()
+      const storedState =
+        this.states?.load(this.conversation.threadId)
+        ?? emptyOrganizerConversationState()
+      let state = this.revalidate(
+        storedState,
+        workspaces,
+        academicLife,
+        clock.currentTime,
+        false,
+      )
+      const persistWithStagedState = async (
+        result: HomeOrganizerResult,
+        assistantId?: string,
+        proposals: readonly StagedPlannerAction[] = [],
+      ) => {
+        const changed = JSON.stringify(state) !== JSON.stringify(storedState)
+        return this.persist(signal, content, result, assistantId, userMessageId, changed ? state : undefined, proposals)
+      }
 
       if (learningRequest) {
         const learningWorkspace =
@@ -502,17 +517,16 @@ export class HomeOrganizerService {
               clock.currentTime,
           }
 
-          this.states?.save(
-            this.conversation.threadId,
-            state,
-          )
         }
       }
 
       const fragmentWithoutPending = !state.pending && this.isStandaloneSlotFragment(organizerContent)
-      if (fragmentWithoutPending) return this.persist(content, { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: 'Entendi o fragmento, mas não há um pedido pendente válido para completá-lo. Diga também qual evento ou matéria você quer organizar.' }, undefined, userMessageId)
+      if (fragmentWithoutPending) {
+        return persistWithStagedState({ outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: 'Entendi o fragmento, mas não há um pedido pendente válido para completá-lo. Diga também qual evento ou matéria você quer organizar.' })
+      }
       const interpretationContext = (pending: OrganizerConversationState['pending']) => ({ ...clock, conversation: { focus: { academicEvent: Boolean(state.focusedAcademicEventId), workspace: Boolean(state.focusedWorkspaceId), subject: state.focusedSubject }, pending: pending ? { capability: pending.capability, entities: pending.entities, missingFields: pending.missingFields } : null, recentUserMessages } })
-      let intent = await this.interpreter.interpret(organizerContent, interpretationContext(state.pending))
+      let intent = await this.interpreter.interpret(organizerContent, interpretationContext(state.pending), signal)
+      signal?.throwIfAborted()
       let semanticContent = organizerContent; let originMessageId = userMessageId; let executionClock = clock
       if (state.pending && this.isPendingContinuation(organizerContent, intent, state.pending.missingFields)) {
         const merged = this.mergePending(state.pending.entities, intent.entities, organizerContent, state.pending.missingFields)
@@ -523,11 +537,13 @@ export class HomeOrganizerService {
       } else {
         if (state.pending) {
           state = { ...state, pending: null, updatedAt: clock.currentTime }
-          this.states?.save(this.conversation.threadId, state)
-          intent = await this.interpreter.interpret(organizerContent, interpretationContext(null))
+          intent = await this.interpreter.interpret(organizerContent, interpretationContext(null), signal)
+          signal?.throwIfAborted()
         }
         if (isEventReference(organizerContent) && !explicitSubject(organizerContent)) {
-        if (!state.focusedAcademicEventId) return this.persist(content, { outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: /cancel/i.test(content) ? 'Entendi um cancelamento, mas não há um evento em foco revalidado. Nenhuma criação foi proposta.' : 'Preciso que você identifique o evento com mais precisão.' }, undefined, userMessageId)
+        if (!state.focusedAcademicEventId) {
+          return persistWithStagedState({ outcome: 'needs_information', operations: [], actions: [], affectedWorkspaceIds: [], message: /cancel/i.test(content) ? 'Entendi um cancelamento, mas não há um evento em foco revalidado. Nenhuma criação foi proposta.' : 'Preciso que você identifique o evento com mais precisão.' })
+        }
         intent = this.resolveReferences(intent, organizerContent, state, academicLife, workspaces)
         }
       }
@@ -535,16 +551,14 @@ export class HomeOrganizerService {
       if (intent.mode === 'clarification' && intent.missingFields.length && this.pendingCapability(intent, organizerContent)) {
         const capability = this.pendingCapability(intent, organizerContent)!
         state = { ...state, pending: { capability, entities: intent.entities, missingFields: intent.missingFields, originalMessageId: userMessageId, originalText: organizerContent, originalCreatedAt: clock.currentTime, originalCurrentDate: clock.currentDate, originalTimezone: clock.timezone }, updatedAt: clock.currentTime }
-        this.states?.save(this.conversation.threadId, state)
       }
 
       const plan = this.planning.peekWeeklyPlan(clock.timezone); const overview = this.planning.getAcademicOverview(); const deadlines = overview.events; const reviewNeeds = this.planning.listReviewNeeds()
       const referencedEvent = !explicitSubject(organizerContent) && isEventReference(organizerContent) && intent.entities.target ? academicLife.find((item) => item.status === 'active' && item.replacedById === null && normalized(item.title) === normalized(intent.entities.target!)) : null
       const execution = this.executor.execute(intent, { content: organizerContent, originContent: semanticContent, originMessageId, ...executionClock, version: clock.currentTime, workspaces, academicLife, deadlines, availability: overview.availability, reviewNeeds, plan, focusedAcademicEventId: referencedEvent?.id ?? null })
       if (execution) {
-        if (execution.result.actions.length) { state = { ...state, pending: null, updatedAt: clock.currentTime }; this.states?.save(this.conversation.threadId, state) }
-        return this.persist(
-          content,
+        if (execution.result.actions.length) state = { ...state, pending: null, updatedAt: clock.currentTime }
+        return persistWithStagedState(
           learningRequest
             ? {
                 ...execution.result,
@@ -565,13 +579,12 @@ export class HomeOrganizerService {
               }
             : execution.result,
           execution.assistantId,
-          userMessageId,
+          execution.proposals,
         )
       }
       if (learningRequest) {
         const learning = learningMessage(learningRequest.subject, workspaces)
-        return this.persist(
-          content,
+        return persistWithStagedState(
           {
             outcome: learning.ids.length ? 'needs_decision' : 'needs_information',
             operations: [],
@@ -579,8 +592,6 @@ export class HomeOrganizerService {
             affectedWorkspaceIds: learning.ids,
             message: learning.message,
           },
-          undefined,
-          userMessageId,
         )
       }
 
@@ -591,22 +602,7 @@ export class HomeOrganizerService {
         ?? ''
 
       if (providerReply) {
-        const messages =
-          await this.conversation
-            .saveAuthoritativeTurn(
-              content,
-              providerReply,
-              undefined,
-              userMessageId,
-              intent.providerResult!
-                .providerId,
-              intent.providerResult!
-                .modelId,
-            )
-
-        return {
-          messages,
-          result: {
+        return this.persist(signal, content, {
             outcome:
               'informational',
             operations:
@@ -617,13 +613,12 @@ export class HomeOrganizerService {
               [],
             message:
               providerReply,
-          },
-        }
+          }, undefined, userMessageId, JSON.stringify(state) !== JSON.stringify(storedState) ? state : undefined, [], intent.providerResult!.providerId, intent.providerResult!.modelId)
       }
 
-      const messages =
+      const generated =
         await this.conversation
-          .sendMessageWithAuthority(
+          .generateMessageWithAuthority(
             {
               content,
             },
@@ -669,12 +664,9 @@ export class HomeOrganizerService {
                 'Não mencione proposta sem actionId real.',
               ],
             },
+            signal,
           )
-
-      return {
-        messages,
-
-        result: {
+      return this.persist(signal, content, {
           outcome:
             'informational',
 
@@ -688,15 +680,11 @@ export class HomeOrganizerService {
             [],
 
           message:
-            messages.at(-1)?.content
-            ?? '',
-        },
-      }
+            generated.content,
+        }, undefined, userMessageId, JSON.stringify(state) !== JSON.stringify(storedState) ? state : undefined, [], generated.providerId, generated.modelId)
     } catch (error) {
-      /*
-       * TEMPORÁRIO durante a validação do fluxo.
-       * Remover antes do commit.
-       */
+      if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) throw error
+      if (error instanceof OrganizerCommitError) throw error
       console.error(
         '[Coach Organizer flow failed]',
         {
@@ -712,9 +700,9 @@ export class HomeOrganizerService {
         },
       )
 
-      return this.persist(
-        content,
-        {
+      return {
+        messages: [],
+        result: {
           outcome:
             'failed',
           operations:
@@ -726,9 +714,7 @@ export class HomeOrganizerService {
           message:
             'Não consegui interpretar ou validar esse pedido com segurança. Nenhuma mudança foi confirmada.',
         },
-        undefined,
-        userMessageId,
-      )
+      }
     }
   }
 
@@ -766,7 +752,7 @@ export class HomeOrganizerService {
     this.states.save(this.conversation.threadId, { ...current, focusedAcademicEventId: action.type === 'academic-life.transition' ? null : eventId ?? current.focusedAcademicEventId, focusedWorkspaceId: workspaceId ?? current.focusedWorkspaceId, focusedSubject: metadata?.subject ?? current.focusedSubject, recentResolvedAcademicEventIds: recentEvents, recentResolvedWorkspaceIds: workspaceId ? cap(workspaceId, current.recentResolvedWorkspaceIds) : current.recentResolvedWorkspaceIds, updatedAt: this.now() })
   }
 
-  private revalidate(state: OrganizerConversationState, workspaces: Array<{ id: string; name: string }>, academicLife: AcademicLifeItem[], now: number): OrganizerConversationState {
+  private revalidate(state: OrganizerConversationState, workspaces: Array<{ id: string; name: string }>, academicLife: AcademicLifeItem[], now: number, persist = true): OrganizerConversationState {
     const activeWorkspaces = new Set(workspaces.map(({ id }) => id)); const activeEvents = new Map(academicLife.filter((item) => item.status === 'active' && item.replacedById === null).map((item) => [item.id, item]))
     const focusedEvent = state.focusedAcademicEventId ? activeEvents.get(state.focusedAcademicEventId) : null
     const pendingAge = state.pending ? now - state.pending.originalCreatedAt : 0
@@ -776,7 +762,7 @@ export class HomeOrganizerService {
     if (unchanged) return state
     // Revalidation writes only when it removes stale references or an expired pending intent.
     const next = { ...state, ...semantic, updatedAt: now }
-    this.states?.save(this.conversation.threadId, next)
+    if (persist) this.states?.save(this.conversation.threadId, next)
     return next
   }
 
@@ -828,8 +814,16 @@ export class HomeOrganizerService {
     return candidate && typeof candidate === 'object' && 'id' in candidate && 'status' in candidate ? candidate as AcademicLifeItem : null
   }
 
-  private async persist(content: string, result: HomeOrganizerResult, assistantId?: string, userId?: string): Promise<{ messages: ConversationMessage[]; result: HomeOrganizerResult }> {
-    const messages = await this.conversation.saveAuthoritativeTurn(content, result.message, assistantId, userId)
-    return { messages, result }
+  private async persist(signal: AbortSignal | undefined, content: string, result: HomeOrganizerResult, assistantId?: string, userId?: string, state?: OrganizerConversationState, proposals: readonly StagedPlannerAction[] = [], providerId = 'coach-local', modelId = 'home-organizer-v1'): Promise<{ messages: ConversationMessage[]; result: HomeOrganizerResult }> {
+    signal?.throwIfAborted()
+    if (!this.unitOfWork) throw new Error('Organizer unit of work is required')
+    const turn = this.conversation.createAuthoritativeTurn(content, result.message, assistantId, userId, providerId, modelId)
+    signal?.throwIfAborted()
+    try {
+      const committed = await this.unitOfWork.commit({ turn, actions: proposals, state }, signal)
+      return { messages: committed.messages, result: proposals.length ? { ...result, actions: committed.actions } : result }
+    } catch (error) {
+      throw new OrganizerCommitError(error)
+    }
   }
 }

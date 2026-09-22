@@ -15,6 +15,7 @@ import { DrizzleStudyWorkspaceRepository } from '../../src/main/repositories/dri
 import { StudyWorkspaceService } from '../../src/application/study-workspaces/study-workspace-service'
 import { deriveNextStepCta } from '../../src/application/study-workspaces/next-step-cta'
 import { DrizzlePlannerActionRepository } from '../../src/main/repositories/drizzle-planner-action-repository'
+import { SqliteOrganizerUnitOfWork, type OrganizerCommitBoundary } from '../../src/main/repositories/sqlite-organizer-unit-of-work'
 import { DrizzleRoadmapRepository } from '../../src/main/repositories/drizzle-roadmap-repository'
 import { SqliteStudyLessonRepository } from '../../src/main/repositories/sqlite-study-lesson-repository'
 import { AIProviderManager } from '../../src/application/ai/ai-provider-manager'
@@ -781,10 +782,29 @@ describe('Coach database migrations', () => {
     database.close()
   })
 
-  it('persists Organizer state by Home thread and clears invalid schema on read', async () => {
+  it('persists Organizer state by Home thread and treats invalid schema as empty without a read-side write', async () => {
     const databasePath = createDatabasePath(); let database = openCoachDatabase({ databasePath, migrationsFolder }); const conversations = new DrizzleConversationRepository(database); const threadId = '00000000-0000-4000-8000-000000000000'; await conversations.ensureHomeThread(threadId, 1)
     let repository = new SqliteOrganizerConversationStateRepository(database); repository.save(threadId, { focusedAcademicEventId: null, focusedWorkspaceId: null, focusedSubject: 'POO', pending: null, pendingWorkspacePreparation: null, recentResolvedAcademicEventIds: [], recentResolvedWorkspaceIds: [], updatedAt: 2 }); database.close()
-    database = openCoachDatabase({ databasePath, migrationsFolder }); repository = new SqliteOrganizerConversationStateRepository(database); expect(repository.load(threadId)).toMatchObject({ focusedSubject: 'POO', updatedAt: 2 }); database.sqlite.prepare('UPDATE organizer_conversation_states SET state_json=? WHERE thread_id=?').run('{"invalid":true}', threadId); expect(repository.load(threadId)).toMatchObject({ focusedSubject: null, pending: null }); expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM organizer_conversation_states').get()).toEqual({ count: 0 }); database.close()
+    database = openCoachDatabase({ databasePath, migrationsFolder }); repository = new SqliteOrganizerConversationStateRepository(database); expect(repository.load(threadId)).toMatchObject({ focusedSubject: 'POO', updatedAt: 2 }); database.sqlite.prepare('UPDATE organizer_conversation_states SET state_json=? WHERE thread_id=?').run('{"invalid":true}', threadId); expect(repository.load(threadId)).toMatchObject({ focusedSubject: null, pending: null }); expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM organizer_conversation_states').get()).toEqual({ count: 1 }); database.close()
+  })
+
+  it.each(['ensureHomeThread', 'state', 'action', 'turn'] as const)('rolls back the complete Organizer commit when %s fails', async (boundary) => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    const threadId = '00000000-0000-4000-8000-000000000000'
+    const actionId = crypto.randomUUID()
+    const unit = new SqliteOrganizerUnitOfWork(database, (current: OrganizerCommitBoundary) => { if (current === boundary) throw new Error(`injected ${boundary}`) })
+    const input = {
+      turn: { threadId, now: 10, user: { id: crypto.randomUUID(), threadId, role: 'user' as const, content: 'Tenho prova', createdAt: 10, providerId: null, modelId: null }, assistant: { id: crypto.randomUUID(), threadId, role: 'assistant' as const, content: 'Posso salvar', createdAt: 11, providerId: 'coach-local', modelId: 'home-organizer-v1' } },
+      state: { focusedAcademicEventId: null, focusedWorkspaceId: null, focusedSubject: 'POO', pending: null, pendingWorkspacePreparation: null, recentResolvedAcademicEventIds: [], recentResolvedWorkspaceIds: [], updatedAt: 10 },
+      actions: [{ action: { id: actionId, originMessageId: crypto.randomUUID(), label: 'Salvar prova', contextVersion: 10, type: 'academic-life.save' as const, status: 'proposed' as const, payload: { kind: 'event', title: 'Prova POO', details: '{}', workspaceId: null, startsAt: null, endsAt: 20, expiresAt: 20, timezone: 'UTC', weekday: null, minutes: null, shareWithAi: false, provenance: { source: 'conversation', reference: null } }, result: null, createdAt: 10, resolvedAt: null }, idempotencyKey: 'atomic-organizer' }],
+    }
+
+    await expect(unit.commit(input)).rejects.toThrow(`injected ${boundary}`)
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM conversation_threads').get()).toEqual({ count: 0 })
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM conversation_messages').get()).toEqual({ count: 0 })
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM organizer_conversation_states').get()).toEqual({ count: 0 })
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM planner_actions').get()).toEqual({ count: 0 })
+    database.close()
   })
 
   it('persists the complete study workspace state', async () => {

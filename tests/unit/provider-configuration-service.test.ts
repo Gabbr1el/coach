@@ -526,7 +526,7 @@ describe('ProviderConfigurationService', () => {
     ])
   })
 
-  it('removes the active provider before a credential deletion failure', async () => {
+  it('commits metadata removal before best-effort credential cleanup', async () => {
     class FailingDeleteVault extends MemoryVault { override async delete() { throw new Error('vault failure') } }
     const repository = new MemoryConfigurationRepository()
     const accountId = '00000000-0000-4000-8000-000000000010'
@@ -534,12 +534,39 @@ describe('ProviderConfigurationService', () => {
     const manager = new AIProviderManager()
     manager.replace(provider(), accountId)
     manager.select(accountId)
-    const service = new ProviderConfigurationService(repository, new FailingDeleteVault(), manager, openAIProvider, compatibleProvider)
+    const vault = new FailingDeleteVault()
+    vault.value = 'secret-key-value-that-is-long-enough'
+    const service = new ProviderConfigurationService(repository, vault, manager, openAIProvider, compatibleProvider)
 
-    await expect(service.removeAccount(accountId)).rejects.toThrow('vault failure')
-    expect(manager.getActive()).toBeNull()
-    expect(manager.list()).toEqual([])
+    await expect(service.removeAccount(accountId)).resolves.toBeDefined()
+    expect(manager.list()).toHaveLength(0)
     expect(repository.configuration).toBeNull()
+
+    const restarted = new ProviderConfigurationService(repository, vault, new AIProviderManager(), openAIProvider, compatibleProvider)
+    await restarted.initialize()
+    expect(await restarted.listAccounts()).toEqual([])
+    expect(vault.validReferences).toEqual(new Set())
+  })
+
+  it('restores the provider manager and retains the secret when metadata removal fails', async () => {
+    class FailingRemoveRepository extends MemoryConfigurationRepository {
+      override async remove(_id: string): Promise<ProviderConfiguration | null> { throw new Error('database commit failure') }
+    }
+    const repository = new FailingRemoveRepository()
+    const accountId = '00000000-0000-4000-8000-000000000011'
+    repository.configuration = { id: accountId, providerId: 'openai', displayName: 'OpenAI', label: 'OpenAI', baseUrl: null, model: 'gpt-5-mini', secretReference: 'provider-openai-retained', isActive: true, createdAt: 1, updatedAt: 1 }
+    const vault = new MemoryVault()
+    vault.value = 'secret-key-value-that-is-long-enough'
+    const manager = new AIProviderManager()
+    manager.replace(provider(), accountId)
+    manager.select(accountId)
+    const service = new ProviderConfigurationService(repository, vault, manager, openAIProvider, compatibleProvider)
+
+    await expect(service.removeAccount(accountId)).rejects.toThrow('database commit failure')
+    expect(vault.value).toBe('secret-key-value-that-is-long-enough')
+    expect(repository.configuration).toMatchObject({ id: accountId, isActive: true })
+    expect(manager.getActiveRegistrationId()).toBe(accountId)
+    expect(manager.list()).toHaveLength(1)
   })
 })
 

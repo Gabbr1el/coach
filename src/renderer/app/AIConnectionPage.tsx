@@ -12,6 +12,7 @@ import {
   Users,
 } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
+import { useDialogFocus } from './dialog-focus'
 import type {
   BeginGitHubCopilotOAuthResult,
   ConfigureProviderResult,
@@ -99,6 +100,8 @@ function providerConnectionName(
 export interface AIConnectionPageProps {
   status: ProviderStatus | null
   accounts: ProviderAccountSummary[]
+  accountsState?: 'loading' | 'loaded' | 'error'
+  onRetryAccounts?: () => void
 
   runtimeIssues?: Readonly<
     Record<
@@ -2484,6 +2487,8 @@ function CurrentAISelection({
   onRemove,
   onCompleteGitHubCopilotOAuth,
   onConnect,
+  accountsState = 'loaded',
+  onRetryAccounts,
 }: Pick<
   AIConnectionPageProps,
   | 'status'
@@ -2498,10 +2503,15 @@ function CurrentAISelection({
   | 'onUpdate'
   | 'onRemove'
   | 'onCompleteGitHubCopilotOAuth'
+  | 'accountsState'
+  | 'onRetryAccounts'
 > & {
   onConnect(): void
 }) {
   const dropDepth = useRef(0)
+  const modelRequestEpoch = useRef(0)
+  const modelCache = useRef(new Map<string, readonly string[]>())
+  const editingAccountIdRef = useRef<string | null>(null)
 
 
   const restoredOmniRouteSelectionRef =
@@ -2857,7 +2867,9 @@ const [
 
   const loadAvailableModels = async (
     account: ProviderAccountSummary,
+    force = false,
   ) => {
+    const epoch = ++modelRequestEpoch.current
     const currentModel =
       account.model.trim()
 
@@ -2865,10 +2877,10 @@ const [
     setModelsError(null)
 
     try {
-      const models =
-        await onListModels(
-          account.id,
-        )
+      const cached = force ? undefined : modelCache.current.get(account.id)
+      const models = cached ?? await onListModels(account.id)
+      if (modelRequestEpoch.current !== epoch || editingAccountIdRef.current !== account.id) return
+      modelCache.current.set(account.id, models)
 
       setAvailableModels(
         [
@@ -2883,6 +2895,7 @@ const [
         ],
       )
     } catch {
+      if (modelRequestEpoch.current !== epoch || editingAccountIdRef.current !== account.id) return
       setAvailableModels(
         currentModel
           ? [currentModel]
@@ -2893,7 +2906,7 @@ const [
         'Não foi possível carregar os modelos deste provedor.',
       )
     } finally {
-      setModelsLoading(false)
+      if (modelRequestEpoch.current === epoch && editingAccountIdRef.current === account.id) setModelsLoading(false)
     }
   }
 
@@ -2903,6 +2916,8 @@ const [
   ) => {
     setOpenMenuAccountId(null)
     setEditingAccount(account)
+    editingAccountIdRef.current = account.id
+    modelRequestEpoch.current += 1
     setEditLabel(account.label)
     setEditError(null)
     setModelsError(null)
@@ -2975,11 +2990,15 @@ const [
       return
     }
 
+    modelRequestEpoch.current += 1
+    editingAccountIdRef.current = null
     setEditingAccount(null)
     setEditError(null)
     setModelsError(null)
     setAvailableModels([])
   }
+
+  const editorDialogRef = useDialogFocus<HTMLFormElement>(Boolean(editingAccount), closeEditor, 'input[type="text"]')
 
 
   const saveEditedAccount =
@@ -3164,6 +3183,14 @@ const [
   )
 
 
+  if (accounts.length === 0 && accountsState === 'loading') {
+    return <section className="mt-6 rounded-2xl border border-[#292c35] bg-[#111217] px-6 py-12 text-center text-sm text-[#9297a3]" aria-busy="true">Carregando suas IAs...</section>
+  }
+
+  if (accounts.length === 0 && accountsState === 'error') {
+    return <section className="mt-6 rounded-2xl border border-[#55353a] bg-[#211417] px-6 py-12 text-center"><h2 className="text-lg font-semibold text-white">Não foi possível carregar suas IAs</h2><p className="mt-2 text-sm text-[#e99ca1]">Suas configurações foram preservadas. Tente consultar novamente.</p><button type="button" onClick={onRetryAccounts} className="mt-5 rounded-xl border border-[#8c7cff] px-4 py-2 text-xs font-bold text-white">Tentar novamente</button></section>
+  }
+
   if (accounts.length === 0) {
     return (
       <section className="mt-6">
@@ -3195,6 +3222,9 @@ const [
 
   return (
     <section className="mt-6">
+      {accountsState === 'error' && accounts.length > 0 && (
+        <div role="alert" className="mb-4 flex items-center justify-between gap-4 rounded-xl border border-[#55353a] bg-[#211417] px-4 py-3 text-xs text-[#e99ca1]"><span>Não foi possível atualizar a lista. Os dados anteriores continuam visíveis.</span><button type="button" onClick={onRetryAccounts} className="shrink-0 font-bold text-white">Tentar novamente</button></div>
+      )}
       {managerError && (
         <div
           role="alert"
@@ -3605,6 +3635,15 @@ const [
                           </span>
                         </div>
                       )}
+                      <button
+                        type="button"
+                        disabled={!account.isEnabled || switchingAccountId !== null}
+                        aria-pressed={account.isActive}
+                        onClick={() => void useAccount(account.id)}
+                        className="mt-3 w-full rounded-lg border border-[#45405f] px-3 py-2 text-[10px] font-bold text-[#c8c0ff] transition hover:border-[#8c7cff] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {switchingAccountId === account.id ? 'Ativando...' : 'Usar esta IA'}
+                      </button>
                     </article>
                   )
                 },
@@ -3638,6 +3677,7 @@ const [
           }}
         >
           <form
+            ref={editorDialogRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby="edit-current-ai-title"
@@ -3645,7 +3685,7 @@ const [
               event.preventDefault()
               void saveEditedAccount()
             }}
-            className="w-full max-w-lg rounded-2xl border border-[#30333c] bg-[#111217] shadow-2xl"
+            className="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-2xl border border-[#30333c] bg-[#111217] shadow-2xl"
           >
             <header className="flex items-start justify-between gap-4 border-b border-[#292c35] px-6 py-5">
               <div>
@@ -3732,9 +3772,7 @@ const [
                               || modelsLoading
                             }
                             onClick={() =>
-                              void loadAvailableModels(
-                                editingAccount,
-                              )
+                              void loadAvailableModels(editingAccount, true)
                             }
                             className="text-[11px] font-semibold text-[#aa9cff] transition hover:text-white disabled:opacity-50"
                           >
@@ -3786,9 +3824,7 @@ const [
                               || modelsLoading
                             }
                             onClick={() =>
-                              void loadAvailableModels(
-                                editingAccount,
-                              )
+                              void loadAvailableModels(editingAccount, true)
                             }
                             className="text-[11px] font-semibold text-[#aa9cff] transition hover:text-white disabled:opacity-50"
                           >
@@ -4122,6 +4158,13 @@ export function AIConnectionPage(
   const [connectionSuccess, setConnectionSuccess] =
     useState<string | null>(null)
 
+  const closeConnectionSuccess = () => setConnectionSuccess(null)
+  const connectionSuccessDialogRef = useDialogFocus<HTMLDivElement>(
+    Boolean(connectionSuccess),
+    closeConnectionSuccess,
+    'button',
+  )
+
   const secureStorageAvailable =
     props.status?.secureStorageAvailable
 
@@ -4261,6 +4304,8 @@ export function AIConnectionPage(
         <CurrentAISelection
           status={props.status}
           accounts={props.accounts}
+          accountsState={props.accountsState ?? 'loaded'}
+          {...(props.onRetryAccounts ? { onRetryAccounts: props.onRetryAccounts } : {})}
           runtimeIssues={
             props.runtimeIssues ?? {}
           }
@@ -4587,7 +4632,7 @@ return (
           aria-modal="true"
           aria-labelledby="ai-connection-success-title"
         >
-          <div className="w-full max-w-md rounded-2xl border border-[#343743] bg-[#111217] p-6 shadow-2xl">
+          <div ref={connectionSuccessDialogRef} className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-[#343743] bg-[#111217] p-6 shadow-2xl">
             <div className="mx-auto grid size-14 place-items-center rounded-full bg-[#11261d] text-2xl font-bold text-[#72d7aa]">
               ✓
             </div>

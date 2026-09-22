@@ -210,4 +210,21 @@ describe('OpenAIProvider', () => {
     })
   })
 
+  it.each([
+    ['sendMessage', 401, {}, 'INVALID_CREDENTIAL'],
+    ['sendMessage', 403, {}, 'ACCESS_RESTRICTED'],
+    ['sendMessage', 404, {}, 'MODEL_UNAVAILABLE'],
+    ['sendMessage', 429, { error: { code: 'insufficient_quota' } }, 'INSUFFICIENT_QUOTA'],
+    ['sendMessage', 429, { error: { code: 'rate_limit_exceeded' } }, 'RATE_LIMITED'],
+  ] as const)('maps non-stream %s HTTP %s to %s', async (_kind, status, body, code) => {
+    const provider = new OpenAIProvider('secret-key-value-that-is-long-enough', 'gpt-test', 'auto', async () => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } }))
+    await expect(provider.sendMessage({ messages: [{ role: 'user', content: 'Oi' }], maxOutputTokens: 50 })).rejects.toMatchObject({ code })
+  })
+
+  it('maps streaming HTTP errors without exposing remote messages', async () => {
+    const provider = new OpenAIProvider('secret-key-value-that-is-long-enough', 'gpt-test', 'auto', async () => new Response(JSON.stringify({ error: { code: 'rate_limit_exceeded', message: 'private upstream detail' } }), { status: 429, headers: { 'Content-Type': 'application/json' } }))
+    const consume = async () => { for await (const _event of provider.streamMessage!({ messages: [{ role: 'user', content: 'Oi' }], maxOutputTokens: 50 })) { /* consume */ } }
+    await expect(consume()).rejects.toMatchObject({ code: 'RATE_LIMITED', message: 'RATE_LIMITED' })
+  })
+
 })

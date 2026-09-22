@@ -12,7 +12,6 @@ export class SqliteOrganizerConversationStateRepository implements OrganizerConv
       const parsed = organizerConversationStateSchema.safeParse(JSON.parse(row.stateJson))
       if (parsed.success) return parsed.data
     } catch {}
-    this.clear(threadId)
     return emptyOrganizerConversationState()
   }
 

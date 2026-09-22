@@ -72,8 +72,10 @@ function healthRuntimeIssue(
       return 'model-unavailable'
 
     case 'INVALID_CREDENTIAL':
-    case 'ACCESS_RESTRICTED':
       return 'reauth-required'
+
+    case 'ACCESS_RESTRICTED':
+      return 'access-restricted'
 
     case 'RATE_LIMITED':
     case 'NETWORK_UNAVAILABLE':
@@ -83,7 +85,7 @@ function healthRuntimeIssue(
 
   if (
     error instanceof Error
-    && /credential|token|unauthor|forbidden|access/i
+    && /credential|token|unauthor/i
       .test(error.message)
   ) {
     return 'reauth-required'
@@ -1637,10 +1639,10 @@ export class ProviderConfigurationService {
   async configureGitHubCopilotOAuth(
     credential: string,
     identityLabel: string | null,
+    identityKey: string,
+    targetAccountId: string | null = null,
   ): Promise<ProviderStatus> {
     return this.exclusive(async () => {
-      await this.assertCanCreateAccount()
-
       if (!this.vault.isAvailable()) {
         throw new Error(
           'Secure operating-system credential storage is unavailable',
@@ -1669,8 +1671,65 @@ export class ProviderConfigurationService {
       const availableModels =
         await probe.listModels()
 
+      const matched =
+        await this.repository.findByIdentity(
+          'github-copilot',
+          identityKey,
+        )
+
+      const target =
+        targetAccountId
+          ? await this.repository.findById(
+              targetAccountId,
+            )
+          : matched
+
+      const historicalDuplicate =
+        Boolean(
+          targetAccountId
+          && !target?.identityKey
+          && matched
+          && matched.id !== targetAccountId,
+        )
+
+      if (
+        targetAccountId
+        && (
+          !target
+          || target.providerId
+            !== 'github-copilot'
+        )
+      ) {
+        throw new Error(
+          'Provider account not found',
+        )
+      }
+
+      if (
+        target?.identityKey
+        && target.identityKey
+          !== identityKey
+        && !historicalDuplicate
+      ) {
+        throw Object.assign(
+          new Error(
+            'GitHub identity does not match the selected account',
+          ),
+          { code: 'INVALID_CREDENTIAL' },
+        )
+      }
+
+      if (!target) {
+        await this.assertCanCreateAccount()
+      }
+
       const model =
-        availableModels[0]
+        target?.model
+        && availableModels.includes(
+          target.model,
+        )
+          ? target.model
+          : availableModels[0]
 
       if (!model) {
         throw new Error(
@@ -1682,11 +1741,13 @@ export class ProviderConfigurationService {
         this.createGitHubCopilotProvider(
           credential,
           model,
-          'auto',
+          target?.reasoningEffort
+          ?? 'auto',
         )
 
       const accountId =
-        crypto.randomUUID()
+        target?.id
+        ?? crypto.randomUUID()
 
       this.healthByAccount.set(
         accountId,
@@ -1697,7 +1758,15 @@ export class ProviderConfigurationService {
       )
 
       const secretReference =
-        `provider-github-copilot-oauth-${accountId}`
+        target?.secretReference
+        ?? `provider-github-copilot-oauth-${accountId}`
+
+      const previousCredential =
+        target
+          ? await this.vault.get(
+              secretReference,
+            )
+          : null
 
       await this.vault.set(
         secretReference,
@@ -1708,26 +1777,77 @@ export class ProviderConfigurationService {
         const now =
           this.now()
 
-        await this.repository.createAndActivate({
-          id: accountId,
-          providerId: 'github-copilot',
-          displayName: 'GitHub Copilot',
-          label: 'GitHub Copilot',
-          authKind: 'oauth',
-          identityLabel,
-          baseUrl: null,
-          model,
-          reasoningEffort: 'auto',
-          secretReference,
-          isEnabled: true,
-          isActive: true,
-          createdAt: now,
-          updatedAt: now,
-        })
+        if (target) {
+          const duplicate =
+            historicalDuplicate
+            && matched
+              ? matched
+              : null
+
+          const updated = duplicate
+            ? await this.repository
+                .mergeOAuthIdentity(
+                  target.id,
+                  duplicate.id,
+                  identityKey,
+                  identityLabel,
+                  model,
+                  now,
+                )
+            : await this.repository
+                .updateOAuthIdentity(
+                  target.id,
+                  identityKey,
+                  identityLabel,
+                  model,
+                  now,
+                )
+
+          if (!updated) {
+            throw new Error(
+              'Provider account not found',
+            )
+          }
+
+          if (duplicate) {
+            this.manager.remove(duplicate.id)
+            this.healthByAccount.delete(duplicate.id)
+            await this.vault
+              .delete(duplicate.secretReference)
+              .catch(() => {})
+          }
+        } else {
+          await this.repository.createAndActivate({
+            id: accountId,
+            providerId: 'github-copilot',
+            displayName: 'GitHub Copilot',
+            label: 'GitHub Copilot',
+            authKind: 'oauth',
+            identityLabel,
+            identityKey,
+            baseUrl: null,
+            model,
+            reasoningEffort: 'auto',
+            secretReference,
+            isEnabled: true,
+            isActive: true,
+            createdAt: now,
+            updatedAt: now,
+          })
+        }
       } catch (error) {
-        await this.vault
-          .delete(secretReference)
-          .catch(() => {})
+        if (target && previousCredential !== null) {
+          await this.vault
+            .set(
+              secretReference,
+              previousCredential,
+            )
+            .catch(() => {})
+        } else {
+          await this.vault
+            .delete(secretReference)
+            .catch(() => {})
+        }
 
         this.healthByAccount.delete(
           accountId,
@@ -1736,10 +1856,21 @@ export class ProviderConfigurationService {
         throw error
       }
 
-      this.registerAndSelect(
-        accountId,
-        provider,
-      )
+      if (target) {
+        if (target.isEnabled !== false) {
+          this.manager.replace(provider, accountId)
+        }
+
+        if (target.isActive) {
+          this.manager.select(accountId)
+          this.manager.notifyAvailable()
+        }
+      } else {
+        this.registerAndSelect(
+          accountId,
+          provider,
+        )
+      }
 
       return this.getStatus()
     })
@@ -2556,26 +2687,25 @@ async updateAccount(
      * Isso evita que uma conta continue operacional caso a exclusão
      * segura da credencial falhe.
      */
-    if (wasActive) {
-      this.manager.remove(
-        accountId,
-      )
-    }
-
-    await this.vault.delete(
-      configuration.secretReference,
-    )
-
-    await this.repository.remove(
-      accountId,
-    )
-
     this.manager.remove(
       accountId,
     )
 
     this.healthByAccount.delete(
       accountId,
+    )
+
+    await this.repository.remove(
+      accountId,
+    )
+
+    /*
+     * Remove metadata first. A vault failure may leave an orphaned secret,
+     * which startup cleanup can safely collect; the inverse would leave a
+     * live account pointing at a credential that no longer exists.
+     */
+    await this.vault.delete(
+      configuration.secretReference,
     )
 
     if (wasActive) {

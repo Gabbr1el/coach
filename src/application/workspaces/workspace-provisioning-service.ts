@@ -19,6 +19,7 @@ export interface WorkspaceProvisioningDependencies {
   readonly listReadyMaterialIds: (workspaceId: string) => string[]
   readonly now?: () => number
   readonly initializeContent?: (workspaceId: string) => void
+  readonly recoverContent?: (workspaceId: string) => void
 }
 
 function safeMessage(error: unknown): string { return (error instanceof Error ? error.message : 'Falha desconhecida').replace(/[\r\n\t]+/g, ' ').slice(0, 500) }
@@ -30,14 +31,14 @@ export class WorkspaceProvisioningService {
 
   createDraft(workspaceId: string): WorkspaceProvisioningState {
     const now = this.now()
-    return this.dependencies.repository.save({ workspaceId, status: 'draft', stage: 'workspace', materialIds: [], readinessState: 'PROVISIONING', backgroundPending: 0, legacyState: null, attemptCount: 0, createdAt: now, startedAt: null, stageUpdatedAt: now, completedAt: null, retryAfter: null, errorCode: null, errorMessage: null })
+    return this.dependencies.repository.save({ workspaceId, status: 'draft', stage: 'workspace', materialIds: [], readinessState: 'PROVISIONING', backgroundPending: 0, progress: { completed: 0, total: null, label: 'Calculando etapas', indeterminate: true, background: false }, legacyState: null, attemptCount: 0, createdAt: now, startedAt: null, stageUpdatedAt: now, completedAt: null, retryAfter: null, errorCode: null, errorMessage: null })
   }
   get(workspaceId: string): WorkspaceProvisioningState | null { return this.dependencies.repository.find(workspaceId) }
   discardDraft(workspaceId: string): void { this.dependencies.repository.removeDraft(workspaceId) }
   start(workspaceId: string): WorkspaceProvisioningState {
     const current = this.require(workspaceId)
     if (current.status === 'ready') return current
-    if (current.status === 'failed_retryable' && current.retryAfter === null && current.errorCode?.startsWith('TERMINAL_')) throw new Error('Terminal provisioning failure cannot be retried without changing its inputs')
+    if (current.status === 'failed_retryable' && current.retryAfter === null && current.errorCode?.startsWith('INVARIANT_')) throw new Error(current.errorMessage ?? 'A provisioning invariant must be corrected before retrying')
     const now = this.now(); const materialIds = this.dependencies.listReadyMaterialIds(workspaceId)
     const queued = this.dependencies.repository.save({ ...current, status: 'queued', stage: materialIds.length ? 'materials' : 'workspace', materialIds, startedAt: current.startedAt ?? now, stageUpdatedAt: now, retryAfter: null, errorCode: null, errorMessage: null })
     if (this.dependencies.initializeContent) {
@@ -48,7 +49,7 @@ export class WorkspaceProvisioningService {
     void this.resume(workspaceId)
     return queued
   }
-  retry(workspaceId: string): WorkspaceProvisioningState { return this.start(workspaceId) }
+  retry(workspaceId: string): WorkspaceProvisioningState { this.dependencies.recoverContent?.(workspaceId); return this.start(workspaceId) }
   resumePending(): void { for (const workspaceId of this.dependencies.repository.listResumable(this.now())) { const state = this.dependencies.repository.find(workspaceId); if (state?.status === 'running') this.dependencies.repository.save({ ...state, status: 'failed_retryable', retryAfter: null, errorCode: 'INTERRUPTED', errorMessage: 'A preparação foi interrompida e será retomada.', stageUpdatedAt: this.now() }); void this.resume(workspaceId) } }
   resume(workspaceId: string): Promise<WorkspaceProvisioningState> {
     const active = this.running.get(workspaceId); if (active) return active

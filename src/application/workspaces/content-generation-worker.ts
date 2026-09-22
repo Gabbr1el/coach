@@ -45,13 +45,15 @@ const systemClock: WorkerClock = {
 
 export interface ContentGenerationFailure { readonly code: string; readonly retryable: boolean; readonly providerUnavailable: boolean; readonly diagnostic?: string }
 
-const NON_RETRYABLE_CODES = new Set(['UNSUPPORTED_JOB_KIND', 'ROADMAP_SCHEMA_INVALID', 'ROADMAP_GENERIC_REJECTED', 'LESSON_SCHEMA_INVALID', 'LESSON_GENERIC_REJECTED', 'CURRENT_CONTENT_INVALID'])
+const INVARIANT_CODES = new Set(['UNSUPPORTED_JOB_KIND', 'CURRENT_CONTENT_INVALID', 'PUBLISHED_CONTENT_MISSING'])
+const RECOVERABLE_PROVIDER_CODES = new Set(['PROVIDER_UNAVAILABLE', 'PROVIDER_TIMEOUT', 'PROVIDER_REQUEST_FAILED', 'PROVIDER_INVALID_RESPONSE', 'INVALID_CREDENTIAL', 'AUTHENTICATION_FAILED', 'HTTP_410', 'RATE_LIMITED', 'MODEL_UNAVAILABLE', 'GENERATION_TIMEOUT', 'JSON_EXTRACTION_FAILED', 'ROADMAP_SCHEMA_INVALID', 'ROADMAP_GENERIC_REJECTED', 'LESSON_SCHEMA_INVALID', 'LESSON_GENERIC_REJECTED'])
 
 export function classifyContentGenerationFailure(error: unknown): ContentGenerationFailure {
   if (error instanceof DOMException && error.name === 'AbortError') return { code: 'GENERATION_ABORTED', retryable: true, providerUnavailable: false }
   const declared = error instanceof Error && 'code' in error && typeof (error as Error & { code?: unknown }).code === 'string' ? (error as Error & { code: string }).code : null
-  const code = declared ?? (error instanceof Error && /provider.*unavailable|network|offline|connect/i.test(error.message) ? 'PROVIDER_UNAVAILABLE' : error instanceof Error && /timeout|timed out/i.test(error.message) ? 'GENERATION_TIMEOUT' : 'GENERATION_FAILED')
-  return { code, retryable: !NON_RETRYABLE_CODES.has(code), providerUnavailable: code === 'PROVIDER_UNAVAILABLE', diagnostic: error instanceof Error ? error.message : undefined }
+  const message = error instanceof Error ? `${error.name} ${error.message}` : ''
+  const code = declared ?? (/\b410\b/.test(message) ? 'HTTP_410' : /credential|unauthori[sz]ed|authentication|auth\b/i.test(message) ? 'AUTHENTICATION_FAILED' : /rate.?limit|quota|429/i.test(message) ? 'RATE_LIMITED' : /model.*unavailable|unknown model/i.test(message) ? 'MODEL_UNAVAILABLE' : /provider.*unavailable|network|offline|connect/i.test(message) ? 'PROVIDER_UNAVAILABLE' : /timeout|timed out/i.test(message) ? 'GENERATION_TIMEOUT' : 'GENERATION_FAILED')
+  return { code, retryable: !INVARIANT_CODES.has(code), providerUnavailable: RECOVERABLE_PROVIDER_CODES.has(code), diagnostic: error instanceof Error ? error.message : undefined }
 }
 
 export class ContentGenerationWorker {
@@ -159,7 +161,7 @@ export class ContentGenerationWorker {
       const current = this.repository.getJob(job.id)
       if (current?.status === 'generating' && current.leaseToken === leaseToken) {
         if (!this.running) this.repository.releaseLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: 'WORKER_SHUTDOWN' })
-        else if (timedOut) this.repository.failLease({ jobId: job.id, leaseToken, now: this.clock.now(), errorCode: 'GENERATION_TIMEOUT' })
+        else if (timedOut) this.repository.releaseLease({ jobId: job.id, leaseToken, now: this.clock.now(), retryAt: this.clock.now() + 30_000, restoreAttempt: true, errorCode: 'GENERATION_TIMEOUT' })
         else {
           const failure = classifyContentGenerationFailure(error)
           if (failure.providerUnavailable) this.repository.releaseLease({ jobId: job.id, leaseToken, now: this.clock.now(), retryAt: this.clock.now() + 300_000, restoreAttempt: true, errorCode: failure.code, errorMessage: failure.diagnostic })

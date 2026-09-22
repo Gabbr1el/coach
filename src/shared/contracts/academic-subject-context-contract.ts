@@ -10,6 +10,12 @@ export interface AcademicSubjectContext {
   readonly declaredDifficulties: readonly string[]
   readonly goals: readonly string[]
   readonly sourceEvidence: readonly string[]
+  readonly observedStrengths: readonly string[]
+  readonly observedDifficulties: readonly string[]
+  readonly misconceptions: readonly string[]
+  readonly masteredConcepts: readonly string[]
+  readonly reviewConcepts: readonly string[]
+  readonly lastConsolidatedAt: number | null
   readonly createdAt: number
   readonly updatedAt: number
 }

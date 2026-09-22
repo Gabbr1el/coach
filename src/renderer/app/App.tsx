@@ -118,7 +118,7 @@ function WorkspaceCreationScreen({ open, submitting, initial, onClose, onSubmit 
   useEffect(() => { if (!open) return; creationOperations.current.reopen(); draftWorkspaceIdRef.current = null; setName(initial?.name ?? ''); setObjective(''); setDiagnosticAnswer(''); setAnalysis(null); setDuplicate(null); setDuplicateDifference(''); setDuplicateConfirmed(false); setDraftWorkspaceId(null); setDraftMaterials([]); setAnalyzed(false); setQuestion(null); setAnalysisError(null) }, [open, initial])
 
   async function analyze(confirmInterpretation = false) {
-    if (name.trim().length < 2 || analyzing) return
+    if (name.trim().length < 1 || analyzing) return
     const epoch = ++analysisEpoch.current
     setAnalyzing(true); setAnalysisError(null)
     try { const result = await window.coach.workspaceOnboarding.analyze({ topic: name, diagnosticAnswer: diagnosticAnswer.trim() || undefined, confirmation: confirmInterpretation && analysis ? { analysisToken: analysis.analysisToken, revision: analysis.revision, canonicalSubject: analysis.canonicalSubject, canonicalFocus: analysis.canonicalFocus } : undefined }); if (analysisEpoch.current !== epoch) return; setName(result.topic); setAnalysis(result); setObjective(result.objective); setQuestion(result.question); setAnalyzed(result.status === 'VALID' || result.status === 'NEEDS_CLARIFICATION') }
@@ -148,17 +148,17 @@ function WorkspaceCreationScreen({ open, submitting, initial, onClose, onSubmit 
           <button type="button" aria-label="Fechar" disabled={submitting || closing || materialBusy} onClick={() => { void closeCreation() }} className="rounded-full p-2 hover:bg-black/5 disabled:opacity-50"><X /></button>
         </div>
           <label className="mt-7 block text-sm font-bold">Tema principal
-            <input name="workspace-topic" required minLength={2} maxLength={80} value={name} onChange={(event) => { setName(event.target.value); resetSubjectState() }} placeholder="Ex.: Estrutura de Dados" className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none focus:border-coach-green" />
+            <input name="workspace-topic" required minLength={1} maxLength={80} value={name} onChange={(event) => { setName(event.target.value); resetSubjectState() }} placeholder="Ex.: Estrutura de Dados" className="mt-2 w-full rounded-xl border border-coach-line bg-[#111217] px-4 py-3 outline-none focus:border-coach-green" />
             <span className="mt-1 block text-xs font-normal text-coach-muted">Use uma disciplina ou habilidade específica. O Coach analisará o foco antes de criar a Trilha.</span>
           </label>
-          {analysis && <section className={`mt-5 rounded-2xl border p-5 ${analysis.status === 'INVALID' || analysis.status === 'REQUIRED_DESCRIPTION' ? 'border-red-500/50 bg-red-500/10' : analysis.status === 'NEEDS_CONFIRMATION' ? 'border-coach-orange/60 bg-coach-orange/10' : 'border-coach-green/40 bg-coach-green/[.06]'}`}><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[.16em] text-coach-muted">Interpretação do Coach</p><h3 className="mt-1 font-display text-xl font-black">{analysis.canonicalSubject || 'Tema não reconhecido'}</h3></div><span className="rounded-full border border-current px-3 py-1 text-[10px] font-black tracking-wide">{analysis.status}</span></div><p className="mt-3 text-sm leading-6 text-coach-muted">{analysis.explanation}</p>{analysis.canonicalFocus && analysis.canonicalFocus !== analysis.canonicalSubject && <p className="mt-2 text-xs"><strong>Foco:</strong> {analysis.canonicalFocus}</p>}{analysis.relatedContexts.length > 0 && <div className="mt-4 border-t border-coach-line pt-3"><p className="text-xs font-black uppercase tracking-wide">Relações automáticas</p>{analysis.relatedContexts.map((item) => <p key={`${item.relation}:${item.subject}`} className="mt-2 text-xs text-coach-muted"><strong className="text-coach-ink">{item.subject}</strong> — {item.explanation} Isso adiciona contexto, não evidência de domínio.</p>)}</div>}</section>}
+          {analysis && <section className={`mt-5 rounded-2xl border p-5 ${analysis.status === 'INVALID' || analysis.status === 'REQUIRED_DESCRIPTION' ? 'border-red-500/50 bg-red-500/10' : analysis.status === 'NEEDS_CONFIRMATION' ? 'border-coach-orange/60 bg-coach-orange/10' : 'border-coach-green/40 bg-coach-green/[.06]'}`}><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-[10px] font-black uppercase tracking-[.16em] text-coach-muted">Interpretação do Coach</p><h3 className="mt-1 font-display text-xl font-black">{analysis.canonicalSubject || 'Tema não reconhecido'}</h3></div><span className="rounded-full border border-current px-3 py-1 text-[10px] font-black tracking-wide">{analysis.status}</span></div><p className="mt-3 text-sm leading-6 text-coach-muted">{analysis.explanation}</p><p className="mt-2 text-[11px] text-coach-muted">Análise de IA: {{ valid: 'validada', unavailable: 'indisponível; regra segura aplicada', invalid: 'resposta inválida; regra segura aplicada', uncertain: 'incerta; confirmação local exigida', not_used: 'não necessária' }[analysis.providerAnalysisState]}</p>{analysis.canonicalFocus && analysis.canonicalFocus !== analysis.canonicalSubject && <p className="mt-2 text-xs"><strong>Foco:</strong> {analysis.canonicalFocus}</p>}{analysis.relatedContexts.length > 0 && <div className="mt-4 border-t border-coach-line pt-3"><p className="text-xs font-black uppercase tracking-wide">Relações automáticas</p>{analysis.relatedContexts.map((item) => <p key={`${item.relation}:${item.subject}`} className="mt-2 text-xs text-coach-muted"><strong className="text-coach-ink">{item.subject}</strong> — {item.explanation} Isso adiciona contexto, não evidência de domínio.</p>)}</div>}</section>}
           <section className="mt-6 rounded-2xl border border-dashed border-coach-line p-5"><div className="flex items-center justify-between gap-4"><div><h3 className="font-display text-xl font-black">Materiais para personalização</h3><p className="mt-2 text-sm text-coach-muted">Opcional. Anexe PDF ou PPTX; nada entra na Trilha até você aprovar o papel de cada arquivo.</p></div><button type="button" disabled={!analyzed || submitting} onClick={() => void addMaterial().catch(() => setAnalysisError('Não foi possível anexar o material.'))} className="rounded-xl border border-coach-line px-4 py-2 text-sm font-bold disabled:opacity-50">Adicionar PDF/PPTX</button></div>{draftMaterials.map((material) => <article key={material.id} className="mt-3 rounded-lg border border-coach-line p-3 text-xs"><strong>{material.name}</strong><p className="mt-1 text-coach-muted">{material.semanticAnalysis?.summary ?? material.errorMessage ?? `Extração concluída: ${material.pageCount} páginas/slides.`}</p>{material.status === 'staged' && <div className="mt-3 flex flex-wrap gap-2"><select id={`role-${material.id}`} defaultValue="reference" className="rounded-lg border border-coach-line bg-[#111217] px-2 py-1"><option value="base">Base curricular</option><option value="priority">Prioridade</option><option value="reference">Referência</option></select><button type="button" onClick={() => { const role = (document.getElementById(`role-${material.id}`) as HTMLSelectElement).value as 'base' | 'priority' | 'reference'; void decideDraftMaterial(material.id, 'approve', role) }} className="rounded-lg bg-coach-green px-3 py-1 font-bold text-white">Aprovar papel</button><button type="button" onClick={() => void decideDraftMaterial(material.id, 'discard')} className="rounded-lg border border-coach-line px-3 py-1">Descartar</button></div>}<span className="mt-2 block text-coach-muted">Estado: {material.status}</span></article>)}</section>
           {question && <label className="mt-5 block rounded-xl border border-[#39334f] bg-[#181622] p-4 text-sm font-bold"><span className="text-[#aa9cff]">{analysis?.status === 'REQUIRED_DESCRIPTION' ? 'Descrição obrigatória' : 'Pergunta contextual opcional'}</span><span className="mt-2 block font-normal leading-6 text-[#c8cad0]">{question}</span><textarea maxLength={1000} value={diagnosticAnswer} onChange={(event) => { setDiagnosticAnswer(event.target.value); if (analysis?.status === 'REQUIRED_DESCRIPTION') setAnalyzed(false); else setAnalyzed(event.target.value.trim().length === 0) }} placeholder={analysis?.status === 'REQUIRED_DESCRIPTION' ? 'Ex.: ED significa Estrutura de Dados' : 'Você pode responder ou criar o Workspace sem responder.'} className="mt-3 min-h-24 w-full resize-none rounded-lg border border-[#39334f] bg-[#111217] px-4 py-3 outline-none" />{diagnosticAnswer.trim() && <button type="button" disabled={analyzing} onClick={() => void analyze()} className="mt-3 rounded-lg border border-[#aa9cff] px-3 py-2 text-xs font-bold text-[#aa9cff]">Analisar novamente</button>}</label>}
          {analysisError && <p className="mt-4 text-xs text-red-400">{analysisError}</p>}
            {duplicate && <section className="mt-5 rounded-xl border border-coach-orange/50 bg-coach-orange/10 p-4"><strong>Já existe um Workspace equivalente: {duplicate.name}</strong><p className="mt-2 text-xs text-coach-muted">Cancele esta criação e abra “{duplicate.name}”, ou descreva uma diferença acadêmica real.</p><label className="mt-3 block text-xs font-bold">O que torna este Workspace diferente?<textarea value={duplicateDifference} onChange={(event) => { setDuplicateDifference(event.target.value); setDuplicateConfirmed(false) }} placeholder="Ex.: foco na implementação em C para a prova prática" className="mt-2 min-h-20 w-full rounded-lg border border-coach-line bg-[#111217] p-3" /></label><label className="mt-3 flex items-start gap-2 text-xs"><input type="checkbox" className="mt-0.5" disabled={duplicateDifference.trim().length < 8} checked={duplicateConfirmed} onChange={(event) => setDuplicateConfirmed(event.target.checked)} /><span><strong className="block">Criar outro Workspace mesmo assim</strong><span className="mt-1 block font-normal text-coach-muted">Ao marcar, o Coach manterá dois planos separados para temas semelhantes usando a diferença descrita.</span></span></label></section>}
          <div className="mt-7 flex justify-end gap-3 border-t border-coach-line pt-5">
            <button type="button" disabled={submitting || closing || materialBusy} onClick={() => { void closeCreation() }} className="rounded-xl border border-coach-line px-5 py-3 font-bold disabled:opacity-50">{closing ? 'Limpando...' : 'Cancelar'}</button>
-            {!analysis && <button type="button" disabled={submitting || analyzing || name.trim().length < 2} onClick={() => void analyze()} className="rounded-xl border border-coach-green px-5 py-3 font-extrabold text-coach-green disabled:opacity-50">{analyzing ? 'Coach analisando…' : 'Analisar tema'}</button>}{analysis?.status === 'NEEDS_CONFIRMATION' && <button type="button" disabled={analyzing} onClick={() => void analyze(true)} className="rounded-xl border border-coach-green px-5 py-3 font-extrabold text-coach-green disabled:opacity-50">Confirmar interpretação</button>}<button type="submit" disabled={!analyzed || submitting || analyzing || materialBusy || closing || !analysis?.analysisToken || draftMaterials.some((item) => item.status === 'staged') || (duplicate !== null && !duplicateConfirmed)} className="rounded-xl bg-coach-orange px-5 py-3 font-extrabold text-white disabled:opacity-50">{submitting ? 'Criando…' : 'Criar Workspace'}</button>
+            {!analysis && <button type="button" disabled={submitting || analyzing || name.trim().length < 1} onClick={() => void analyze()} className="rounded-xl border border-coach-green px-5 py-3 font-extrabold text-coach-green disabled:opacity-50">{analyzing ? 'Coach analisando…' : 'Analisar tema'}</button>}{analysis?.status === 'NEEDS_CONFIRMATION' && <button type="button" disabled={analyzing} onClick={() => void analyze(true)} className="rounded-xl border border-coach-green px-5 py-3 font-extrabold text-coach-green disabled:opacity-50">Confirmar interpretação</button>}<button type="submit" disabled={!analyzed || submitting || analyzing || materialBusy || closing || !analysis?.analysisToken || draftMaterials.some((item) => item.status === 'staged') || (duplicate !== null && !duplicateConfirmed)} className="rounded-xl bg-coach-orange px-5 py-3 font-extrabold text-white disabled:opacity-50">{submitting ? 'Criando…' : 'Criar Workspace'}</button>
         </div>
       </form>
     </div>
@@ -336,8 +336,10 @@ function providerRuntimeIssueFromStreamCode(
       return 'model-unavailable'
 
     case 'INVALID_CREDENTIAL':
-    case 'ACCESS_RESTRICTED':
       return 'reauth-required'
+
+    case 'ACCESS_RESTRICTED':
+      return 'access-restricted'
 
     case 'RATE_LIMITED':
     case 'NETWORK_UNAVAILABLE':
@@ -383,6 +385,13 @@ function aiProblemCopy(
         title: 'Modelo indisponível',
         message:
           'O modelo selecionado não está disponível. Escolha outro modelo.',
+      }
+
+    case 'access-restricted':
+      return {
+        title: 'Acesso restrito',
+        message:
+          'O plano, a organização, a política ou a região não permite usar esta IA.',
       }
 
     case 'temporarily-unavailable':
@@ -1596,6 +1605,12 @@ export function App() {
       }
 
       if (
+        issue === 'access-restricted'
+      ) {
+        return `${account.label} · acesso restrito`
+      }
+
+      if (
         issue === 'usage-limit'
       ) {
         return `${account.label} · limite de uso`
@@ -2274,9 +2289,9 @@ export function App() {
         setProviderAccounts(await window.coach.provider.listAccounts())
         return result
       },
-      onBeginGitHubCopilotOAuth: () =>
+      onBeginGitHubCopilotOAuth: (accountId) =>
         window.coach.provider
-          .beginGitHubCopilotOAuth(),
+          .beginGitHubCopilotOAuth(accountId),
 
       onCompleteGitHubCopilotOAuth:
         async (flowId) => {

@@ -24,12 +24,13 @@ function Rail({ active, onSection, onSettings }: { active: HomeSection; onSectio
 
 function WorkspaceRow({ workspace, priority, onOpen, onArchive, onRetry }: { workspace: WorkspaceSummary; priority: WorkspacePriority | undefined; onOpen(id: string): void; onArchive(id: string): void; onRetry(id: string): void }) {
   const provisioning = workspace.provisioning
-  const permanentFailure = provisioning?.status === 'failed_retryable' && provisioning.retryAfter === null && provisioning.errorCode?.startsWith('TERMINAL_')
+  const permanentFailure = provisioning?.status === 'failed_retryable' && provisioning.retryAfter === null && provisioning.errorCode?.startsWith('INVARIANT_')
   const stage = provisioning?.status === 'waiting_for_provider' || provisioning?.errorCode === 'PROVIDER_UNAVAILABLE' ? 'Aguardando provedor' : provisioning?.status === 'failed_retryable' ? permanentFailure ? 'Falha permanente' : 'Nova tentativa agendada' : provisioning && provisioning.status !== 'ready' ? ({ workspace: 'Criando', materials: 'Lendo materiais', roadmap: 'Gerando Trilha', lesson: 'Gerando aula', exercises: 'Gerando exercícios', plan: 'Montando plano', background: 'Preparando próximo', ready: 'Pronto' } as const)[provisioning.stage] : null
   const status = stage ?? (priority?.level === 'urgent' ? 'Urgente' : priority?.level === 'attention' ? 'Atenção' : 'No ritmo')
   const ready = !workspace.provisioning || workspace.provisioning.legacyState === 'legacy_accessible' || workspace.provisioning.readinessState === 'USABLE' || workspace.provisioning.readinessState === 'FULLY_PROVISIONED'
   const canRetry = provisioning?.status === 'waiting_for_provider' || (provisioning?.status === 'failed_retryable' && !permanentFailure)
-  const detail = provisioning && !ready ? provisioning.errorMessage ?? provisioning.eta?.label ?? 'Calculando estimativa' : provisioning?.errorMessage ?? (provisioning?.backgroundPending ? `Próxima unidade em segundo plano · ${provisioning.backgroundPending} pendente(s)` : priority?.reason || workspace.objective || 'Sem objetivo definido')
+  const progress = provisioning?.progress.label ?? null
+  const detail = provisioning && !ready ? [provisioning.errorMessage ?? provisioning.eta?.label ?? 'Calculando estimativa', progress].filter(Boolean).join(' · ') : provisioning?.errorMessage ?? (provisioning?.progress.background ? `Segundo plano · ${progress}` : priority?.reason || workspace.objective || 'Sem objetivo definido')
   return <article className="group grid grid-cols-[minmax(0,1fr)_76px_34px] items-center gap-3 border-b border-[#202229] px-1 py-4 sm:grid-cols-[minmax(0,1fr)_110px_110px_34px]"><div className="min-w-0"><button disabled={!ready} onClick={() => onOpen(workspace.id)} className="min-w-0 text-left disabled:cursor-wait disabled:opacity-70"><strong className="block truncate text-[13px] text-[#eceef2]">{workspace.name}</strong><span className="mt-1 block truncate text-[11px] text-[#626773]">{detail}</span></button>{canRetry && <button type="button" onClick={() => onRetry(workspace.id)} className="mt-1 text-[10px] font-bold text-[#8c7cff] hover:text-white">Tentar agora</button>}</div><span className={`text-[11px] font-semibold ${stage ? 'text-[#8c7cff]' : priority?.level === 'urgent' ? 'text-[#ef8d93]' : priority?.level === 'attention' ? 'text-[#e8b96d]' : 'text-[#72d7aa]'}`}>{status}</span><span className="hidden text-right text-[11px] text-[#747986] sm:block">{workspace.lastOpenedAt ? new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: 'short' }).format(workspace.lastOpenedAt) : 'Novo'}</span><button onClick={() => onArchive(workspace.id)} className="grid size-8 place-items-center rounded-md text-[#626773] opacity-100 hover:bg-[#22252e] hover:text-white lg:opacity-0 lg:focus-visible:opacity-100 lg:group-hover:opacity-100" aria-label={`Arquivar ${workspace.name}`}><MoreHorizontal size={16} /></button></article>
 }
 
@@ -673,7 +674,8 @@ function WeekBoard({
               setCalendarOpen(false)
               onNavigate()
             }}
-            className="h-9 rounded-lg border border-[#30333c] px-3 text-[10px] font-bold text-[#72d7aa] hover:border-[#72d7aa]/70"
+            aria-label="Voltar ao plano de hoje"
+            className="inline-flex h-9 w-[72px] shrink-0 items-center justify-center rounded-lg border border-[#30333c] px-3 text-[10px] font-bold text-[#72d7aa] hover:border-[#72d7aa]/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#72d7aa]"
           >
             Hoje
           </button>

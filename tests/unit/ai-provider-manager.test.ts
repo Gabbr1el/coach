@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { AIProviderManager } from '../../src/application/ai/ai-provider-manager'
 import type { AIProvider } from '../../src/application/ai/ai-provider'
 
@@ -41,5 +41,28 @@ describe('AIProviderManager', () => {
 
     expect(() => manager.register(provider('a'))).toThrow(/already registered/)
     expect(() => manager.select('missing')).toThrow(/not registered/)
+  })
+
+  it('emits availability once for a selection change and explicitly after credential recovery', () => {
+    const manager = new AIProviderManager()
+    manager.register(provider('a'))
+    const listener = vi.fn()
+    manager.onAvailable(listener)
+
+    manager.select('a')
+    manager.select('a')
+    expect(listener).toHaveBeenCalledTimes(1)
+
+    manager.notifyAvailable()
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps provider selection working when an availability listener fails', () => {
+    const manager = new AIProviderManager()
+    manager.register(provider('a'))
+    manager.onAvailable(() => { throw new Error('listener failed') })
+
+    expect(() => manager.select('a')).not.toThrow()
+    expect(manager.getActive()?.id).toBe('a')
   })
 })

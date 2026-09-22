@@ -73,6 +73,9 @@ export const providerConfigurations = sqliteTable(
      */
     identityLabel: text('identity_label'),
 
+    /** Immutable provider identity, derived only from a verified OAuth profile. */
+    identityKey: text('identity_key'),
+
     /**
      * Endpoint configurável somente para conectores que precisam dele.
      */
@@ -148,6 +151,11 @@ export const providerConfigurations = sqliteTable(
     ),
 
     check(
+      'provider_configurations_identity_key_check',
+      sql`${table.identityKey} is null or length(trim(${table.identityKey})) between 1 and 160`,
+    ),
+
+    check(
       'provider_configurations_auth_kind_check',
       sql`${table.authKind} in (
         'api-key',
@@ -220,5 +228,9 @@ export const providerConfigurations = sqliteTable(
     uniqueIndex('provider_configurations_single_active_idx')
       .on(table.isActive)
       .where(sql`${table.isActive} = 1`),
+
+    uniqueIndex('provider_configurations_provider_identity_idx')
+      .on(table.providerId, table.identityKey)
+      .where(sql`${table.identityKey} is not null`),
   ],
 )

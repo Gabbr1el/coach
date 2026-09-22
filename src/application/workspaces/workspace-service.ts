@@ -58,7 +58,7 @@ export class WorkspaceService {
     this.assertAnalyzed(input)
     this.assertNoDuplicate(input, input.draftId)
     if (input.draftId) {
-      const workspace = await this.repository.findById(input.draftId)
+      const workspace = await this.repository.findAnyById(input.draftId)
       if (!workspace || this.provisioning?.get(input.draftId)?.status !== 'draft') throw new Error('Workspace draft not found')
       if (workspace.name !== input.name.trim() || workspace.objective !== input.objective.trim()) throw new Error('Workspace draft changed after materials were attached; discard it and analyze again')
       this.saveLearningOverrides?.(workspace.id, normalizeSubject(input.name).subject, { ...input, goals: [...(input.goals ?? []), input.objective].filter(Boolean) }, this.now())

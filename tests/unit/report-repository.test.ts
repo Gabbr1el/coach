@@ -28,18 +28,7 @@ describe('DrizzleReportRepository', () => {
 
     expect(report.averageSuccessRate).toBeNull()
     expect(report.totalFocusSeconds).toBe(0)
-    expect(report.workspaces).toEqual([
-      expect.objectContaining({
-        workspaceId: 'workspace-empty',
-        successRate: null,
-        activity: expect.objectContaining({ focusSeconds: 0, currentSessionFocusSeconds: 0 }),
-        performance: expect.objectContaining({ checkpointsAnswered: 0, assessedSuccessRate: null }),
-        domain: expect.objectContaining({ assessedTopics: 0, averageMastery: null, confidence: 'not_assessed' }),
-        retention: { status: 'not_evaluated', score: null, evidenceCount: 0, lastEvidenceAt: null },
-        evidence: expect.objectContaining({ lastLearningEvidenceAt: null }),
-        recommendations: [],
-      }),
-    ])
+    expect(report.workspaces).toEqual([])
     expect(new DrizzleStudyWorkspaceRepository(database).listSessionHistory('workspace-empty', 100)).toEqual([])
     database.close()
   })
@@ -56,6 +45,7 @@ describe('DrizzleReportRepository', () => {
     sqlite.prepare("INSERT INTO study_plan_items (id, workspace_id, session_id, title, duration_minutes, position, status, topic_id, activity_type, created_at, updated_at) VALUES (?, ?, ?, ?, 20, 1, 'active', ?, 'exercise', ?, ?)").run('plan-active', 'workspace-evidence', 'session-active', 'Praticar listas', 'topic-lists', 90_000, 90_000)
     sqlite.prepare("INSERT INTO study_progress (workspace_id, roadmap_id, current_module_id, current_topic_id, current_lesson_id, current_checkpoint_id, topic_statuses_json, lesson_positions_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)").run('workspace-evidence', 'roadmap-1', 'module-1', 'topic-lists', 'lesson-1', 'checkpoint-1', JSON.stringify({ 'lesson-1': { attempt: 4 } }), 96_000)
     sqlite.prepare("INSERT INTO topic_learning_states (workspace_id, topic_id, evidence_count, assessments, correct_first_try, correct_after_help, incorrect, hints_used, reinforcement_events, exercises_completed, lessons_completed, difficulty_level, mastery_estimate, confidence, needs_review, last_practiced_at, last_assessed_at, reasons_json, updated_at) VALUES (?, ?, 6, 3, 1, 1, 1, 1, 1, 1, 1, 'medium', 72, 'medium', 0, 94000, 96000, '[]', 96000)").run('workspace-evidence', 'topic-lists')
+    for (const [index, correct] of [1, 1, 0].entries()) sqlite.prepare("INSERT INTO study_progress_events (id,workspace_id,type,module_id,topic_id,lesson_id,checkpoint_id,correct,created_at) VALUES (?,?,'CHECKPOINT_ANSWERED','module-1','topic-lists','lesson-1',?,?,?)").run(`checkpoint-${index}`, 'workspace-evidence', `checkpoint-${index}`, correct, 95_000 + index)
     sqlite.prepare("INSERT INTO conversation_threads (id, scope, workspace_id, title, created_at, updated_at) VALUES (?, 'workspace', ?, 'Algoritmos', ?, ?)").run('thread-1', 'workspace-evidence', 90_000, 90_000)
     sqlite.prepare("INSERT INTO conversation_messages (id, thread_id, role, content, created_at, sequence) VALUES (?, ?, 'user', 'Preciso de uma dica', ?, 1)").run('message-help', 'thread-1', 96_000)
 
@@ -98,6 +88,17 @@ describe('DrizzleReportRepository', () => {
     expect(workspace.domain).toMatchObject({ assessedTopics: 1, masteredTopics: 0, needsReviewTopics: 1, averageMastery: null, confidence: 'low' })
     expect(workspace.retention).toEqual({ status: 'available', score: null, evidenceCount: 2, lastEvidenceAt: 2 })
     expect(workspace.recommendations[0]).toContain('tópico sinalizado')
+    database.close()
+  })
+
+  it('excludes archived and non-usable lifecycle rows from every global total', () => {
+    const database = createDatabase(); const sqlite = database.sqlite
+    sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at,archived_at) VALUES ('archived','C','old','archived',1,2,2),('broken','JS','new','active',1,2,NULL)").run()
+    sqlite.prepare("INSERT INTO workspace_provisioning (workspace_id,status,stage,attempt_count,created_at,stage_updated_at) VALUES ('broken','failed_retryable','roadmap',1,1,2)").run()
+    sqlite.prepare("INSERT INTO workspace_content_revisions (workspace_id,revision,input_hash,state,created_at,updated_at) VALUES ('broken',1,'broken','provisioning',1,2)").run()
+    sqlite.prepare("INSERT INTO study_sessions (id,workspace_id,status,started_at,ended_at,focus_seconds) VALUES ('old-session','archived','completed',1,2,300)").run()
+    const report = new DrizzleReportRepository(database, () => 10).getGlobalOverview()
+    expect(report).toMatchObject({ totalFocusSeconds: 0, totalSessions: 0, totalActiveDays: 0, averageSuccessRate: null, workspaces: [] })
     database.close()
   })
 })

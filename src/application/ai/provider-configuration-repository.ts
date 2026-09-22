@@ -14,6 +14,7 @@ export interface ProviderConfiguration {
 
   readonly authKind?: ProviderAuthKind
   readonly identityLabel?: string | null
+  readonly identityKey?: string | null
 
   readonly baseUrl: string | null
   readonly model: string
@@ -45,6 +46,11 @@ export interface ProviderConfigurationRepository {
     id: string,
   ): Promise<ProviderConfiguration | null>
 
+  findByIdentity(
+    providerId: ProviderConnectorId,
+    identityKey: string,
+  ): Promise<ProviderConfiguration | null>
+
   list(): Promise<ProviderConfiguration[]>
 
   createAndActivate(
@@ -65,6 +71,23 @@ export interface ProviderConfigurationRepository {
   update(
     id: string,
     input: UpdateProviderConfigurationInput,
+  ): Promise<ProviderConfiguration | null>
+
+  updateOAuthIdentity(
+    id: string,
+    identityKey: string,
+    identityLabel: string | null,
+    model: string,
+    updatedAt: number,
+  ): Promise<ProviderConfiguration | null>
+
+  mergeOAuthIdentity(
+    targetId: string,
+    duplicateId: string,
+    identityKey: string,
+    identityLabel: string | null,
+    model: string,
+    updatedAt: number,
   ): Promise<ProviderConfiguration | null>
 
   remove(

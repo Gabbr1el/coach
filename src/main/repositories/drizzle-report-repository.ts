@@ -1,6 +1,7 @@
 import type { ReportRepository } from '../../application/reports/report-service'
 import type { GlobalReportOverview, ReportDomainMetrics, WorkspaceReportOverview } from '../../shared/contracts/report-contract'
 import type { CoachDatabase } from '../database/connection'
+import { usableWorkspaceSql } from './usable-workspace'
 
 type WorkspaceActivityRow = {
   workspaceId: string
@@ -65,6 +66,8 @@ type ProgressRow = {
   activeTopicId: string | null
   lessonPositionsJson: string
 }
+
+type CheckpointMetricRow = { workspaceId: string; answered: number; correct: number }
 
 const numeric = (value: number | null | undefined): number => value ?? 0
 
@@ -135,7 +138,7 @@ export class DrizzleReportRepository implements ReportRepository {
         COALESCE(SUM((SELECT COUNT(*) FROM study_plan_items p WHERE p.session_id = s.id AND p.status = 'completed')), 0) AS completedPlanItems
       FROM workspaces w
       LEFT JOIN study_sessions s ON s.workspace_id = w.id
-      WHERE w.status = 'active'
+       WHERE ${usableWorkspaceSql('w')}
       GROUP BY w.id
       ORDER BY focusSeconds DESC, w.name
     `).all() as WorkspaceActivityRow[]
@@ -162,7 +165,8 @@ export class DrizzleReportRepository implements ReportRepository {
         cm.successful_retrievals + cm.error_count AS evidenceCount, cm.last_evidence_at AS lastEvidenceAt
       FROM concept_memories cm
       JOIN topic_concepts tc ON tc.workspace_id = cm.workspace_id AND tc.concept_id = cm.concept_id AND tc.mapping_status = 'mapped'
-      JOIN workspaces w ON w.id = cm.workspace_id AND w.status = 'active'
+       JOIN workspaces w ON w.id = cm.workspace_id
+       WHERE ${usableWorkspaceSql('w')}
     `).all() as ConceptMemoryRow[]
     const plans = this.database.sqlite.prepare(`
       SELECT workspace_id AS workspaceId,
@@ -176,6 +180,14 @@ export class DrizzleReportRepository implements ReportRepository {
         lesson_positions_json AS lessonPositionsJson
       FROM study_progress
     `).all() as ProgressRow[]
+    const checkpointMetrics = this.database.sqlite.prepare(`
+      SELECT e.workspace_id AS workspaceId,COUNT(*) AS answered,
+        SUM(CASE WHEN e.correct=1 THEN 1 ELSE 0 END) AS correct
+      FROM study_progress_events e
+      JOIN workspaces w ON w.id=e.workspace_id
+      WHERE e.type='CHECKPOINT_ANSWERED' AND e.correct IS NOT NULL AND ${usableWorkspaceSql('w')}
+      GROUP BY e.workspace_id
+    `).all() as CheckpointMetricRow[]
     const coachHelp = this.database.sqlite.prepare(`
       SELECT t.workspace_id AS workspaceId, COUNT(*) AS count
       FROM conversation_messages m
@@ -194,6 +206,7 @@ export class DrizzleReportRepository implements ReportRepository {
     }
     const planByWorkspace = new Map(plans.map((row) => [row.workspaceId, row]))
     const progressByWorkspace = new Map(progress.map((row) => [row.workspaceId, row]))
+    const checkpointByWorkspace = new Map(checkpointMetrics.map((row) => [row.workspaceId, row]))
     const helpByWorkspace = new Map(coachHelp.map((row) => [row.workspaceId, row.count]))
     const now = this.now()
     const workspaces: WorkspaceReportOverview[] = activityRows.map((row) => {
@@ -205,11 +218,12 @@ export class DrizzleReportRepository implements ReportRepository {
       const activeFocusSeconds = currentFocusSeconds(activeSession, now)
       const plan = planByWorkspace.get(row.workspaceId)
       const workspaceProgress = progressByWorkspace.get(row.workspaceId)
-      const checkpointsAnswered = states.reduce((sum, state) => sum + state.assessments, 0)
+      const checkpointMetric = checkpointByWorkspace.get(row.workspaceId)
+      const checkpointsAnswered = checkpointMetric?.answered ?? 0
       const correctFirstTry = states.reduce((sum, state) => sum + state.correctFirstTry, 0)
       const correctAfterHelp = states.reduce((sum, state) => sum + state.correctAfterHelp, 0)
       const incorrect = states.reduce((sum, state) => sum + state.incorrect, 0)
-      const assessedSuccessRate = checkpointsAnswered > 0 ? Math.round((correctFirstTry + correctAfterHelp) / checkpointsAnswered * 100) : null
+      const assessedSuccessRate = checkpointsAnswered > 0 ? Math.round((checkpointMetric!.correct / checkpointsAnswered) * 100) : null
       const masteryValues = legacyStates.flatMap((state) => state.masteryEstimate === null ? [] : [state.masteryEstimate])
       const averageMastery = masteryValues.length > 0 ? Math.round(masteryValues.reduce((sum, value) => sum + value, 0) / masteryValues.length) : null
       const lastEvidenceAt = states.reduce<number | null>((latest, state) => {
@@ -234,7 +248,7 @@ export class DrizzleReportRepository implements ReportRepository {
       }
     })
     const evaluatedRates = workspaces.flatMap((workspace) => workspace.successRate === null ? [] : [workspace.successRate])
-    const completedDays = this.database.sqlite.prepare("SELECT DISTINCT date(started_at / 1000, 'unixepoch', 'localtime') AS day FROM study_sessions WHERE status = 'completed'").all() as Array<{ day: string }>
+    const completedDays = this.database.sqlite.prepare(`SELECT DISTINCT date(s.started_at / 1000, 'unixepoch', 'localtime') AS day FROM study_sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE s.status='completed' AND ${usableWorkspaceSql('w')}`).all() as Array<{ day: string }>
     return {
       totalFocusSeconds: workspaces.reduce((sum, workspace) => sum + workspace.focusSeconds, 0),
       totalSessions: workspaces.reduce((sum, workspace) => sum + workspace.sessionCount, 0),

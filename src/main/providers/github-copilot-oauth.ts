@@ -10,6 +10,12 @@ interface PendingFlow {
   readonly deviceCode: string
   readonly expiresAt: number
   intervalMs: number
+  readonly targetAccountId: string | null
+}
+
+export interface GitHubOAuthIdentity {
+  readonly key: string
+  readonly label: string | null
 }
 
 
@@ -36,6 +42,7 @@ export class GitHubCopilotOAuthDeviceFlow {
 
   async begin(
     clientId: string,
+    targetAccountId: string | null = null,
   ) {
     const normalized =
       clientId.trim()
@@ -126,6 +133,7 @@ export class GitHubCopilotOAuthDeviceFlow {
         expiresAt,
         intervalMs:
           body.interval * 1_000,
+        targetAccountId,
       },
     )
 
@@ -143,8 +151,8 @@ export class GitHubCopilotOAuthDeviceFlow {
     flowId: string,
   ): Promise<{
     readonly credential: string
-    readonly identityLabel:
-      string | null
+    readonly identity: GitHubOAuthIdentity
+    readonly targetAccountId: string | null
   }> {
     const pending =
       this.pending.get(flowId)
@@ -216,10 +224,12 @@ export class GitHubCopilotOAuthDeviceFlow {
         return {
           credential:
             body.access_token,
-          identityLabel:
+          identity:
             await this.identity(
               body.access_token,
             ),
+          targetAccountId:
+            pending.targetAccountId,
         }
       }
 
@@ -268,7 +278,7 @@ export class GitHubCopilotOAuthDeviceFlow {
 
   private async identity(
     accessToken: string,
-  ): Promise<string | null> {
+  ): Promise<GitHubOAuthIdentity> {
     try {
       const response =
         await fetch(
@@ -286,22 +296,51 @@ export class GitHubCopilotOAuthDeviceFlow {
         )
 
       if (!response.ok) {
-        return null
+        throw new GitHubCopilotOAuthError(
+          response.status === 401
+            ? 'INVALID_CREDENTIAL'
+            : response.status === 403
+              ? 'ACCESS_RESTRICTED'
+              : 'UNKNOWN',
+        )
       }
 
       const body =
         await response.json() as {
+          id?: number
           login?: string
         }
+
+      if (
+        !Number.isSafeInteger(body.id)
+        || (body.id ?? 0) <= 0
+      ) {
+        throw new GitHubCopilotOAuthError(
+          'UNKNOWN',
+          'GitHub did not return a verified user id',
+        )
+      }
 
       const login =
         body.login?.trim()
 
-      return login
-        ? `@${login}`
-        : null
-    } catch {
-      return null
+      return {
+        key: `github:${body.id}`,
+        label: login
+          ? `@${login}`
+          : null,
+      }
+    } catch (error) {
+      if (
+        error
+        instanceof GitHubCopilotOAuthError
+      ) {
+        throw error
+      }
+
+      throw new GitHubCopilotOAuthError(
+        'NETWORK_UNAVAILABLE',
+      )
     }
   }
 }

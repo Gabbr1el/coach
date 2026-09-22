@@ -375,7 +375,7 @@ export class PlanningService {
                         === dateKey,
                   )
                 ?? []
-              ).map(
+              ).filter((item) => activeNames.has(item.workspaceId)).map(
                 ({
                   sourceKey: _,
                   workspaceName:
@@ -778,7 +778,7 @@ export class PlanningService {
                     item.dateKey
                       === dateKey,
                 )
-                .map(
+                .filter((item) => names.has(item.workspaceId)).map(
                   ({
                     sourceKey: _,
                     workspaceName:

@@ -72,6 +72,6 @@ export interface WorkspaceContentRepository {
   publishLease<T>(input: { jobId: string; leaseToken: string; now: number; publish: () => T }): T | null
   reconcile(now: number): { requeued: number; obsoleted: number }
   invalidateArchivedWorkspace?(workspaceId: string, now: number): number
-  retryProviderUnavailable(now: number): number
+  retryProviderUnavailable(now: number, workspaceId?: string): number
   evaluateReadiness(input: { workspaceId: string; expectedRevision: number; todayDateKey: string; now: number }): WorkspaceContentRevision
 }

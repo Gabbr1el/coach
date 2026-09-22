@@ -157,7 +157,7 @@ export interface AIConnectionPageProps {
     () => Promise<ConfigureProviderResult>
 
   onBeginGitHubCopilotOAuth:
-    () => Promise<BeginGitHubCopilotOAuthResult>
+    (accountId?: string) => Promise<BeginGitHubCopilotOAuthResult>
 
   onCompleteGitHubCopilotOAuth:
     (
@@ -2383,6 +2383,18 @@ function accountRuntimePresentation(
           'bg-[#392b1b] text-[#e8b96d]',
       }
 
+    case 'access-restricted':
+      return {
+        label:
+          'Acesso restrito',
+
+        detail:
+          'O plano, a organização, a política ou a região não permite usar esta IA.',
+
+        className:
+          'bg-[#392b1b] text-[#e8b96d]',
+      }
+
     case 'reauth-required':
       return {
         label:
@@ -2528,6 +2540,7 @@ function CurrentAISelection({
   onListModels,
   onUpdate,
   onRemove,
+  onCompleteGitHubCopilotOAuth,
   onConnect,
 }: Pick<
   AIConnectionPageProps,
@@ -2542,6 +2555,7 @@ function CurrentAISelection({
   | 'onListModels'
   | 'onUpdate'
   | 'onRemove'
+  | 'onCompleteGitHubCopilotOAuth'
 > & {
   onConnect(): void
 }) {
@@ -2565,6 +2579,40 @@ const [
     busyAccountId,
     setBusyAccountId,
   ] = useState<string | null>(null)
+
+  const reconnectAccount = async (
+    account: ProviderAccountSummary,
+  ) => {
+    setBusyAccountId(account.id)
+    setManagerError(null)
+
+    try {
+      const started =
+        await window.coach.provider
+          .beginGitHubCopilotOAuth(
+          account.id,
+        )
+
+      if (!started.ok) {
+        throw new Error(started.code)
+      }
+
+      const completed =
+        await onCompleteGitHubCopilotOAuth(
+          started.authorization.flowId,
+        )
+
+      if (!completed.ok) {
+        throw new Error(completed.code)
+      }
+    } catch {
+      setManagerError(
+        'Não foi possível reconectar esta conta do GitHub.',
+      )
+    } finally {
+      setBusyAccountId(null)
+    }
+  }
 
   const [
     openMenuAccountId,
@@ -3087,6 +3135,26 @@ const [
       {openMenuAccountId
         === account.id && (
         <div className="absolute right-0 top-10 z-40 w-44 rounded-xl border border-[#343743] bg-[#17191f] p-2 shadow-2xl">
+          {account.providerId === 'github-copilot'
+            && (
+              runtimeIssues[account.id]
+                === 'reauth-required'
+              || healthSnapshots[account.id]
+                ?.runtimeIssue
+                === 'reauth-required'
+            ) && (
+            <button
+              type="button"
+              onClick={() => {
+                setOpenMenuAccountId(null)
+                void reconnectAccount(account)
+              }}
+              className="flex w-full items-center rounded-lg px-3 py-2 text-left text-xs font-semibold text-[#8fd5b5] transition hover:bg-[#173126] hover:text-white"
+            >
+              ↻ Reconectar GitHub
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() =>
@@ -4585,6 +4653,9 @@ export function AIConnectionPage(
           onListModels={props.onListModels}
           onUpdate={props.onUpdate}
           onRemove={props.onRemove}
+          onCompleteGitHubCopilotOAuth={
+            props.onCompleteGitHubCopilotOAuth
+          }
           onConnect={() =>
             setActiveTab('connect')
           }

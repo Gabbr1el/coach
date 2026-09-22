@@ -21,6 +21,7 @@ class MemoryConfigurationRepository implements ProviderConfigurationRepository {
   set configuration(value: ProviderConfiguration | null) { this.configurations = value ? [value] : [] }
   async getActive() { return this.configurations.find((item) => item.isActive) ?? null }
   async findById(id: string) { return this.configurations.find((item) => item.id === id) ?? null }
+  async findByIdentity(providerId: ProviderConfiguration['providerId'], identityKey: string) { return this.configurations.find((item) => item.providerId === providerId && item.identityKey === identityKey) ?? null }
   async list() { return this.configurations }
   async createAndActivate(configuration: ProviderConfiguration) { this.configurations = [...this.configurations.map((item) => ({ ...item, isActive: false })), configuration] }
   async activate(id: string, updatedAt: number) { this.configurations = this.configurations.map((item) => ({ ...item, isActive: item.id === id, updatedAt })) }
@@ -76,6 +77,16 @@ class MemoryConfigurationRepository implements ProviderConfigurationRepository {
   }
 
   async remove(id: string) { const found = await this.findById(id); this.configurations = this.configurations.filter((item) => item.id !== id); return found }
+  async updateOAuthIdentity(id: string, identityKey: string, identityLabel: string | null, model: string, updatedAt: number) {
+    const found = await this.findById(id)
+    if (!found) return null
+    this.configurations = this.configurations.map((item) => item.id === id ? { ...item, identityKey, identityLabel, model, updatedAt } : item)
+    return this.findById(id)
+  }
+  async mergeOAuthIdentity(targetId: string, duplicateId: string, identityKey: string, identityLabel: string | null, model: string, updatedAt: number) {
+    this.configurations = this.configurations.filter((item) => item.id !== duplicateId)
+    return this.updateOAuthIdentity(targetId, identityKey, identityLabel, model, updatedAt)
+  }
 }
 
 function provider(testConnection: () => Promise<void> = async () => {}): AIProvider {
@@ -511,10 +522,150 @@ describe('ProviderConfigurationService', () => {
     await expect(service.removeAccount(accountId)).rejects.toThrow('vault failure')
     expect(manager.getActive()).toBeNull()
     expect(manager.list()).toEqual([])
+    expect(repository.configuration).toBeNull()
   })
 })
 
 describe('ProviderConfigurationService multi-account behavior', () => {
+  it('reauthenticates the same verified GitHub identity without changing account preferences', async () => {
+    const repository = new MemoryConfigurationRepository()
+    const accountId = '00000000-0000-4000-8000-000000000099'
+    repository.configuration = {
+      id: accountId,
+      providerId: 'github-copilot',
+      displayName: 'GitHub Copilot',
+      label: 'Copilot trabalho',
+      authKind: 'oauth',
+      identityLabel: '@old-login',
+      identityKey: 'github:42',
+      baseUrl: null,
+      model: 'preferred-model',
+      reasoningEffort: 'high',
+      secretReference: `provider-github-copilot-oauth-${accountId}`,
+      isEnabled: false,
+      isActive: false,
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    const vault = new MemoryVault()
+    vault.value = 'old-token'
+    const manager = new AIProviderManager()
+    const copilotFactory = (_credential: string, model: string): AIProvider => ({
+      ...provider(),
+      id: 'github-copilot',
+      name: 'GitHub Copilot',
+      listModels: async () => ['preferred-model', 'fallback-model'],
+      sendMessage: async () => ({ content: model, providerId: 'github-copilot', modelId: model }),
+    })
+    const service = new ProviderConfigurationService(repository, vault, manager, openAIProvider, compatibleProvider, () => 50, undefined, copilotFactory)
+
+    await service.configureGitHubCopilotOAuth('new-token', '@new-login', 'github:42', accountId)
+
+    expect(repository.configurations).toHaveLength(1)
+    expect(repository.configuration).toMatchObject({
+      id: accountId,
+      label: 'Copilot trabalho',
+      identityLabel: '@new-login',
+      identityKey: 'github:42',
+      model: 'preferred-model',
+      reasoningEffort: 'high',
+      isEnabled: false,
+      isActive: false,
+    })
+    expect(vault.value).toBe('new-token')
+    expect(manager.list()).toEqual([])
+  })
+
+  it('rejects targeted GitHub reauthentication with a different verified identity', async () => {
+    const repository = new MemoryConfigurationRepository()
+    const accountId = '00000000-0000-4000-8000-000000000098'
+    repository.configuration = {
+      id: accountId,
+      providerId: 'github-copilot',
+      displayName: 'GitHub Copilot',
+      label: 'Original',
+      authKind: 'oauth',
+      identityLabel: '@original',
+      identityKey: 'github:7',
+      baseUrl: null,
+      model: 'model-a',
+      reasoningEffort: 'auto',
+      secretReference: `provider-github-copilot-oauth-${accountId}`,
+      isEnabled: true,
+      isActive: true,
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    const vault = new MemoryVault()
+    vault.value = 'old-token'
+    const copilotFactory = (): AIProvider => ({ ...provider(), id: 'github-copilot', name: 'GitHub Copilot', listModels: async () => ['model-a'] })
+    const service = new ProviderConfigurationService(repository, vault, new AIProviderManager(), openAIProvider, compatibleProvider, Date.now, undefined, copilotFactory)
+
+    await expect(service.configureGitHubCopilotOAuth('other-token', '@other', 'github:8', accountId)).rejects.toMatchObject({ code: 'INVALID_CREDENTIAL' })
+    expect(repository.configuration?.identityKey).toBe('github:7')
+    expect(vault.value).toBe('old-token')
+  })
+
+  it('merges a historical GitHub duplicate only after OAuth verifies the shared identity', async () => {
+    const repository = new MemoryConfigurationRepository()
+    const targetId = '00000000-0000-4000-8000-000000000097'
+    const duplicateId = '00000000-0000-4000-8000-000000000096'
+    repository.configurations = [
+      {
+        id: targetId,
+        providerId: 'github-copilot',
+        displayName: 'GitHub Copilot',
+        label: 'Nome preservado',
+        authKind: 'oauth',
+        identityLabel: '@legacy-name',
+        identityKey: null,
+        baseUrl: null,
+        model: 'model-a',
+        reasoningEffort: 'medium',
+        secretReference: `provider-github-copilot-oauth-${targetId}`,
+        isEnabled: true,
+        isActive: true,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      {
+        id: duplicateId,
+        providerId: 'github-copilot',
+        displayName: 'GitHub Copilot',
+        label: 'Duplicada',
+        authKind: 'oauth',
+        identityLabel: '@verified',
+        identityKey: 'github:77',
+        baseUrl: null,
+        model: 'model-b',
+        reasoningEffort: 'auto',
+        secretReference: `provider-github-copilot-oauth-${duplicateId}`,
+        isEnabled: true,
+        isActive: false,
+        createdAt: 2,
+        updatedAt: 2,
+      },
+    ]
+    const vault = new MemoryVault()
+    vault.value = 'old-token'
+    const copilotFactory = (): AIProvider => ({ ...provider(), id: 'github-copilot', name: 'GitHub Copilot', listModels: async () => ['model-a', 'model-b'] })
+    const service = new ProviderConfigurationService(repository, vault, new AIProviderManager(), openAIProvider, compatibleProvider, Date.now, undefined, copilotFactory)
+
+    await service.configureGitHubCopilotOAuth('renewed-token', '@verified', 'github:77', targetId)
+
+    expect(repository.configurations).toEqual([
+      expect.objectContaining({
+        id: targetId,
+        label: 'Nome preservado',
+        identityKey: 'github:77',
+        model: 'model-a',
+        reasoningEffort: 'medium',
+        isEnabled: true,
+        isActive: true,
+      }),
+    ])
+  })
+
   it('keeps multiple session accounts registered when a new account is connected', async () => {
     const repository =
       new MemoryConfigurationRepository()

@@ -336,6 +336,18 @@ describe('SqliteWorkspaceContentRepository', () => {
     reopened.close()
   })
 
+  it('requeues historical provider-dependent failures without changing ready output', () => {
+    const db = database(); const workspaceId = workspace(db); const repository = new SqliteWorkspaceContentRepository(db); const now = 10; const inputHash = hash('a'); const revision = repository.createRevision({ workspaceId, inputHash, now }).revision
+    const ready = repository.enqueue({ workspaceId, revision, kind: 'roadmap_generate', unitKey: 'roadmap', priority: 900, inputHash, generatorContractVersion: CONTENT_GENERATOR_VERSIONS.roadmap_generate }, now)
+    const failed = repository.enqueue({ workspaceId, revision, kind: 'lesson_generate', unitKey: 'module:topic', priority: 900, inputHash, generatorContractVersion: CONTENT_GENERATOR_VERSIONS.lesson_generate }, now)
+    db.sqlite.prepare("UPDATE content_jobs SET status='ready' WHERE id=?").run(ready.id)
+    db.sqlite.prepare("UPDATE content_jobs SET status='failed',attempt_count=max_attempts,last_error_code='INVALID_CREDENTIAL',completed_at=20 WHERE id=?").run(failed.id)
+    expect(repository.retryProviderUnavailable(30, workspaceId)).toBe(1)
+    expect(repository.getJob(ready.id)?.status).toBe('ready')
+    expect(repository.getJob(failed.id)).toMatchObject({ status: 'queued', attemptCount: 0, lastErrorCode: null })
+    db.close()
+  })
+
   it('persists, fetches, applies, and reloads a strict roadmap preview without module primary-key collisions', () => {
     const db = database(); const id = workspace(db); const repository = new DrizzleRoadmapRepository(db); const now = Date.now(); const moduleId = crypto.randomUUID()
     const roadmap = roadmapSchema.parse({ id: crypto.randomUUID(), workspaceId: id, title: 'Original', status: 'accepted', generationKind: 'ai_generated', version: 1, providerId: 'controlled', modelId: 'delayed', modules: [{ id: moduleId, title: 'Modulo', objective: 'Aprender', estimatedMinutes: 60, position: 1, status: 'active', topics: ['Primeiro', 'Segundo'], outcomes: ['Aplicar'], practice: 'Praticar', completionCriteria: ['Concluir'], resources: [] }], createdAt: now, updatedAt: now })

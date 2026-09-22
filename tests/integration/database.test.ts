@@ -565,9 +565,9 @@ describe('Coach database migrations', () => {
       createdAt: 10,
       updatedAt: 10,
     })
-    expect((await repository.listActive()).map((item) => item.id)).toEqual([created.id])
-    expect((await repository.markOpened(created.id, 20))?.lastOpenedAt).toBe(20)
-    expect(await repository.archive(created.id, 30)).toBe(true)
+    expect((await repository.listActive()).map((item) => item.id)).toEqual([])
+    expect(await repository.markOpened(created.id, 20)).toBeNull()
+    expect(await repository.archive(created.id, 30)).toBe(false)
     expect(await repository.listActive()).toEqual([])
     database.close()
   })

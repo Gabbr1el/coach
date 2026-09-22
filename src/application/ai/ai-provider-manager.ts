@@ -17,8 +17,9 @@ export class AIProviderManager {
 
   select(providerId: string): void {
     if (!this.providers.has(providerId)) throw new Error(`AI provider '${providerId}' is not registered`)
+    const changed = this.activeProviderId !== providerId
     this.activeProviderId = providerId
-    for (const listener of this.availabilityListeners) listener()
+    if (changed) this.notifyAvailable()
   }
 
   getActive(): AIProvider | null {
@@ -39,6 +40,11 @@ export class AIProviderManager {
     return this.activeProviderId
   }
   onAvailable(listener: () => void): () => void { this.availabilityListeners.add(listener); return () => this.availabilityListeners.delete(listener) }
+  notifyAvailable(): void {
+    for (const listener of this.availabilityListeners) {
+      try { listener() } catch (error) { console.error('AI provider availability listener failed:', error) }
+    }
+  }
 
   clearSelection(): void {
     this.activeProviderId = null

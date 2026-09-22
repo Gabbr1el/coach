@@ -176,8 +176,9 @@ export class SqliteWorkspaceContentRepository implements WorkspaceContentReposit
     })
   }
 
-  retryProviderUnavailable(now: number): number {
-    return this.database.sqlite.prepare("UPDATE content_jobs SET available_at=?,updated_at=?,last_error_code=NULL,last_error_message=NULL WHERE status='queued' AND last_error_code='PROVIDER_UNAVAILABLE'").run(now, now).changes
+  retryProviderUnavailable(now: number, workspaceId?: string): number {
+    const workspaceFilter = workspaceId ? ' AND workspace_id=?' : ''
+    return this.database.sqlite.prepare(`UPDATE content_jobs SET status='queued',attempt_count=0,available_at=?,completed_at=NULL,updated_at=?,last_error_code=NULL,last_error_message=NULL WHERE status IN ('queued','failed') AND last_error_code NOT IN ('UNSUPPORTED_JOB_KIND','CURRENT_CONTENT_INVALID','PUBLISHED_CONTENT_MISSING')${workspaceFilter}`).run(now, now, ...(workspaceId ? [workspaceId] : [])).changes
   }
 
   evaluateReadiness(input: { workspaceId: string; expectedRevision: number; todayDateKey: string; now: number }): WorkspaceContentRevision {

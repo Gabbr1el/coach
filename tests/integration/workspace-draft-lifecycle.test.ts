@@ -8,6 +8,7 @@ import { SqliteWorkspaceProvisioningRepository } from '../../src/main/repositori
 import { WorkspaceProvisioningService } from '../../src/application/workspaces/workspace-provisioning-service'
 import { WorkspaceService } from '../../src/application/workspaces/workspace-service'
 import { PdfMaterialService } from '../../src/main/materials/pdf-material-service'
+import { SqliteAcademicSubjectContextRepository } from '../../src/main/repositories/sqlite-academic-subject-context-repository'
 
 const directories: string[] = []
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }) })
@@ -67,7 +68,7 @@ describe('workspace draft lifecycle with migrated SQLite', () => {
     expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM material_chunks').get()).toEqual({ count: 0 })
     const confirmed = await service.create(input('Química'))
     service.discardDraft(confirmed.id)
-    expect(await service.open(confirmed.id)).not.toBeNull()
+    expect(await service.open(confirmed.id)).toBeNull()
     database.close()
   })
 
@@ -136,7 +137,7 @@ describe('workspace draft lifecycle with migrated SQLite', () => {
     const first = await service.create(input('Geografia'))
     const second = await service.create(input('Biologia'))
     expect(second.id).not.toBe(first.id)
-    expect(await service.list()).toHaveLength(2)
+    expect(await service.list()).toHaveLength(0)
     database.close()
   })
 
@@ -145,7 +146,45 @@ describe('workspace draft lifecycle with migrated SQLite', () => {
     const existing = await service.create(input('Português'))
     const draft = await service.prepareDraft(input('Inglês'))
     service.discardDraft(draft.id)
-    expect(await service.open(existing.id)).toMatchObject({ id: existing.id, name: 'Português' })
+    expect(await service.open(existing.id)).toBeNull()
+    database.close()
+  })
+
+  it('refuses to discard a draft after durable planning or generated learning exists', async () => {
+    const { database, service } = setup()
+    const draft = await service.prepareDraft(input('Redes'))
+    database.sqlite.prepare("INSERT INTO study_deadlines (id,workspace_id,title,due_at,estimated_minutes,completed,created_at) VALUES ('deadline',?,'Prova',1000,60,0,1)").run(draft.id)
+    service.discardDraft(draft.id)
+    expect(database.sqlite.prepare('SELECT id FROM workspaces WHERE id=?').get(draft.id)).toEqual({ id: draft.id })
+    database.sqlite.prepare("DELETE FROM study_deadlines WHERE workspace_id=?").run(draft.id)
+    database.sqlite.prepare("INSERT INTO study_lessons (id,workspace_id,roadmap_id,module_id,topic_id,generation_kind,content_json,provider_id,model_id,created_at,updated_at) VALUES ('lesson',?,'roadmap','module','topic','ai_generated','{}',NULL,NULL,1,1)").run(draft.id)
+    service.discardDraft(draft.id)
+    expect(database.sqlite.prepare('SELECT id FROM workspaces WHERE id=?').get(draft.id)).toEqual({ id: draft.id })
+    database.close()
+  })
+
+  it('archives only a usable workspace, consolidates evidence-backed subject memory, and clears active plan items', async () => {
+    const { database, repository } = setup()
+    const now = 50_000
+    database.sqlite.prepare("INSERT INTO workspaces (id,name,objective,status,created_at,updated_at) VALUES ('archive-me','C','Ponteiros','active',1,1)").run()
+    database.sqlite.prepare("INSERT INTO workspace_learning_overrides (workspace_id,subject,declared_level,declared_knowledge_json,declared_difficulties_json,goals_json,created_at,updated_at) VALUES ('archive-me','C','intermediate','[\"Sintaxe\"]','[\"Ponteiros\"]','[\"Prova\"]',1,1)").run()
+    database.sqlite.prepare("INSERT INTO topic_learning_states (workspace_id,topic_id,evidence_count,assessments,correct_first_try,correct_after_help,incorrect,hints_used,reinforcement_events,exercises_completed,lessons_completed,difficulty_level,mastery_estimate,confidence,needs_review,reasons_json,updated_at) VALUES ('archive-me','mod:Ponteiros',2,2,1,0,1,0,0,0,0,'medium',55,'medium',1,'[]',2)").run()
+    database.sqlite.prepare("INSERT INTO checkpoint_reasoning_evidence (answer_id,workspace_id,topic_id,lesson_id,checkpoint_id,alternative_correct,reasoning_status,misconception,retry_count,created_at,updated_at) VALUES ('answer','archive-me','mod:Ponteiros','lesson','checkpoint',0,'misconception','Confunde endereço e valor',0,2,2)").run()
+    database.sqlite.prepare("INSERT INTO study_sessions (id,workspace_id,status,started_at,focus_seconds) VALUES ('session','archive-me','active',1,0)").run()
+    database.sqlite.prepare("INSERT INTO study_plan_items (id,workspace_id,session_id,title,duration_minutes,position,status,topic_id,activity_type,created_at,updated_at) VALUES ('pending','archive-me','session','Revisar',20,1,'pending','mod:Ponteiros','review',1,1)").run()
+
+    expect(await repository.archive('archive-me', now)).toBe(true)
+    expect(database.sqlite.prepare("SELECT status,archived_at AS archivedAt FROM workspaces WHERE id='archive-me'").get()).toEqual({ status: 'archived', archivedAt: now })
+    expect(database.sqlite.prepare("SELECT COUNT(*) AS count FROM study_plan_items WHERE workspace_id='archive-me' AND status<>'completed'").get()).toEqual({ count: 0 })
+    const memory = database.sqlite.prepare("SELECT declared_knowledge_json AS knowledge,observed_difficulties_json AS difficulties,misconceptions_json AS misconceptions,last_consolidated_at AS consolidatedAt FROM academic_subject_contexts WHERE subject='C'").get() as Record<string, string | number>
+    expect(JSON.parse(memory.knowledge as string)).toEqual(['Sintaxe'])
+    expect(JSON.parse(memory.difficulties as string)).toEqual(['mod:Ponteiros'])
+    expect(JSON.parse(memory.misconceptions as string)).toEqual(['Confunde endereço e valor'])
+    expect(memory.consolidatedAt).toBe(now)
+    const inherited = new SqliteAcademicSubjectContextRepository(database).find('C')!
+    expect(inherited.observedDifficulties).toEqual(['mod:Ponteiros'])
+    expect(inherited.misconceptions).toEqual(['Confunde endereço e valor'])
+    expect(await repository.findById('archive-me')).toBeNull()
     database.close()
   })
 

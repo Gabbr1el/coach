@@ -25,6 +25,8 @@ class MemoryWorkspaceRepository implements WorkspaceRepository {
     return this.workspaces.get(id) ?? null
   }
 
+  async findAnyById(id: string): Promise<Workspace | null> { return this.workspaces.get(id) ?? null }
+
   async markOpened(id: string, openedAt: number): Promise<Workspace | null> {
     const workspace = this.workspaces.get(id)
     if (!workspace || workspace.status !== 'active') return null

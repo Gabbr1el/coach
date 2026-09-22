@@ -43,6 +43,7 @@ import {
 
 import {
   configureCompatibleInputSchema,
+  beginGitHubCopilotOAuthInputSchema,
   configureOpenAIInputSchema,
   githubCopilotOAuthFlowIdSchema,
   providerAccountIdSchema,
@@ -57,6 +58,28 @@ import {
 function providerErrorCode(
   error: unknown,
 ) {
+  if (
+    error instanceof Error
+    && 'code' in error
+    && typeof error.code === 'string'
+    && [
+      'INVALID_CREDENTIAL',
+      'INSUFFICIENT_QUOTA',
+      'MODEL_UNAVAILABLE',
+      'ACCESS_RESTRICTED',
+      'RATE_LIMITED',
+      'NETWORK_UNAVAILABLE',
+    ].includes(error.code)
+  ) {
+    return error.code as
+      | 'INVALID_CREDENTIAL'
+      | 'INSUFFICIENT_QUOTA'
+      | 'MODEL_UNAVAILABLE'
+      | 'ACCESS_RESTRICTED'
+      | 'RATE_LIMITED'
+      | 'NETWORK_UNAVAILABLE'
+  }
+
   if (
     error instanceof Error
     && error.name === 'ZodError'
@@ -458,7 +481,7 @@ export function registerProviderHandlers(
 
   ipcMain.handle(
     PROVIDER_CHANNELS.beginGitHubCopilotOAuth,
-    async (event) => {
+    async (event, payload: unknown = {}) => {
       try {
         assertTrustedSender(event)
 
@@ -476,9 +499,14 @@ export function registerProviderHandlers(
           } as const
         }
 
+        const { accountId } =
+          beginGitHubCopilotOAuthInputSchema
+            .parse(payload)
+
         const authorization =
           await githubCopilotOAuth.begin(
             clientId,
+            accountId ?? null,
           )
 
         await shell.openExternal(
@@ -531,7 +559,9 @@ export function registerProviderHandlers(
             await service
               .configureGitHubCopilotOAuth(
                 authorization.credential,
-                authorization.identityLabel,
+                authorization.identity.label,
+                authorization.identity.key,
+                authorization.targetAccountId,
               ),
         } as const
       } catch (error) {

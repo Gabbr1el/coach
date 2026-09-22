@@ -33,8 +33,9 @@ describe('ContentGenerationWorker', () => {
     expect(handled).toBe(true)
     await worker.stop()
   })
-  it('classifies contract failures as terminal and provider/timeouts as retryable', () => {
-    expect(classifyContentGenerationFailure(Object.assign(new Error('bad schema'), { code: 'LESSON_SCHEMA_INVALID' })).retryable).toBe(false)
+  it('keeps invalid AI responses recoverable and reserves terminal classification for invariants', () => {
+    expect(classifyContentGenerationFailure(Object.assign(new Error('bad schema'), { code: 'LESSON_SCHEMA_INVALID' })).retryable).toBe(true)
+    expect(classifyContentGenerationFailure(Object.assign(new Error('missing publication'), { code: 'PUBLISHED_CONTENT_MISSING' })).retryable).toBe(false)
     expect(classifyContentGenerationFailure(new Error('network offline'))).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: true, providerUnavailable: true })
     expect(classifyContentGenerationFailure(new Error('generation timed out'))).toMatchObject({ code: 'GENERATION_TIMEOUT', retryable: true })
   })

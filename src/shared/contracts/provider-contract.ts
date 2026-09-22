@@ -116,6 +116,13 @@ export const providerAccountIdSchema =
 
 export const githubCopilotOAuthFlowIdSchema =
   z.uuid()
+
+export const beginGitHubCopilotOAuthInputSchema =
+  z.object({
+    accountId:
+      providerAccountIdSchema.optional(),
+  })
+    .strict()
 export const setProviderAccountEnabledInputSchema =
   z.object({
     accountId:
@@ -197,6 +204,7 @@ export type ProviderRuntimeIssue =
   | 'usage-limit'
   | 'temporarily-unavailable'
   | 'model-unavailable'
+  | 'access-restricted'
   | 'reauth-required'
 
 
@@ -349,7 +357,9 @@ export interface ProviderApi {
   connectGeminiOAuth():
     Promise<ConfigureProviderResult>
 
-  beginGitHubCopilotOAuth():
+  beginGitHubCopilotOAuth(
+    accountId?: string,
+  ):
     Promise<BeginGitHubCopilotOAuthResult>
 
   completeGitHubCopilotOAuth(

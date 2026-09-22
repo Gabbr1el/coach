@@ -61,6 +61,25 @@ implements ProviderConfigurationRepository {
     )
   }
 
+  async findByIdentity(
+    providerId: ProviderConfiguration['providerId'],
+    identityKey: string,
+  ): Promise<ProviderConfiguration | null> {
+    return (
+      this.database.orm
+        .select()
+        .from(providerConfigurations)
+        .where(
+          and(
+            eq(providerConfigurations.providerId, providerId),
+            eq(providerConfigurations.identityKey, identityKey),
+          ),
+        )
+        .get()
+      ?? null
+    )
+  }
+
   async list():
     Promise<ProviderConfiguration[]> {
     return this.database.orm
@@ -277,5 +296,63 @@ implements ProviderConfigurationRepository {
         .get()
       ?? null
     )
+  }
+
+
+  async updateOAuthIdentity(
+    id: string,
+    identityKey: string,
+    identityLabel: string | null,
+    model: string,
+    updatedAt: number,
+  ): Promise<ProviderConfiguration | null> {
+    return (
+      this.database.orm
+        .update(providerConfigurations)
+        .set({
+          identityKey,
+          identityLabel,
+          model,
+          updatedAt,
+        })
+        .where(eq(providerConfigurations.id, id))
+        .returning()
+        .get()
+      ?? null
+    )
+  }
+
+
+  async mergeOAuthIdentity(
+    targetId: string,
+    duplicateId: string,
+    identityKey: string,
+    identityLabel: string | null,
+    model: string,
+    updatedAt: number,
+  ): Promise<ProviderConfiguration | null> {
+    return this.database.sqlite.transaction(
+      () => {
+        this.database.orm
+          .delete(providerConfigurations)
+          .where(eq(providerConfigurations.id, duplicateId))
+          .run()
+
+        return (
+          this.database.orm
+            .update(providerConfigurations)
+            .set({
+              identityKey,
+              identityLabel,
+              model,
+              updatedAt,
+            })
+            .where(eq(providerConfigurations.id, targetId))
+            .returning()
+            .get()
+          ?? null
+        )
+      },
+    )()
   }
 }

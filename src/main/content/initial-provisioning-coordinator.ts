@@ -163,9 +163,10 @@ export class InitialProvisioningCoordinator {
     if (!revision) return
     const failed = this.database.sqlite.prepare("SELECT status,last_error_code AS code,available_at AS retryAfter FROM content_jobs WHERE workspace_id=? AND revision=? AND status IN ('failed','queued') AND last_error_code IS NOT NULL ORDER BY CASE status WHEN 'failed' THEN 0 ELSE 1 END,priority DESC LIMIT 1").get(workspaceId, revision.revision) as { status: string; code: string; retryAfter: number } | undefined
     if (!failed) return
-    const terminal = failed.status === 'failed'
-    const message = terminal ? 'A preparação falhou definitivamente. O conteúdo já pronto permanece disponível.' : failed.code === 'PROVIDER_UNAVAILABLE' ? 'Aguardando o provedor de IA ficar disponível.' : 'Falha temporária. O Coach tentará novamente automaticamente.'
-    this.database.sqlite.prepare("UPDATE workspace_provisioning SET status='failed_retryable',stage_updated_at=?,retry_after=?,error_code=?,error_message=? WHERE workspace_id=? AND status<>'draft'").run(this.now(), terminal ? null : failed.retryAfter, terminal ? `TERMINAL_${failed.code}` : failed.code, message, workspaceId)
+    const invariant = ['UNSUPPORTED_JOB_KIND', 'CURRENT_CONTENT_INVALID', 'PUBLISHED_CONTENT_MISSING'].includes(failed.code)
+    const exhausted = failed.status === 'failed' && !invariant
+    const message = invariant ? `Invariante de conteúdo violada (${failed.code}). O conteúdo já pronto permanece disponível.` : exhausted ? `As tentativas automáticas se esgotaram (${failed.code}). Reconfigure o provedor ou tente novamente; o conteúdo pronto foi preservado.` : failed.code === 'PROVIDER_UNAVAILABLE' ? 'Aguardando o provedor de IA ficar disponível.' : 'Falha temporária. O Coach tentará novamente automaticamente.'
+    this.database.sqlite.prepare("UPDATE workspace_provisioning SET status='failed_retryable',stage_updated_at=?,retry_after=?,error_code=?,error_message=? WHERE workspace_id=? AND status<>'draft'").run(this.now(), invariant || exhausted ? null : failed.retryAfter, invariant ? `INVARIANT_${failed.code}` : failed.code, message, workspaceId)
   }
   private ensureProjection(workspaceId: string, now: number): void {
     this.database.sqlite.prepare("INSERT OR IGNORE INTO workspace_provisioning (workspace_id,status,stage,material_ids_json,attempt_count,created_at,started_at,stage_updated_at) VALUES (?,'queued','workspace','[]',0,?,?,?)").run(workspaceId, now, now, now)

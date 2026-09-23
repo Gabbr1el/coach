@@ -23,7 +23,8 @@ function setup(options: { workspaces?: Array<{ id: string; name: string }>; list
   const stage = (input: any) => ({ action: { id: crypto.randomUUID(), status: 'proposed', result: null, createdAt: 1, resolvedAt: null, ...input }, idempotencyKey: input.idempotencyScope ?? crypto.randomUUID() })
   const actions: any = { listPending: () => options.pending ?? [], stageProposal: stage, propose: (input: any) => { const staged = stage(input); if (input.idempotencyScope && proposedByScope.has(input.idempotencyScope)) return proposedByScope.get(input.idempotencyScope); proposed.push(staged.action); if (input.idempotencyScope) proposedByScope.set(input.idempotencyScope, staged.action); return staged.action } }
   const states: any = { load: () => state, save: (_threadId: string, next: any) => { stateWrites += 1; state = next; return next }, clear: () => { state = emptyOrganizerConversationState() } }
-  const unitOfWork: any = { commit: async (input: any, signal?: AbortSignal) => { options.beforeCommit?.(); signal?.throwIfAborted(); for (const boundary of ['ensureHomeThread', 'state', 'action', 'turn'] as const) if (options.failCommitAt === boundary) throw new Error(`injected ${boundary}`); if (input.state) { stateWrites += 1; state = input.state } const committed = input.actions.map(({ action, idempotencyKey }: any) => { const existing = proposedByScope.get(idempotencyKey); if (existing) return existing; proposed.push(action); proposedByScope.set(idempotencyKey, action); return action }); turns.push({ content: input.turn.user.content, message: input.turn.assistant.content, id: input.turn.assistant.id }); return { messages: [input.turn.user, input.turn.assistant], actions: committed } } }
+  const committedRequests = new Map<string, any>()
+  const unitOfWork: any = { find: async (requestId: string, _threadId: string, content: string) => { const committed = committedRequests.get(requestId); if (committed && committed.content !== content) throw new Error('Organizer requestId was reused with different input'); return committed?.value ?? null }, commit: async (input: any, signal?: AbortSignal) => { const replay = committedRequests.get(input.requestId); if (replay) return replay.value; options.beforeCommit?.(); signal?.throwIfAborted(); for (const boundary of ['ensureHomeThread', 'state', 'action', 'turn'] as const) if (options.failCommitAt === boundary) throw new Error(`injected ${boundary}`); if (input.state) { stateWrites += 1; state = input.state } const committed = input.actions.map(({ action, idempotencyKey }: any) => { const existing = proposedByScope.get(idempotencyKey); if (existing) return existing; proposed.push(action); proposedByScope.set(idempotencyKey, action); return action }); turns.push({ content: input.turn.user.content, message: input.turn.assistant.content, id: input.turn.assistant.id }); const result = input.actions.length ? { ...input.result, actions: committed } : input.result; const value = { messages: [input.turn.user, input.turn.assistant], actions: committed, result }; committedRequests.set(input.requestId, { content: input.turn.user.content, value }); return value } }
   const currentTime = options.currentTime ?? Date.UTC(2026, 8, 7, 12); const service = new HomeOrganizerService(conversation, planning, actions, options.listWorkspaces ?? (async () => options.workspaces ?? []), () => currentTime, () => (options.academicLife ?? []).map((item) => ({ shareWithAi: true, ...item })), options.interpreter, () => ({ currentTime, currentDate: options.currentDate ?? '2026-09-07', timezone: options.timezone ?? 'UTC' }), states, unitOfWork)
   return { service, proposed, turns, authority: () => authority, planningWrites: () => planningWrites, contextWrites: () => contextWrites, stateWrites: () => stateWrites, state: () => state }
 }
@@ -69,6 +70,7 @@ describe('HomeOrganizerService', () => {
     let resolveWorkspaces!: (workspaces: Array<{ id: string; name: string }>) => void
     const ctx = setup({ listWorkspaces: () => new Promise((resolve) => { resolveWorkspaces = resolve }) })
     const pending = ctx.service.organize({ content: 'me explica ponteiros' }, controller.signal)
+    await vi.waitFor(() => expect(resolveWorkspaces).toBeTypeOf('function'))
     controller.abort()
     resolveWorkspaces([])
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
@@ -81,6 +83,7 @@ describe('HomeOrganizerService', () => {
     const state = { ...emptyOrganizerConversationState(), pendingWorkspacePreparation: { subject: 'POO', originalMessageId: 'origin', originalCreatedAt: 1 }, updatedAt: 1 }
     const ctx = setup({ state, listWorkspaces: () => new Promise((resolve) => { resolveWorkspaces = resolve }) })
     const pending = ctx.service.organize({ content: 'quero criar' }, controller.signal)
+    await vi.waitFor(() => expect(resolveWorkspaces).toBeTypeOf('function'))
     controller.abort()
     resolveWorkspaces([])
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' })

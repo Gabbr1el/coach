@@ -38,6 +38,7 @@ import { ReviewWorkspace } from './ReviewWorkspace'
 import { MATERIAL_FALLBACK, publicCreationError, WorkspaceCreationOperations } from './workspace-creation-operations'
 import { appendOptimisticMessage, isNearChatBottom, optimisticMessage, reconcileConversationMessages, scrollChatToLatest, WorkspaceChatController } from './chat-experience'
 import { useDialogFocus } from './dialog-focus'
+import { plannerRequestIdentity } from './planner-request-retry'
 
 export function isEditableTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && (target.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"])') || Boolean(target.closest('[contenteditable]:not([contenteditable="false"])')))
@@ -507,6 +508,7 @@ export function App() {
   const [plannerSending, setPlannerSending] = useState(false)
   const [streamedContent, setStreamedContent] = useState('')
   const streamHandle = useRef<{ cancel(): void; dispose(): void } | null>(null)
+  const plannerRetry = useRef<{ content: string; requestId: string } | null>(null)
   const homeRequestEpoch = useRef(0)
   const [plannerLoading, setPlannerLoading] = useState(true)
   const [plannerError, setPlannerError] = useState<string | null>(null)
@@ -1804,7 +1806,9 @@ export function App() {
       setAIProblem(problem)
       return
     }
-    const requestId = crypto.randomUUID()
+    const retryIdentity = plannerRequestIdentity(plannerRetry.current, content, () => crypto.randomUUID())
+    const requestId = retryIdentity.requestId
+    plannerRetry.current = retryIdentity
     const epoch = ++homeRequestEpoch.current
     setPlannerSending(true); setPlannerInput(''); setPlannerError(null); setStreamedContent('')
     setMessages((current) => appendOptimisticMessage(current, optimisticMessage(content, (current.at(-1)?.sequence ?? 0) + 1, requestId)))
@@ -1813,6 +1817,7 @@ export function App() {
       if (homeRequestEpoch.current !== epoch) return
       if (event.type === 'text-delta') setStreamedContent((current) => current + event.content)
       if (event.type === 'completed') {
+        if (plannerRetry.current?.requestId === requestId) plannerRetry.current = null
         markActiveProviderRuntime('available')
         recordActiveProviderActivity(
           'success',

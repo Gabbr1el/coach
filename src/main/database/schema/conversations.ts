@@ -38,3 +38,16 @@ export const organizerConversationStates = sqliteTable('organizer_conversation_s
   stateJson: text('state_json').notNull(),
   updatedAt: integer('updated_at').notNull(),
 })
+
+export const organizerRequests = sqliteTable('organizer_requests', {
+  requestId: text('request_id').primaryKey(),
+  threadId: text('thread_id').notNull().references(() => conversationThreads.id, { onDelete: 'cascade' }),
+  content: text('content').notNull(),
+  userMessageId: text('user_message_id').notNull().references(() => conversationMessages.id, { onDelete: 'cascade' }),
+  assistantMessageId: text('assistant_message_id').notNull().references(() => conversationMessages.id, { onDelete: 'cascade' }),
+  resultJson: text('result_json').notNull(),
+  createdAt: integer('created_at').notNull(),
+}, (table) => [
+  uniqueIndex('organizer_requests_user_message_idx').on(table.userMessageId),
+  uniqueIndex('organizer_requests_assistant_message_idx').on(table.assistantMessageId),
+])

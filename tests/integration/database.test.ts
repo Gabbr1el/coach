@@ -422,6 +422,7 @@ describe('Coach database migrations', () => {
       { name: 'material_chunks' },
       { name: 'materials' },
       { name: 'organizer_conversation_states' },
+      { name: 'organizer_requests' },
       { name: 'performance_timeline_events' },
       { name: 'plan_item_completion_history' },
       { name: 'planner_actions' },
@@ -794,9 +795,11 @@ describe('Coach database migrations', () => {
     const actionId = crypto.randomUUID()
     const unit = new SqliteOrganizerUnitOfWork(database, (current: OrganizerCommitBoundary) => { if (current === boundary) throw new Error(`injected ${boundary}`) })
     const input = {
+      requestId: crypto.randomUUID(),
       turn: { threadId, now: 10, user: { id: crypto.randomUUID(), threadId, role: 'user' as const, content: 'Tenho prova', createdAt: 10, providerId: null, modelId: null }, assistant: { id: crypto.randomUUID(), threadId, role: 'assistant' as const, content: 'Posso salvar', createdAt: 11, providerId: 'coach-local', modelId: 'home-organizer-v1' } },
       state: { focusedAcademicEventId: null, focusedWorkspaceId: null, focusedSubject: 'POO', pending: null, pendingWorkspacePreparation: null, recentResolvedAcademicEventIds: [], recentResolvedWorkspaceIds: [], updatedAt: 10 },
       actions: [{ action: { id: actionId, originMessageId: crypto.randomUUID(), label: 'Salvar prova', contextVersion: 10, type: 'academic-life.save' as const, status: 'proposed' as const, payload: { kind: 'event', title: 'Prova POO', details: '{}', workspaceId: null, startsAt: null, endsAt: 20, expiresAt: 20, timezone: 'UTC', weekday: null, minutes: null, shareWithAi: false, provenance: { source: 'conversation', reference: null } }, result: null, createdAt: 10, resolvedAt: null }, idempotencyKey: 'atomic-organizer' }],
+      result: { outcome: 'needs_decision' as const, operations: [], actions: [], affectedWorkspaceIds: [], message: 'Posso salvar' },
     }
 
     await expect(unit.commit(input)).rejects.toThrow(`injected ${boundary}`)
@@ -804,6 +807,51 @@ describe('Coach database migrations', () => {
     expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM conversation_messages').get()).toEqual({ count: 0 })
     expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM organizer_conversation_states').get()).toEqual({ count: 0 })
     expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM planner_actions').get()).toEqual({ count: 0 })
+    database.close()
+  })
+
+  it('replays an Organizer request after a lost post-commit response and process restart', async () => {
+    const databasePath = createDatabasePath()
+    const requestId = crypto.randomUUID()
+    const threadId = '00000000-0000-4000-8000-000000000000'
+    const actionId = crypto.randomUUID()
+    const input = {
+      requestId,
+      turn: { threadId, now: 10, user: { id: crypto.randomUUID(), threadId, role: 'user' as const, content: 'Hoje tenho 4 horas para estudar', createdAt: 10, providerId: null, modelId: null }, assistant: { id: crypto.randomUUID(), threadId, role: 'assistant' as const, content: 'Posso usar 240 min.', createdAt: 11, providerId: 'coach-local', modelId: 'home-organizer-v1' } },
+      state: { focusedAcademicEventId: null, focusedWorkspaceId: null, focusedSubject: null, pending: null, pendingWorkspacePreparation: null, recentResolvedAcademicEventIds: [], recentResolvedWorkspaceIds: [], updatedAt: 10 },
+      actions: [{ action: { id: actionId, originMessageId: crypto.randomUUID(), label: 'Usar 240 min disponíveis hoje', contextVersion: 10, type: 'plan.today-budget.set' as const, status: 'proposed' as const, payload: { dateKey: '2026-09-22', timezone: 'America/Bahia', minutes: 240 }, result: null, createdAt: 10, resolvedAt: null }, idempotencyKey: `organizer:${requestId}` }],
+      result: { outcome: 'needs_decision' as const, operations: [], actions: [], affectedWorkspaceIds: [], message: 'Posso usar 240 min.' },
+    }
+    let database = openCoachDatabase({ databasePath, migrationsFolder })
+    const committed = await new SqliteOrganizerUnitOfWork(database).commit(input)
+    database.close()
+
+    database = openCoachDatabase({ databasePath, migrationsFolder })
+    const restarted = new SqliteOrganizerUnitOfWork(database)
+    const replay = await restarted.commit({ ...input, turn: { ...input.turn, now: 99, user: { ...input.turn.user, id: crypto.randomUUID() }, assistant: { ...input.turn.assistant, id: crypto.randomUUID() } } })
+    expect(replay).toEqual(committed)
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM conversation_messages').get()).toEqual({ count: 2 })
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM planner_actions').get()).toEqual({ count: 1 })
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM organizer_conversation_states').get()).toEqual({ count: 1 })
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM organizer_requests').get()).toEqual({ count: 1 })
+    database.close()
+  })
+
+  it('creates distinct Organizer turns for distinct request IDs with identical content', async () => {
+    const database = openCoachDatabase({ databasePath: createDatabasePath(), migrationsFolder })
+    const threadId = '00000000-0000-4000-8000-000000000000'
+    const makeInput = (requestId: string, offset: number) => ({
+      requestId,
+      turn: { threadId, now: 10 + offset, user: { id: crypto.randomUUID(), threadId, role: 'user' as const, content: 'Olá', createdAt: 10 + offset, providerId: null, modelId: null }, assistant: { id: crypto.randomUUID(), threadId, role: 'assistant' as const, content: 'Olá!', createdAt: 11 + offset, providerId: 'coach-local', modelId: 'home-organizer-v1' } },
+      actions: [],
+      result: { outcome: 'informational' as const, operations: [], actions: [], affectedWorkspaceIds: [], message: 'Olá!' },
+    })
+    const unit = new SqliteOrganizerUnitOfWork(database)
+    const first = await unit.commit(makeInput(crypto.randomUUID(), 0))
+    const second = await unit.commit(makeInput(crypto.randomUUID(), 10))
+    expect(first.messages.map(({ id }) => id)).not.toEqual(second.messages.map(({ id }) => id))
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM conversation_messages').get()).toEqual({ count: 4 })
+    expect(database.sqlite.prepare('SELECT COUNT(*) AS count FROM organizer_requests').get()).toEqual({ count: 2 })
     database.close()
   })
 

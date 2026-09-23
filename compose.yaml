@@ -1,0 +1,108 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_local_only
+      POSTGRES_DB: coach
+    ports:
+      - "5432:5432"
+    volumes:
+      - coach-postgres:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d coach"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  auth:
+    image: supabase/gotrue:v2.183.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      API_EXTERNAL_URL: http://localhost:9999
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      GOTRUE_SITE_URL: http://localhost:4310
+      GOTRUE_URI_ALLOW_LIST: coach://auth/callback,coach://auth/recovery
+      GOTRUE_DB_DRIVER: postgres
+      DB_NAMESPACE: auth
+      GOTRUE_DB_DATABASE_URL: postgres://postgres:postgres_local_only@postgres:5432/coach?sslmode=disable&search_path=auth
+      GOTRUE_JWT_SECRET: local-only-secret-at-least-32-characters
+      GOTRUE_JWT_EXP: 900
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_MAILER_AUTOCONFIRM: "false"
+      GOTRUE_SMTP_HOST: mailpit
+      GOTRUE_SMTP_PORT: 1025
+      GOTRUE_SMTP_ADMIN_EMAIL: local@coach.invalid
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+    ports:
+      - "9999:9999"
+
+  auth-revoke-adapter:
+    image: node:22-alpine
+    working_dir: /adapter
+    depends_on:
+      auth:
+        condition: service_started
+    volumes:
+      - ./docker/auth-revoke-adapter:/adapter
+      - auth-revoke-node-modules:/adapter/node_modules
+    environment:
+      AUTH_DATABASE_URL: postgres://postgres:postgres_local_only@postgres:5432/coach?sslmode=disable&search_path=auth
+      REVOKE_ADAPTER_SECRET: local-revoke-adapter-secret-32-bytes-minimum
+    command: ["sh", "-c", "npm install --omit=dev --ignore-scripts --no-audit --no-fund && node server.mjs"]
+    ports:
+      - "9998:9998"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:9998/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    profiles: ["tools"]
+    image: node:22-alpine
+    working_dir: /workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./package.json:/workspace/package.json:ro
+      - ./pnpm-lock.yaml:/workspace/pnpm-lock.yaml:ro
+      - ./pnpm-workspace.yaml:/workspace/pnpm-workspace.yaml:ro
+      - ./packages/backend:/workspace/packages/backend
+      - migrate-node-modules:/workspace/node_modules
+      - migrate-backend-node-modules:/workspace/packages/backend/node_modules
+    environment:
+      CI: "true"
+      MIGRATION_DATABASE_URL: postgres://coach_migrator:coach_migrator_local@postgres:5432/coach
+      DATABASE_URL: postgres://coach_runtime:coach_runtime_local@postgres:5432/coach
+      AUTH_ISSUER: http://localhost:9999
+      AUTH_PUBLIC_URL: http://localhost:9999
+      AUTH_PUBLIC_KEY: local-placeholder
+      AUTH_ADMIN_KEY: local-placeholder
+      AUTH_JWT_MODE: legacy-hs256
+      AUTH_JWT_LEGACY_SECRET: local-only-secret-at-least-32-characters
+    command: ["sh", "-c", "corepack pnpm install --frozen-lockfile --filter @coach/backend... --ignore-scripts && corepack pnpm --filter @coach/backend db:migrate"]
+
+  auth-keygen:
+    profiles: ["tools"]
+    image: node:22-alpine
+    environment:
+      AUTH_JWT_SECRET: local-only-secret-at-least-32-characters
+    command: ["node", "-e", "const c=require('crypto'); const b=x=>Buffer.from(JSON.stringify(x)).toString('base64url'); const h=b({alg:'HS256',typ:'JWT'}); const now=Math.floor(Date.now()/1000); const p=b({role:'service_role',iss:'local',iat:now,exp:now+315360000}); const s=c.createHmac('sha256',process.env.AUTH_JWT_SECRET).update(h+'.'+p).digest('base64url'); console.log(h+'.'+p+'.'+s)"]
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports:
+      - "8025:8025"
+
+volumes:
+  coach-postgres:
+  migrate-node-modules:
+  migrate-backend-node-modules:
+  auth-revoke-node-modules:

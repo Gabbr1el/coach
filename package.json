@@ -10,9 +10,14 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "tsc -b && electron-vite build",
+    "backend:build": "pnpm --filter @coach/backend build",
+    "backend:dev": "pnpm --filter @coach/backend dev",
+    "backend:migrate": "pnpm --filter @coach/backend db:migrate",
+    "backend:test": "pnpm --filter @coach/backend test",
+    "backend:ci": "pnpm --filter @coach/backend ci",
     "db:generate": "drizzle-kit generate",
     "package:dir": "pnpm build && electron-builder --dir",
-    "typecheck": "tsc -b --pretty false",
+    "typecheck": "tsc -b --pretty false && pnpm --filter @coach/backend typecheck",
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "electron-vite preview"

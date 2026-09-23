@@ -1,0 +1,58 @@
+name: backend
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: coach_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d coach_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.24.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Prepare database roles
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d coach_test <<'SQL'
+          CREATE ROLE coach_migrator LOGIN PASSWORD 'coach_migrator_local' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+          CREATE ROLE coach_runtime LOGIN PASSWORD 'coach_runtime_local' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+          ALTER DATABASE coach_test OWNER TO coach_migrator;
+          SQL
+      - name: Migrate test database
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/coach_test
+          AUTH_ISSUER: http://auth.invalid
+          AUTH_JWKS_URL: http://auth.invalid/.well-known/jwks.json
+          AUTH_PUBLIC_URL: http://auth.invalid
+          AUTH_PUBLIC_KEY: test-public-key
+          AUTH_ADMIN_KEY: test-admin-key
+          MIGRATION_DATABASE_URL: postgres://coach_migrator:coach_migrator_local@localhost:5432/coach_test
+        run: pnpm backend:migrate
+      - name: Verify backend
+        env:
+          TEST_DATABASE_URL: postgres://coach_runtime:coach_runtime_local@localhost:5432/coach_test
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/coach_test
+        run: pnpm backend:ci
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build

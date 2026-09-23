@@ -31,6 +31,31 @@ scaling.
 `AUTH_MODE=test` is deterministic and in-memory, is rejected in production, and
 exists only for tests. It is not a password implementation for deployment.
 
+`SYNC_CURSOR_SECRET` signs tenant/device-bound pull cursors and bootstrap page
+tokens. It must be a stable server secret of at least 32 characters and must not
+be exposed to Electron. Sync v1 rejects incompatible protocol versions before
+opening a mutation transaction.
+
+Sync commands are admitted only through the server command registry. The client
+supplies intent, entity ID, base revision, payload version, and payload; entity
+class, hierarchy, aggregate ownership, conflict policy, operation, and
+authorization are fixed by the registry. Canonical request hashing orders JSON
+object keys by their raw UTF-8 bytes and deliberately does not normalize Unicode,
+so canonically equivalent but byte-distinct keys remain distinct.
+
+Registry entries are keyed by entity type, command, and payload version. Old
+decoders remain available for new delayed requests, while idempotent replay is
+resolved from the durable mutation receipt before consulting the registry. Sync
+change GC never deletes mutation receipts or entity/aggregate tombstones. A
+request whose client creation time predates the tenant mutation floor receives
+`reconciliation_required` instead of being replayed blindly.
+
+`SYNC_MAX_OFFLINE_MUTATION_AGE_DAYS` controls that floor and cannot be below 120
+days. Retention advances it monotonically to `now - configured age` in the same
+transaction as change GC. Concurrent first submissions of one mutation ID are
+serialized by a transaction-scoped advisory lock, so contenders replay or get
+the idempotency mismatch rather than observing a unique-key failure.
+
 GoTrue v2.183.0 has no admin API for revoking one session by `session_id`. The
 verified local profile therefore sets `AUTH_SESSION_REVOKE_MODE=user-global`
 and uses the authenticated `auth-revoke-adapter` sidecar. The adapter checks

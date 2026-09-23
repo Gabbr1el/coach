@@ -87,6 +87,8 @@ services:
       AUTH_ADMIN_KEY: local-placeholder
       AUTH_JWT_MODE: legacy-hs256
       AUTH_JWT_LEGACY_SECRET: local-only-secret-at-least-32-characters
+      SYNC_CURSOR_SECRET: local-sync-cursor-secret-at-least-32-bytes
+      SYNC_MAX_OFFLINE_MUTATION_AGE_DAYS: 120
     command: ["sh", "-c", "corepack pnpm install --frozen-lockfile --filter @coach/backend... --ignore-scripts && corepack pnpm --filter @coach/backend db:migrate"]
 
   auth-keygen:

@@ -46,6 +46,7 @@ jobs:
           AUTH_PUBLIC_URL: http://auth.invalid
           AUTH_PUBLIC_KEY: test-public-key
           AUTH_ADMIN_KEY: test-admin-key
+          SYNC_CURSOR_SECRET: test-sync-cursor-secret-at-least-32-bytes
           MIGRATION_DATABASE_URL: postgres://coach_migrator:coach_migrator_local@localhost:5432/coach_test
         run: pnpm backend:migrate
       - name: Verify backend

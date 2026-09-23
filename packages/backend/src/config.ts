@@ -28,6 +28,9 @@ const schema = z.object({
   AUTH_SESSION_REVOKE_MODE: z.enum(['exact-session', 'user-global']).default('exact-session'),
   REVOCATION_WORKER_INTERVAL_MS: z.coerce.number().int().min(100).default(5_000),
   SECURITY_RECONCILIATION_WEBHOOK_SECRET: z.string().min(32).optional(),
+  SYNC_CURSOR_SECRET: z.string().min(32).default('development-only-sync-cursor-secret'),
+  SYNC_BOOTSTRAP_TTL_SECONDS: z.coerce.number().int().min(60).max(86_400).default(3_600),
+  SYNC_MAX_OFFLINE_MUTATION_AGE_DAYS: z.coerce.number().int().min(120).max(3_650).default(120),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info')
 }).superRefine((value, context) => {
   if (value.NODE_ENV === 'production' && value.AUTH_MODE === 'test') {
@@ -40,6 +43,7 @@ const schema = z.object({
     context.addIssue({ code: 'custom', path: ['AUTH_JWT_MODE'], message: 'legacy HS256 is allowed only in explicit local development or test mode with a secret' });
   }
   if (value.NODE_ENV === 'production') {
+    if (value.SYNC_CURSOR_SECRET === 'development-only-sync-cursor-secret') context.addIssue({ code: 'custom', path: ['SYNC_CURSOR_SECRET'], message: 'production requires an explicit sync cursor secret' });
     if (value.AUTH_JWT_MODE !== 'asymmetric') context.addIssue({ code: 'custom', path: ['AUTH_JWT_MODE'], message: 'production requires asymmetric JWKS verification' });
     if (!value.AUTH_SESSION_REVOKE_URL || new URL(value.AUTH_SESSION_REVOKE_URL).protocol !== 'https:') context.addIssue({ code: 'custom', path: ['AUTH_SESSION_REVOKE_URL'], message: 'production requires an HTTPS exact-session revoke endpoint' });
     if (!value.AUTH_SESSION_REVOKE_KEY) context.addIssue({ code: 'custom', path: ['AUTH_SESSION_REVOKE_KEY'], message: 'production requires an authenticated revoke adapter' });

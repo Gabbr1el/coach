@@ -36,8 +36,9 @@ export async function resolveActiveSession(database: Database, userId: string, a
       tenant_id: string;
       user_id: string;
       auth_session_id: string;
+      device_id: string;
     }[]>`
-      select app_session_id as id, tenant_id, resolved_user_id as user_id, resolved_auth_session_id as auth_session_id
+      select app_session_id as id, tenant_id, resolved_user_id as user_id, resolved_auth_session_id as auth_session_id, resolved_device_id as device_id
       from resolve_active_app_session(${userId}::uuid, ${authSessionId}::uuid)
     `;
     return session;

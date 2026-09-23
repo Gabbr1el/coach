@@ -7,7 +7,7 @@ import { resolveActiveSession } from '../database/tenant-transaction.js';
 declare module 'fastify' {
   interface FastifyRequest {
     identity: AuthIdentity;
-    coachSession: { id: string; tenantId: string };
+    coachSession: { id: string; tenantId: string; deviceId: string };
   }
 }
 
@@ -20,7 +20,7 @@ export function authenticate(verify: VerifyAccessToken, database: Database) {
       const session = await resolveActiveSession(database, identity.userId, identity.authSessionId);
       if (!session) return reply.code(401).send({ code: 'session_inactive', requestId: request.id });
       request.identity = identity;
-      request.coachSession = { id: session.id, tenantId: session.tenant_id };
+      request.coachSession = { id: session.id, tenantId: session.tenant_id, deviceId: session.device_id };
     } catch {
       return reply.code(401).send({ code: 'invalid_access_token', requestId: request.id });
     }

@@ -1,0 +1,17 @@
+export const ACCOUNT_CHANNELS = {
+  status: 'account:status',
+  signup: 'account:signup',
+  verify: 'account:verify',
+  login: 'account:login',
+  recover: 'account:recover',
+  reset: 'account:reset',
+  logout: 'account:logout',
+  listSessions: 'account:list-sessions',
+  revokeSession: 'account:revoke-session',
+  revokeOtherSessions: 'account:revoke-other-sessions',
+  syncStatus: 'account:sync-status',
+  syncNow: 'account:sync-now',
+  listReconciliation: 'account:list-reconciliation',
+  resolveReconciliation: 'account:resolve-reconciliation',
+  discardReconciliation: 'account:discard-reconciliation',
+} as const

@@ -23,10 +23,28 @@ import { STUDY_LESSON_CHANNELS } from '../shared/contracts/study-lesson-channels
 import { EXERCISE_CHANNELS } from '../shared/contracts/exercise-channels'
 import { ACADEMIC_LIFE_CHANNELS } from '../shared/contracts/academic-life-channels'
 import { REVIEW_CHANNELS } from '../shared/contracts/review-channels'
+import { ACCOUNT_CHANNELS } from '../shared/contracts/account-channels'
 
 const api: CoachDesktopApi = {
   application: {
     getInfo: () => ipcRenderer.invoke(APPLICATION_GET_INFO_CHANNEL),
+  },
+  account: {
+    status: () => ipcRenderer.invoke(ACCOUNT_CHANNELS.status),
+    signup: (input) => ipcRenderer.invoke(ACCOUNT_CHANNELS.signup, input),
+    verify: (input) => ipcRenderer.invoke(ACCOUNT_CHANNELS.verify, input),
+    login: (input) => ipcRenderer.invoke(ACCOUNT_CHANNELS.login, input),
+    recover: (input) => ipcRenderer.invoke(ACCOUNT_CHANNELS.recover, input),
+    reset: (input) => ipcRenderer.invoke(ACCOUNT_CHANNELS.reset, input),
+    logout: () => ipcRenderer.invoke(ACCOUNT_CHANNELS.logout),
+    listSessions: () => ipcRenderer.invoke(ACCOUNT_CHANNELS.listSessions),
+    revokeSession: (input) => ipcRenderer.invoke(ACCOUNT_CHANNELS.revokeSession, input),
+    revokeOtherSessions: () => ipcRenderer.invoke(ACCOUNT_CHANNELS.revokeOtherSessions),
+    syncStatus: () => ipcRenderer.invoke(ACCOUNT_CHANNELS.syncStatus),
+    syncNow: () => ipcRenderer.invoke(ACCOUNT_CHANNELS.syncNow),
+    listReconciliation: () => ipcRenderer.invoke(ACCOUNT_CHANNELS.listReconciliation),
+    resolveReconciliation: (input) => ipcRenderer.invoke(ACCOUNT_CHANNELS.resolveReconciliation, input),
+    discardReconciliation: (input) => ipcRenderer.invoke(ACCOUNT_CHANNELS.discardReconciliation, input),
   },
   studyProgress: {
     get: (workspaceId) => ipcRenderer.invoke(STUDY_PROGRESS_CHANNELS.get, { workspaceId }),

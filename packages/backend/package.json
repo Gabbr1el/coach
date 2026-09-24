@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./dist/index.js",
-    "./auth-client": "./dist/auth/client.js"
+    "./auth-client": "./dist/auth/client.js",
+    "./desktop-client": "./dist/client/desktop-client.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, safeStorage } from 'electron'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { registerApplicationHandlers } from './ipc/application-handlers'
@@ -91,6 +91,11 @@ import { SubjectWorkspaceResolver } from '../application/workspaces/subject-work
 import { EventWorkspaceLinkService } from '../application/academic-life/event-workspace-link-service'
 import { SqliteEventWorkspaceLinkRepository } from './repositories/sqlite-event-workspace-link-repository'
 import { z } from 'zod'
+import { AccountDatabaseManager } from './account/account-cache'
+import { CoachDesktopCloudClient } from '../../packages/backend/src/client/desktop-client'
+import { RotatingSessionVault } from './account/session-vault'
+import { DesktopSessionService } from './account/session-service'
+import { registerAccountHandlers } from './ipc/account-handlers'
 
 const linuxDesktop = [
   process.env.XDG_CURRENT_DESKTOP,
@@ -113,11 +118,21 @@ if (
 
 let database: CoachDatabase | null = null
 let contentWorker: ContentGenerationWorker | null = null
+let desktopSession: DesktopSessionService | null = null
+const pendingDeepLinks: string[] = []
+const deepLinkFrom = (values: readonly string[]) => values.find((value) => value.startsWith('coach://'))
+const dispatchDeepLink = (value: string) => { if (desktopSession) void desktopSession.handleDeepLink(value).catch((error) => console.warn('Auth link rejected:', error instanceof Error ? error.message : 'invalid link')); else pendingDeepLinks.push(value) }
+if (process.defaultApp && process.argv[1]) app.setAsDefaultProtocolClient('coach', process.execPath, [process.argv[1]])
+else app.setAsDefaultProtocolClient('coach')
+app.on('open-url', (event, value) => { event.preventDefault(); dispatchDeepLink(value) })
+app.on('second-instance', (_event, argv) => { const link = deepLinkFrom(argv); if (link) dispatchDeepLink(link); const window = BrowserWindow.getAllWindows()[0]; if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus() } })
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
   app.quit()
 }
+const initialDeepLink = deepLinkFrom(process.argv)
+if (hasSingleInstanceLock && initialDeepLink) pendingDeepLinks.push(initialDeepLink)
 
 if (process.env['COACH_DISABLE_HARDWARE_ACCELERATION']) {
   app.disableHardwareAcceleration()
@@ -127,6 +142,27 @@ if (process.env['COACH_DISABLE_HARDWARE_ACCELERATION']) {
 
 void app.whenReady().then(async () => {
   try {
+    const userDataPath = app.getPath('userData')
+    const authUrl = process.env['COACH_AUTH_URL'] ?? 'http://localhost:9999'
+    const authPublicKey = process.env['COACH_AUTH_PUBLIC_KEY'] ?? ''
+    const apiUrl = process.env['COACH_API_URL'] ?? 'http://localhost:3000'
+    const vault = new RotatingSessionVault(join(userDataPath, 'session'), {
+      isAvailable: () => safeStorage.isEncryptionAvailable() && !(process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text'),
+      encrypt: (value) => safeStorage.encryptString(value),
+      decrypt: (value) => safeStorage.decryptString(value),
+    })
+    desktopSession = new DesktopSessionService(
+      vault,
+      new AccountDatabaseManager(join(userDataPath, 'accounts')),
+      new CoachDesktopCloudClient(authUrl, authPublicKey, apiUrl),
+      join(userDataPath, 'device-id'),
+      `${process.platform} desktop`,
+      process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux',
+      app.getVersion(),
+    )
+    await desktopSession.initialize()
+    for (const link of pendingDeepLinks.splice(0)) dispatchDeepLink(link)
+    registerAccountHandlers(desktopSession)
     const databasePath = join(app.getPath('userData'), 'coach.sqlite')
     const migrationsFolder = join(app.getAppPath(), 'drizzle/migrations')
     database = openCoachDatabase({ databasePath, migrationsFolder })
@@ -293,12 +329,21 @@ void app.whenReady().then(async () => {
   app.exit(1)
 })
 
+let shutdownStarted = false
 app.on('will-quit', (event) => {
   if (contentWorker) {
     event.preventDefault()
     const worker = contentWorker
     contentWorker = null
     void worker.stop().finally(() => app.quit())
+    return
+  }
+  if (desktopSession && !shutdownStarted) {
+    event.preventDefault()
+    shutdownStarted = true
+    const session = desktopSession
+    desktopSession = null
+    void session.shutdown().finally(() => app.quit())
     return
   }
   database?.close()

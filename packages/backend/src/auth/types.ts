@@ -22,7 +22,7 @@ export interface AuthBoundary {
   login(email: string, password: string): Promise<AuthTokens>;
   requestPasswordReset(email: string): Promise<{ state: string }>;
   resetPassword(state: string, code: string, password: string): Promise<void>;
-  refresh(refreshToken: string): Promise<AuthTokens>;
+  refresh(refreshToken: string, signal?: AbortSignal): Promise<AuthTokens>;
   healthcheck(): Promise<void>;
   isEmailConfirmed(accessToken: string): Promise<boolean>;
   revokeSession(userId: string, authSessionId: string): Promise<void>;

@@ -63,6 +63,7 @@ export class AccountService {
     await withTenantTransaction(this.database, context, async (transaction) => {
       const [target] = await transaction<{ auth_session_id: string }[]>`update app_sessions set revoked_at = coalesce(revoked_at, now()), revocation_reason = coalesce(revocation_reason, ${reason}) where id = ${sessionId}::uuid and tenant_id = ${context.tenantId}::uuid and user_id = ${context.userId}::uuid returning auth_session_id`;
       if (!target) throw new Error('session_not_found');
+      await transaction`delete from auth_refresh_reservations where app_session_id = ${sessionId}::uuid`;
       await enqueueRevocation(transaction, { appSessionId: sessionId, tenantId: context.tenantId, userId: context.userId, authSessionId: target.auth_session_id, reason });
       await transaction`insert into security_audit_events (id, tenant_id, user_id, session_id, type, outcome, metadata) values (${randomUUID()}, ${context.tenantId}::uuid, ${context.userId}::uuid, ${context.sessionId}::uuid, 'session.revocation_enqueued', 'success', ${transaction.json({ targetSessionId: sessionId, reason })})`;
     });
@@ -72,6 +73,7 @@ export class AccountService {
   async revokeOthers(context: TenantContext) {
     await withTenantTransaction(this.database, context, async (transaction) => {
       const targets = await transaction<{ id: string; auth_session_id: string }[]>`update app_sessions set revoked_at = now(), revocation_reason = 'revoke_others' where tenant_id = ${context.tenantId}::uuid and user_id = ${context.userId}::uuid and id <> ${context.sessionId}::uuid and revoked_at is null returning id, auth_session_id`;
+      if (targets.length) await transaction`delete from auth_refresh_reservations where app_session_id = any(${targets.map((target) => target.id)}::uuid[])`;
       for (const target of targets) await enqueueRevocation(transaction, { appSessionId: target.id, tenantId: context.tenantId, userId: context.userId, authSessionId: target.auth_session_id, reason: 'revoke_others' });
       await transaction`insert into security_audit_events (id, tenant_id, user_id, session_id, type, outcome, metadata) values (${randomUUID()}, ${context.tenantId}::uuid, ${context.userId}::uuid, ${context.sessionId}::uuid, 'session.revoke_others_enqueued', 'success', ${transaction.json({ count: targets.length })})`;
     });
@@ -83,6 +85,7 @@ export class AccountService {
       const targets = await transaction<{ revoked_app_session_id: string; revoked_tenant_id: string; revoked_auth_session_id: string }[]>`
         select * from revoke_all_app_sessions(${context.userId}::uuid, ${context.sessionId}::uuid, 'logout_all')
       `;
+      if (targets.length) await transaction`delete from auth_refresh_reservations where app_session_id = any(${targets.map((target) => target.revoked_app_session_id)}::uuid[])`;
       await transaction`insert into security_audit_events (id, tenant_id, user_id, session_id, type, outcome, metadata) values (${randomUUID()}, ${context.tenantId}::uuid, ${context.userId}::uuid, ${context.sessionId}::uuid, 'session.logout_all_enqueued', 'success', ${transaction.json({ count: targets.length })})`;
     });
     await new RevocationOutboxWorker(this.database, this.auth).drain();

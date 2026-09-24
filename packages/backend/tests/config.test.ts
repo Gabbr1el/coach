@@ -9,6 +9,9 @@ const base = {
   AUTH_PUBLIC_URL: 'https://auth.example.com',
   AUTH_PUBLIC_KEY: 'public',
   AUTH_ADMIN_KEY: 'admin',
+  AUTH_REFRESH_REUSE_INTERVAL_SECONDS: '180',
+  AUTH_REFRESH_REUSE_INTERVAL_VERIFIED: 'true',
+  AUTH_REFRESH_RECEIPT_SECRET: 'r'.repeat(32),
   SYNC_CURSOR_SECRET: 'x'.repeat(32)
 };
 

@@ -62,8 +62,8 @@ export class SupabaseAuthBoundary implements AuthBoundary {
     await this.revokeAll(userId);
   }
 
-  async refresh(refreshToken: string): Promise<AuthTokens> {
-    const response = await this.request('/token?grant_type=refresh_token', { refresh_token: refreshToken });
+  async refresh(refreshToken: string, signal?: AbortSignal): Promise<AuthTokens> {
+    const response = await this.request('/token?grant_type=refresh_token', { refresh_token: refreshToken }, undefined, signal);
     return toTokens(await response.json() as SupabaseSession);
   }
 
@@ -100,7 +100,7 @@ export class SupabaseAuthBoundary implements AuthBoundary {
     if (!response.ok) throw new Error(`auth_global_revoke_failed:${response.status}`);
   }
 
-  private async request(path: string, body?: object, accessToken?: string): Promise<Response> {
+  private async request(path: string, body?: object, accessToken?: string, signal?: AbortSignal): Promise<Response> {
     const response = await fetch(`${this.publicUrl}${path}`, {
       method: path === '/user' ? (body ? 'PUT' : 'GET') : 'POST',
       headers: {
@@ -109,6 +109,7 @@ export class SupabaseAuthBoundary implements AuthBoundary {
         'content-type': 'application/json'
       },
       ...(body ? { body: JSON.stringify(body) } : {})
+      , ...(signal ? { signal } : {})
     });
     if (!response.ok) throw new Error(`auth_request_failed:${response.status}`);
     return response;

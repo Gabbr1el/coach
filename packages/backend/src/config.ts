@@ -26,6 +26,9 @@ const schema = z.object({
   AUTH_SESSION_REVOKE_URL: z.string().url().optional(),
   AUTH_SESSION_REVOKE_KEY: z.string().min(32).optional(),
   AUTH_SESSION_REVOKE_MODE: z.enum(['exact-session', 'user-global']).default('exact-session'),
+  AUTH_REFRESH_REUSE_INTERVAL_SECONDS: z.coerce.number().int().min(1).default(180),
+  AUTH_REFRESH_REUSE_INTERVAL_VERIFIED: booleanFromEnv.default(false),
+  AUTH_REFRESH_RECEIPT_SECRET: z.string().min(32).optional(),
   REVOCATION_WORKER_INTERVAL_MS: z.coerce.number().int().min(100).default(5_000),
   SECURITY_RECONCILIATION_WEBHOOK_SECRET: z.string().min(32).optional(),
   SYNC_CURSOR_SECRET: z.string().min(32).default('development-only-sync-cursor-secret'),
@@ -49,6 +52,8 @@ const schema = z.object({
     if (!value.AUTH_SESSION_REVOKE_KEY) context.addIssue({ code: 'custom', path: ['AUTH_SESSION_REVOKE_KEY'], message: 'production requires an authenticated revoke adapter' });
     if (!value.AUTH_SESSION_CLAIM_VERIFIED_IMMUTABLE) context.addIssue({ code: 'custom', path: ['AUTH_SESSION_CLAIM_VERIFIED_IMMUTABLE'], message: 'production requires a verified immutable session claim' });
     if (!value.SECURITY_RECONCILIATION_WEBHOOK_SECRET) context.addIssue({ code: 'custom', path: ['SECURITY_RECONCILIATION_WEBHOOK_SECRET'], message: 'production requires the security reconciliation webhook' });
+    if (!value.AUTH_REFRESH_REUSE_INTERVAL_VERIFIED || value.AUTH_REFRESH_REUSE_INTERVAL_SECONDS < 180) context.addIssue({ code: 'custom', path: ['AUTH_REFRESH_REUSE_INTERVAL_SECONDS'], message: 'production requires verified provider refresh reuse of at least 180 seconds' });
+    if (!value.AUTH_REFRESH_RECEIPT_SECRET) context.addIssue({ code: 'custom', path: ['AUTH_REFRESH_RECEIPT_SECRET'], message: 'production requires a refresh receipt encryption secret' });
     if (value.TRUST_PROXY_HOPS < 1) context.addIssue({ code: 'custom', path: ['TRUST_PROXY_HOPS'], message: 'production requires an explicit trusted proxy hop count' });
     for (const key of ['AUTH_ISSUER', 'AUTH_JWKS_URL', 'AUTH_PUBLIC_URL', 'AUTH_SESSION_REVOKE_URL'] as const) {
       const candidate = value[key];

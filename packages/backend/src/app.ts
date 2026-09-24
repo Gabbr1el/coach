@@ -10,6 +10,7 @@ import { AccountService } from './services/account-service.js';
 import { ackSchema, bootstrapPageSchema, bootstrapSchema, pullSchema, pushSchema, retentionSchema } from './sync/contracts.js';
 import { SyncError } from './sync/errors.js';
 import { SyncService } from './sync/service.js';
+import { RefreshBroker } from './services/refresh-broker.js';
 
 const provisionBody = z.object({
   deviceId: z.string().uuid(),
@@ -24,6 +25,8 @@ const reconciliationBody = z.object({
   authSessionId: z.string().uuid().optional(),
   reason: z.enum(['password_recovery', 'refresh_reuse', 'provider_logout', 'admin_revoke'])
 });
+const refreshReserveBody = z.object({ requestId:z.string().uuid(),refreshToken:z.string().min(1).max(8192),recoverySecret:z.string().min(32).max(256)}).strict();
+const refreshExecuteBody = refreshReserveBody.extend({capability:z.string().min(32).max(256)}).strict();
 
 export function buildApp(dependencies: { config: AppConfig; database: Database; auth: AuthBoundary; verifyAccessToken: VerifyAccessToken }) {
   const app = Fastify({
@@ -39,6 +42,7 @@ export function buildApp(dependencies: { config: AppConfig; database: Database; 
   });
   const account = new AccountService(dependencies.database, dependencies.auth);
   const sync = new SyncService(dependencies.database, dependencies.config.SYNC_CURSOR_SECRET, dependencies.config.SYNC_BOOTSTRAP_TTL_SECONDS, dependencies.config.SYNC_MAX_OFFLINE_MUTATION_AGE_DAYS);
+  const refresh = new RefreshBroker(dependencies.database, dependencies.auth, dependencies.config.AUTH_REFRESH_RECEIPT_SECRET ?? 'development-refresh-receipt-secret', dependencies.config.AUTH_REFRESH_REUSE_INTERVAL_SECONDS - 30);
   const requireSession = authenticate(dependencies.verifyAccessToken, dependencies.database);
   const context = (request: { identity: { userId: string }; coachSession: { id: string; tenantId: string; deviceId: string } }) => ({
     userId: request.identity.userId, tenantId: request.coachSession.tenantId, sessionId: request.coachSession.id, deviceId: request.coachSession.deviceId
@@ -113,6 +117,9 @@ export function buildApp(dependencies: { config: AppConfig; database: Database; 
   app.post('/v1/account/logout-all', { preHandler: requireSession }, async (request, reply) => {
     await account.logoutAll(context(request)); return reply.code(204).send();
   });
+  app.post('/v1/account/refresh/reserve',{config:{rateLimit:{max:dependencies.config.AUTH_RATE_LIMIT_MAX,timeWindow:dependencies.config.RATE_LIMIT_WINDOW}},preHandler:requireSession},async(request)=>{const body=refreshReserveBody.parse(request.body);return refresh.reserve(context(request),body.requestId,body.refreshToken,body.recoverySecret);});
+  app.post('/v1/account/refresh/recover-reservation',{config:{rateLimit:{max:dependencies.config.AUTH_RATE_LIMIT_MAX,timeWindow:dependencies.config.RATE_LIMIT_WINDOW}}},async(request)=>{const body=refreshReserveBody.parse(request.body);return refresh.recoverReservation(body.requestId,body.refreshToken,body.recoverySecret);});
+  app.post('/v1/account/refresh/execute',{config:{rateLimit:{max:dependencies.config.AUTH_RATE_LIMIT_MAX,timeWindow:dependencies.config.RATE_LIMIT_WINDOW}}},async(request)=>{const body=refreshExecuteBody.parse(request.body);const tokens=await refresh.execute(body.requestId,body.refreshToken,body.capability);return{accessToken:tokens.accessToken,refreshToken:tokens.refreshToken,expiresAt:Date.now()+tokens.expiresIn*1000};});
 
   app.post('/v1/sync/push', { preHandler: requireSession }, async (request) => sync.push(context(request), pushSchema.parse(request.body)));
   app.get('/v1/sync/pull', { preHandler: requireSession }, async (request) => {
